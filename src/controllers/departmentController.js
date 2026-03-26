@@ -1,0 +1,119 @@
+import Department from "../models/Department.js";
+import { handleAsync } from "../utils/handleAsync.js";
+import AppError from "../utils/AppError.js";
+
+// Get All Department
+export const getAllDepartment = handleAsync(async (req, res, next) => {
+  const { page = 1, limit = 10, search } = req.body;
+  const filter = {};
+
+  if (search) {
+    filter.$or = [{ name: { $regex: search, $options: "i" } }];
+  }
+  const skip = (page - 1) * limit;
+
+  // ✅ Total count (for frontend pagination)
+  const total = await Department.countDocuments(filter);
+
+  // ✅ Fetch users
+  const departments = await Department.find(filter)
+    .skip(skip)
+    .limit(Number(limit))
+    .sort({ createdAt: -1 });
+
+  return res.status(200).json({
+    success: true,
+    data: departments,
+    pagination: {
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    },
+  });
+});
+export const exportDepartment = handleAsync(async (req, res) => {
+  const { search } = req.body;
+
+  const filter = {};
+
+  if (search) {
+    filter.$or = [{ name: { $regex: search, $options: "i" } }];
+  }
+
+  // 🔥 NO PAGINATION HERE
+  const departments = await Department.find(filter);
+
+  return res.status(200).json({
+    success: true,
+    data: departments,
+  });
+});
+export const getAllDeptsForDrops = handleAsync(async (req, res) => {
+  // 🔥 NO PAGINATION HERE
+  const department = await Department.find();
+
+  return res.status(200).json({
+    success: true,
+    data: department,
+  });
+});
+// create Department
+export const createDepartment = handleAsync(async (req, res, next) => {
+  const { name } = req.body;
+
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return next(new AppError("Department name is required", 400));
+  }
+
+  // Check if department already exists
+  const existingDepartment = await Department.findOne({ name });
+  if (existingDepartment) {
+    return next(new AppError("Department already exists", 400));
+  }
+
+  const department = await Department.create({ name: name.trim() });
+
+  res.status(201).json({
+    status: "success",
+    message: "Department created successfully",
+    department: {
+      _id: department._id,
+      name: department.name,
+    },
+  });
+});
+
+// Update Department controller
+export const updateDepartment = handleAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  const department = await Department.findById(id);
+  if (!department) {
+    return next(new AppError("Department not found", 404));
+  }
+  department.name = name;
+  await department.save();
+  res.status(200).json({
+    status: "success",
+    message: "Department updated successfully",
+    data: {
+      _id: department._id,
+      name: department.name,
+    },
+  });
+});
+
+// Delete Department
+export const deleteDepartment = handleAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const department = await Department.findByIdAndDelete(id);
+
+  if (!department) {
+    return next(new AppError("Department not found", 404));
+  }
+  res.status(200).json({
+    status: "success",
+    message: "Department deleted successfully",
+  });
+});

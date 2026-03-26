@@ -1,0 +1,10 @@
+"Task ID","Title","Description","Status","Assigned To Name","Assigned To Email","Assigned By Name","Assigned By Email","Department","Start Date","Due Date","Task Type","Frequency"
+"26030191","delayes task","test","Overdue","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-17T00:00:00.000Z","2026-03-18T00:00:00.000Z","DelegationTask",
+"26030192","test","sdfa","Delayed","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-18T00:00:00.000Z","2026-03-19T00:00:00.000Z","DelegationTask",
+"26030193","asd","asd","Upcoming","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-20T00:00:00.000Z",,"DelegationTask",
+"26030194","Recurring task","adsf","Pending","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-19T00:00:00.000Z",,"RecurringTask","Daily"
+"26030195","delayed task","asdf","Pending","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-19T00:00:00.000Z",,"DelegationTask",
+"26030196","asdf","asdf","Pending","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-17T00:00:00.000Z","2026-03-22T00:00:00.000Z","DelegationTask",
+"26030197","test","test","Overdue","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-16T05:30:00.000Z",,"RecurringTask","Daily"
+"26030198","File upload","test","Pending","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-19T00:00:00.000Z","2026-03-20T00:00:00.000Z","DelegationTask",
+"26030199","tes","tstd","Pending","Tushar","superadmin@bci.com","Tushar","superadmin@bci.com","Software","2026-03-19T05:30:00.000Z","2026-03-20T05:30:00.000Z","DelegationTask",
