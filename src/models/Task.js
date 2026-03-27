@@ -117,6 +117,11 @@ const BaseTaskSchema = new mongoose.Schema(
         default: null,
       },
     },
+    // 🔥 NEW: Task Visibility based on workshift
+    isVisible: {
+      type: Boolean,
+      default: false
+    },
   },
   baseOptions,
 );

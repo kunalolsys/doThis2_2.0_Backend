@@ -826,26 +826,26 @@ export const createTask = handleAsync(async (req, res, next) => {
 
       let parsedWeekDays = [];
       if (weekDays) {
+        let days = [];
         try {
-          parsedWeekDays =
-            typeof weekDays === "string"
-              ? JSON.parse(weekDays)
-              : Array.isArray(weekDays)
-                ? weekDays
-                : weekDays.split(",").map((d) => d.trim().toLowerCase());
-          parsedWeekDays = parsedWeekDays.map((d) => d.toLowerCase());
-
-          const startDayName = format(effectiveStartDate, "EEEE").toLowerCase();
-          if (parsedWeekDays.length && !parsedWeekDays.includes(startDayName)) {
-            return next(
-              new AppError(`Start date weekday not in recurring weekDays`, 400),
-            );
+          if (typeof weekDays === "string") {
+            days = JSON.parse(weekDays);
+          } else if (Array.isArray(weekDays)) {
+            days = weekDays;
           }
         } catch (error) {
-          parsedWeekDays = [];
+          if (typeof weekDays === "string") {
+            days = weekDays
+              .split(",")
+              .map((d) => d.trim())
+              .filter(Boolean);
+          }
+        }
+        if (Array.isArray(days)) {
+          parsedWeekDays = days.map((day) => day.toLowerCase());
         }
       }
-
+      console.log(parsedWeekDays);
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
@@ -870,6 +870,9 @@ export const createTask = handleAsync(async (req, res, next) => {
       });
     }
 
+    // 🔥 Set visibility: false initially (cron will enable at shift start)
+    newTask.isVisible = false;
+
     // Save
     await newTask.save();
     await createLog({
@@ -878,7 +881,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       documentId: newTask._id,
       performedBy: req.cookies.userId,
       newData: newTask,
-      message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId} | WorkShift: ${workShift.name}`,
+      message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId} | WorkShift: ${workShift.name} | Visible: ${newTask.isVisible}`,
     });
     createdTasks.push(newTask);
   }
@@ -1318,7 +1321,9 @@ export const filterTasks = handleAsync(async (req, res) => {
     });
   } else {
     if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
-      const usersInDept = await User.find({ department: departmentId }).select("_id");
+      const usersInDept = await User.find({ department: departmentId }).select(
+        "_id",
+      );
       const userIds = usersInDept.map((u) => u._id);
 
       if (userId && mongoose.Types.ObjectId.isValid(userId)) {
@@ -1424,8 +1429,8 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   // 🚀 QUERY EXECUTION
   const [tasks, total] = await Promise.all([
-    Task.find(query)
-      .populate("assignedTo", "name email department")
+    Task.find({ ...query, isVisible: true }) // 🔥 Only visible tasks
+      .populate("assignedTo", "name email department assignShift")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
       .populate("dependencyConfig.taskDependent", "title")
@@ -1433,7 +1438,7 @@ export const filterTasks = handleAsync(async (req, res) => {
       .skip(skip)
       .limit(limit),
 
-    Task.countDocuments(query),
+    Task.countDocuments({ ...query, isVisible: true }), // 🔥 Count only visible
   ]);
 
   res.json({

@@ -14,6 +14,7 @@ import User from './models/User.js';
 
 // --- NEW IMPORT FOR LOGGING ---
 import ServerLog from './models/ServerLog.js';
+import startVisibilityCron from './cron/taskVisibilityCron.js';
 
 dotenv.config();
 
@@ -95,6 +96,7 @@ mongoose.connect(MONGODB_URI)
         startTaskStatusCron();
         startCronJobs();
         runDependencyCron(); // Initial run
+        startVisibilityCron()
       } catch (err) {
         console.error('Failed to start task status cron', err);
       }
