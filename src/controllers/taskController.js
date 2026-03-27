@@ -1426,10 +1426,12 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (andConditions.length > 0) {
     query.$and = andConditions;
   }
-
+  if (query.status !== "Upcoming") {
+    query.isVisible = true;
+  }
   // 🚀 QUERY EXECUTION
   const [tasks, total] = await Promise.all([
-    Task.find({ ...query, isVisible: true }) // 🔥 Only visible tasks
+    Task.find(query) // 🔥 Only visible tasks
       .populate("assignedTo", "name email department assignShift")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
@@ -1438,7 +1440,7 @@ export const filterTasks = handleAsync(async (req, res) => {
       .skip(skip)
       .limit(limit),
 
-    Task.countDocuments({ ...query, isVisible: true }), // 🔥 Count only visible
+    Task.countDocuments(query), // 🔥 Count only visible
   ]);
 
   res.json({
@@ -1844,12 +1846,14 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     } else {
       finalQuery = { ...filterQuery, ...searchQuery };
     }
-
+    if (query.status !== "Upcoming") {
+      finalQuery.isVisible = true;
+    }
     // Get total count
-    total = await Task.countDocuments({...finalQuery,isVisible: true});
+    total = await Task.countDocuments(finalQuery);
 
     // Get paginated tasks
-    const rawTasks = await Task.find({...finalQuery,isVisible: true})
+    const rawTasks = await Task.find(finalQuery)
       .populate("assignedTo", "name email department")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
@@ -1861,7 +1865,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     tasks = rawTasks.map(normalizeTask);
   } else {
     // No search term
-    const rawTasks = await Task.find({...filterQuery,isVisible: true})
+    const rawTasks = await Task.find(filterQuery)
       .populate("assignedTo", "name email department")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
@@ -1871,7 +1875,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
       .limit(parseInt(limit));
 
     tasks = rawTasks.map(normalizeTask);
-    total = await Task.countDocuments({...filterQuery,isVisible: true});
+    total = await Task.countDocuments(filterQuery);
   }
 
   res.status(200).json({
