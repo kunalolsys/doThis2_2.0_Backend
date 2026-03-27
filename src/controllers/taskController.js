@@ -1846,10 +1846,10 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     }
 
     // Get total count
-    total = await Task.countDocuments(finalQuery);
+    total = await Task.countDocuments({...finalQuery,isVisible: true});
 
     // Get paginated tasks
-    const rawTasks = await Task.find(finalQuery)
+    const rawTasks = await Task.find({...finalQuery,isVisible: true})
       .populate("assignedTo", "name email department")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
@@ -1861,7 +1861,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     tasks = rawTasks.map(normalizeTask);
   } else {
     // No search term
-    const rawTasks = await Task.find(filterQuery)
+    const rawTasks = await Task.find({...filterQuery,isVisible: true})
       .populate("assignedTo", "name email department")
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
@@ -1871,7 +1871,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
       .limit(parseInt(limit));
 
     tasks = rawTasks.map(normalizeTask);
-    total = await Task.countDocuments(filterQuery);
+    total = await Task.countDocuments({...filterQuery,isVisible: true});
   }
 
   res.status(200).json({

@@ -6,12 +6,13 @@ import WorkShift from "../models/WorkShift.js";
 import {
   snapToShiftTime,
   isWorkingDay,
-  isHoliday
+  isHoliday,
 } from "../utils/dateCalculator.js";
+import { startOfDay } from "date-fns";
 
 // 🔥 MAIN CRON: Make tasks VISIBLE at shift start
 const makeTasksVisible = async () => {
-  console.log("⏰ [TASK VISIBILITY CRON] Checking shift starts...", { timestamp: new Date().toISOString() });
+  // console.log("⏰ [TASK VISIBILITY CRON] Checking shift starts...", { timestamp: new Date().toISOString() });
   
   try {
     const now = new Date();
@@ -21,7 +22,7 @@ const makeTasksVisible = async () => {
       .populate('assignShift')
       .lean();
     
-    console.log(`👥 Found ${usersWithShifts.length} active users with shifts`);
+    // console.log(`👥 Found ${usersWithShifts.length} active users with shifts`);
     
     let updatedCount = 0;
     let processedUsers = 0;
@@ -29,14 +30,14 @@ const makeTasksVisible = async () => {
     for (const user of usersWithShifts) {
       processedUsers++;
       if (!user.assignShift) {
-        console.log(`⚠️  User ${user.name} (${user.email}) has no shift - skipping`);
+        // console.log(`⚠️  User ${user.name} (${user.email}) has no shift - skipping`);
         continue;
       }
       
       const workShift = user.assignShift;
       const shiftStartToday = snapToShiftTime(now, workShift, true);
       
-      console.log(`🔍 Processing ${user.name} (${workShift.name}): shiftStart=${shiftStartToday.toLocaleTimeString()}, now=${now.toLocaleTimeString()}`);
+      // console.log(`🔍 Processing ${user.name} (${workShift.name}): shiftStart=${shiftStartToday.toLocaleTimeString()}, now=${now.toLocaleTimeString()}`);
       
       // Only run if current time >= shift start today
       if (now >= shiftStartToday) {
@@ -62,7 +63,7 @@ const makeTasksVisible = async () => {
 
         let validTasks = 0;
         for (const task of tasksToCheck) {
-          const taskDate = startOfDay(task.startDate);
+        const taskDate = startOfDay(new Date(task.startDate));
           const isTaskHoliday = await isHoliday(taskDate);
           if (!isTaskHoliday && isWorkingDay(taskDate, workShift)) {
             await Task.findByIdAndUpdate(task._id, {
@@ -75,20 +76,15 @@ const makeTasksVisible = async () => {
         }
         
         updatedCount += validTasks;
-        console.log(`✅ Validated ${validTasks} tasks (workday/holiday checked) for ${user.name}`);
+        // console.log(`✅ Made ${validTasks} tasks VISIBLE for ${user.name} (${workShift.name})`);
         
         if (isTodayHoliday) {
-          console.log(`⛔ TODAY IS HOLIDAY - No tasks made visible for ${user.name}`);
-        }
-        
-        updatedCount += result.modifiedCount;
-        if (result.modifiedCount > 0) {
-          console.log(`✅ [SUCCESS] ${result.modifiedCount} tasks made VISIBLE for ${user.name} (${workShift.name}) | Total: ${updatedCount}`);
-        } else {
-          console.log(`ℹ️  No tasks to show for ${user.name}`);
+          // console.log(`⛔ TODAY IS HOLIDAY - No tasks made visible for ${user.name}`);
+        } else if (validTasks === 0) {
+          // console.log(`ℹ️  No tasks to show for ${user.name}`);
         }
       } else {
-        console.log(`⏳ Shift not started for ${user.name}: ${now.toLocaleTimeString()} < ${shiftStartToday.toLocaleTimeString()}`);
+        // console.log(`⏳ Shift not started for ${user.name}: ${now.toLocaleTimeString()} < ${shiftStartToday.toLocaleTimeString()}`);
       }
     }
     
@@ -150,8 +146,8 @@ const hideCompletedShiftTasks = async () => {
 // Schedule: Every minute during working hours (more efficient than 00:01)
 const startVisibilityCron = () => {
   // Check every 5 minutes during 9AM-6PM IST
-  cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, { 
-  // cron.schedule('*/5 * * * * *', makeTasksVisible, { 
+  // cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, { 
+  cron.schedule('*/5 * * * * *', makeTasksVisible, { 
   // cron.schedule("*/3 * * * * *", makeTasksVisible, { 
     timezone: "Asia/Kolkata" 
   });
@@ -166,3 +162,4 @@ const startVisibilityCron = () => {
 
 export default startVisibilityCron;
 
+//working
