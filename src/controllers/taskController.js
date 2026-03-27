@@ -368,7 +368,7 @@ export const createTask = handleAsync(async (req, res, next) => {
             }).lean();
           }
 
-          if (parent) {
+      if (parent) {
             // Determine parent end date: prefer dueDate, then endDate (recurring), then startDate
             const parentEnd =
               parent.dueDate || parent.endDate || parent.startDate || null;
@@ -382,8 +382,8 @@ export const createTask = handleAsync(async (req, res, next) => {
                   ? Number(dependencyData.xValue)
                   : 0;
               const freqStr = (
-                dependencyData.isDependentFrequency || ""
-              ).toLowerCase();
+              dependencyData.isDependentFrequency || ""
+            ).toLowerCase();
 
               let childStart = new Date(baseDate);
               if (freqStr.includes("hour")) {
@@ -402,7 +402,7 @@ export const createTask = handleAsync(async (req, res, next) => {
               }
 
               // Override commonFields startDate / dueDate for this child
-              commonFields.startDate = childStart;
+            commonFields.startDate = childStart;
               if (childDue) commonFields.dueDate = childDue;
             }
           }
@@ -637,120 +637,16 @@ export const exportTasks = handleAsync(async (req, res, next) => {
 // ---------------------------------------------------------
 // GET ALL TASKS FOR DASHBOARD
 // ---------------------------------------------------------
-// export const getAllTasksWithStats = async (req, res) => {
-//   try {
-//     const { filterType } = req.body;
-//     // filterType = today | week | month
-
-//     let dateFilter = {};
-
-//     const now = new Date();
-
-//     // 👉 TODAY
-//     if (filterType === "today") {
-//       const start = new Date();
-//       start.setHours(0, 0, 0, 0);
-
-//       const end = new Date();
-//       end.setHours(23, 59, 59, 999);
-
-//       dateFilter = {
-//         createdAt: { $gte: start, $lte: end },
-//       };
-//     }
-
-//     // 👉 THIS WEEK
-//     if (filterType === "week") {
-//       const start = new Date();
-//       const day = start.getDay(); // 0-6
-//       const diff = start.getDate() - day + (day === 0 ? -6 : 1); // Monday start
-
-//       const weekStart = new Date(start.setDate(diff));
-//       weekStart.setHours(0, 0, 0, 0);
-
-//       const weekEnd = new Date(weekStart);
-//       weekEnd.setDate(weekStart.getDate() + 6);
-//       weekEnd.setHours(23, 59, 59, 999);
-
-//       dateFilter = {
-//         createdAt: { $gte: weekStart, $lte: weekEnd },
-//       };
-//     }
-
-//     // 👉 THIS MONTH
-//     if (filterType === "month") {
-//       const start = new Date(now.getFullYear(), now.getMonth(), 1);
-//       const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-//       start.setHours(0, 0, 0, 0);
-//       end.setHours(23, 59, 59, 999);
-
-//       dateFilter = {
-//         createdAt: { $gte: start, $lte: end },
-//       };
-//     }
-
-//     // 👉 BASE FILTER
-//     const filter = {
-//       ...dateFilter,
-//     };
-
-//     // 👉 FETCH ALL TASKS
-//     const tasks = await Task.find(filter)
-//       .populate("assignedTo", "name email department")
-//       .populate("assignedBy", "name email")
-//       .populate("departmentOfAssignToUser", "name")
-//       .populate("dependencyConfig.taskDependent", "title")
-//       .sort({ createdAt: -1 });
-
-//     // 👉 STATUS COUNTS
-//     const counts = await Task.aggregate([
-//       { $match: filter },
-//       {
-//         $group: {
-//           _id: "$status",
-//           count: { $sum: 1 },
-//         },
-//       },
-//     ]);
-
-//     // 👉 FORMAT COUNTS
-//     const statusCounts = {
-//       Pending: 0,
-//       Completed: 0,
-//       Delayed: 0,
-//       Upcoming: 0,
-//       Overdue: 0,
-//     };
-
-//     counts.forEach((item) => {
-//       statusCounts[item._id] = item.count;
-//     });
-
-//     return res.status(200).json({
-//       success: true,
-//       total: tasks.length,
-//       counts: statusCounts,
-//       data: tasks,
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({
-//       success: false,
-//       message: "Failed to fetch tasks",
-//     });
-//   }
-// };
 export const getAllTasksWithStats = async (req, res) => {
   try {
     const { filterType, userId, role } = req.body;
+    // filterType = today | week | month
 
     let dateFilter = {};
+
     const now = new Date();
 
-    // =========================
-    // 📅 DATE FILTER
-    // =========================
+    // 👉 TODAY
     if (filterType === "today") {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
@@ -758,13 +654,16 @@ export const getAllTasksWithStats = async (req, res) => {
       const end = new Date();
       end.setHours(23, 59, 59, 999);
 
-      dateFilter = { createdAt: { $gte: start, $lte: end } };
+      dateFilter = {
+        createdAt: { $gte: start, $lte: end },
+      };
     }
 
+    // 👉 THIS WEEK
     if (filterType === "week") {
       const start = new Date();
-      const day = start.getDay();
-      const diff = start.getDate() - day + (day === 0 ? -6 : 1);
+      const day = start.getDay(); // 0-6
+      const diff = start.getDate() - day + (day === 0 ? -6 : 1); // Monday start
 
       const weekStart = new Date(start.setDate(diff));
       weekStart.setHours(0, 0, 0, 0);
@@ -773,9 +672,12 @@ export const getAllTasksWithStats = async (req, res) => {
       weekEnd.setDate(weekStart.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
-      dateFilter = { createdAt: { $gte: weekStart, $lte: weekEnd } };
+      dateFilter = {
+        createdAt: { $gte: weekStart, $lte: weekEnd },
+      };
     }
 
+    // 👉 THIS MONTH
     if (filterType === "month") {
       const start = new Date(now.getFullYear(), now.getMonth(), 1);
       const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -783,9 +685,10 @@ export const getAllTasksWithStats = async (req, res) => {
       start.setHours(0, 0, 0, 0);
       end.setHours(23, 59, 59, 999);
 
-      dateFilter = { createdAt: { $gte: start, $lte: end } };
+      dateFilter = {
+        createdAt: { $gte: start, $lte: end },
+      };
     }
-
     // =========================
     // 👥 ROLE BASED FILTER (ONLY LOGGED USER)
     // =========================
@@ -793,49 +696,55 @@ export const getAllTasksWithStats = async (req, res) => {
 
     if (role === "Admin" || role === "Owner") {
       // full access → no restriction
-    } 
-    
-    else if (role === "Sr. Manager") {
+    } else if (role === "Sr. Manager") {
+      const srManagerId = userId;
+
+      // 1. Get Managers under Sr Manager
       const managers = await User.find({
-        reportingManager: userId,
+        reportingManager: srManagerId,
       }).select("_id");
 
       const managerIds = managers.map((m) => m._id);
 
+      // 2. Get Members under those Managers
       const members = await User.find({
         reportingManager: { $in: managerIds },
       }).select("_id");
 
       const memberIds = members.map((m) => m._id);
 
-      const allIds = [userId, ...managerIds, ...memberIds];
+      // 3. Combine all IDs
+      const allIds = [srManagerId, ...managerIds, ...memberIds];
 
+      // 4. Apply condition
+      andConditions.push({
+        $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
+      });
+    } else if (role === "Manager") {
+      const managerId = userId;
+
+      // 1. Get Members under this Manager
+      const memberUsers = await User.find({
+        reportingManager: managerId,
+      })
+        .populate("role", "name")
+        .select("_id role");
+
+      const memberIds = memberUsers
+        .filter((u) => u.role?.name === "Member")
+        .map((u) => u._id);
+
+      // 2. Combine manager + members
+      const allIds = [managerId, ...memberIds];
+
+      // 3. Apply condition (IMPORTANT)
       andConditions.push({
         $or: [
-          { assignedBy: { $in: allIds } },
-          { assignedTo: { $in: allIds } },
+          { assignedBy: { $in: allIds } }, // created by manager or members
+          { assignedTo: { $in: allIds } }, // assigned to manager or members
         ],
       });
-    } 
-    
-    else if (role === "Manager") {
-      const members = await User.find({
-        reportingManager: userId,
-      }).select("_id");
-
-      const memberIds = members.map((m) => m._id);
-
-      const allIds = [userId, ...memberIds];
-
-      andConditions.push({
-        $or: [
-          { assignedBy: { $in: allIds } },
-          { assignedTo: { $in: allIds } },
-        ],
-      });
-    } 
-    
-    else {
+    } else {
       // 👤 Member
       andConditions.push({
         assignedTo: userId,
@@ -849,47 +758,33 @@ export const getAllTasksWithStats = async (req, res) => {
       ...dateFilter,
       ...(andConditions.length > 0 && { $and: andConditions }),
     };
+    // 👉 FETCH ALL TASKS
+    const tasks = await Task.find(filter)
+      .populate("assignedTo", "name email department")
+      .populate("assignedBy", "name email")
+      .populate("departmentOfAssignToUser", "name")
+      .populate("dependencyConfig.taskDependent", "title")
+      .sort({ createdAt: -1 });
 
-    // =========================
-    // 📊 COUNTS + TOTAL
-    // =========================
-    const [counts, total] = await Promise.all([
-      Task.aggregate([
-        { $match: filter },
-        {
-          $group: {
-            _id: "$status",
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-      Task.countDocuments(filter),
-    ]);
-
-    // =========================
-    // 📦 FORMAT COUNTS
-    // =========================
+    // 👉 STATUS COUNTS
+    // 👉 STATUS COUNTS (PURE JS - SAFE)
     const statusCounts = {
-      Pending: 0,
-      Completed: 0,
-      Delayed: 0,
-      Upcoming: 0,
-      Overdue: 0,
+      Pending: tasks.filter((t) => t.status === "Pending").length,
+      Completed: tasks.filter((t) => t.status === "Completed").length,
+      Delayed: tasks.filter((t) => t.status === "Delayed").length,
+      Upcoming: tasks.filter((t) => t.status === "Upcoming").length,
+      Overdue: tasks.filter((t) => t.status === "Overdue").length,
     };
 
-    counts.forEach((item) => {
-      statusCounts[item._id] = item.count;
-    });
+    // console.log("TOTAL TASKS:", tasks.length);
+    // console.log("Counts:", statusCounts);
 
-    // =========================
-    // 🚀 RESPONSE
-    // =========================
     return res.status(200).json({
       success: true,
-      total,
+      total: tasks.length,
       counts: statusCounts,
+      data: tasks,
     });
-
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -898,6 +793,168 @@ export const getAllTasksWithStats = async (req, res) => {
     });
   }
 };
+// export const getAllTasksWithStats = async (req, res) => {
+//   try {
+//     const { filterType, userId, role } = req.body;
+
+//     let dateFilter = {};
+//     const now = new Date();
+
+//     // =========================
+//     // 📅 DATE FILTER
+//     // =========================
+//     if (filterType === "today") {
+//       const start = new Date();
+//       start.setHours(0, 0, 0, 0);
+
+//       const end = new Date();
+//       end.setHours(23, 59, 59, 999);
+
+//       dateFilter = { createdAt: { $gte: start, $lte: end } };
+//     }
+
+//     if (filterType === "week") {
+//       const start = new Date();
+//       const day = start.getDay();
+//       const diff = start.getDate() - day + (day === 0 ? -6 : 1);
+
+//       const weekStart = new Date(start.setDate(diff));
+//       weekStart.setHours(0, 0, 0, 0);
+
+//       const weekEnd = new Date(weekStart);
+//       weekEnd.setDate(weekStart.getDate() + 6);
+//       weekEnd.setHours(23, 59, 59, 999);
+
+//       dateFilter = { createdAt: { $gte: weekStart, $lte: weekEnd } };
+//     }
+
+//     if (filterType === "month") {
+//       const start = new Date(now.getFullYear(), now.getMonth(), 1);
+//       const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+//       start.setHours(0, 0, 0, 0);
+//       end.setHours(23, 59, 59, 999);
+
+//       dateFilter = { createdAt: { $gte: start, $lte: end } };
+//     }
+
+//     // =========================
+//     // 👥 ROLE BASED FILTER (ONLY LOGGED USER)
+//     // =========================
+//     const andConditions = [];
+
+//     if (role === "Admin" || role === "Owner") {
+//       // full access → no restriction
+//     } else if (role === "Sr. Manager") {
+//       const srManagerId = userId;
+
+//       // 1. Get Managers under Sr Manager
+//       const managers = await User.find({
+//         reportingManager: srManagerId,
+//       }).select("_id");
+
+//       const managerIds = managers.map((m) => m._id);
+
+//       // 2. Get Members under those Managers
+//       const members = await User.find({
+//         reportingManager: { $in: managerIds },
+//       }).select("_id");
+
+//       const memberIds = members.map((m) => m._id);
+
+//       // 3. Combine all IDs
+//       const allIds = [srManagerId, ...managerIds, ...memberIds];
+
+//       // 4. Apply condition
+//       andConditions.push({
+//         $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
+//       });
+//     } else if (role === "Manager") {
+//       const managerId = userId;
+
+//       // 1. Get Members under this Manager
+//       const memberUsers = await User.find({
+//         reportingManager: managerId,
+//       })
+//         .populate("role", "name")
+//         .select("_id role");
+
+//       const memberIds = memberUsers
+//         .filter((u) => u.role?.name === "Member")
+//         .map((u) => u._id);
+
+//       // 2. Combine manager + members
+//       const allIds = [managerId, ...memberIds];
+
+//       // 3. Apply condition (IMPORTANT)
+//       andConditions.push({
+//         $or: [
+//           { assignedBy: { $in: allIds } }, // created by manager or members
+//           { assignedTo: { $in: allIds } }, // assigned to manager or members
+//         ],
+//       });
+//     } else {
+//       // 👤 Member
+//       andConditions.push({
+//         assignedTo: userId,
+//       });
+//     }
+
+//     // =========================
+//     // 🧠 FINAL FILTER
+//     // =========================
+//     const filter = {
+//       ...dateFilter,
+//       ...(andConditions.length > 0 && { $and: andConditions }),
+//     };
+
+//     // =========================
+//     // 📊 COUNTS + TOTAL
+//     // =========================
+//     const [counts, total] = await Promise.all([
+//       Task.aggregate([
+//         { $match: filter },
+//         {
+//           $group: {
+//             _id: "$status",
+//             count: { $sum: 1 },
+//           },
+//         },
+//       ]),
+//       Task.countDocuments(filter),
+//     ]);
+
+//     // =========================
+//     // 📦 FORMAT COUNTS
+//     // =========================
+//     const statusCounts = {
+//       Pending: 0,
+//       Completed: 0,
+//       Delayed: 0,
+//       Upcoming: 0,
+//       Overdue: 0,
+//     };
+
+//     counts.forEach((item) => {
+//       statusCounts[item._id] = item.count;
+//     });
+
+//     // =========================
+//     // 🚀 RESPONSE
+//     // =========================
+//     return res.status(200).json({
+//       success: true,
+//       total,
+//       counts: statusCounts,
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch tasks",
+//     });
+//   }
+// };
 //**for my task listing */
 export const filterTasks = handleAsync(async (req, res) => {
   const {
@@ -1006,6 +1063,9 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   if (stat === "completed") {
     query.status = "Completed";
+  }
+  if (stat === "pending") {
+    query.status = "Pending";
   }
 
   // =========================
@@ -2521,55 +2581,42 @@ export const updateTask = handleAsync(async (req, res, next) => {
   //  MAGIC LOGIC: ACTUAL-TO-PLANNED TRIGGER
   //  (This runs AFTER the main task is successfully saved)
   // =========================================================
-  if (status === "Completed") {
-    try {
-      console.log(
-        `Checking dependencies for completed task: ${updatedTask.title}`,
+  if (task.completeStatus === true) {
+    const dependentTasks = await Task.find({
+      "dependencyConfig.taskDependent": task._id,
+      "dependencyConfig.startTimeSetting": "actual-to-planned",
+    });
+
+    for (const depTask of dependentTasks) {
+      let start = new Date(); // completion trigger time
+
+      const x = Number(depTask.dependencyConfig.xValue || 0);
+      const freq = (
+        depTask.dependencyConfig.isDependentFrequency || ""
+      ).toLowerCase();
+
+      if (freq.includes("hour")) {
+        start.setHours(start.getHours() + x);
+      } else {
+        start.setDate(start.getDate() + x);
+      }
+
+      const assignedUser = await User.findById(depTask.assignedTo).populate(
+        "workShift",
       );
 
-      // Find Child Tasks (waiting for this parent, set to Actual-to-Planned)
-      const childTasks = await Task.find({
-        "dependencyConfig.taskDependent": updatedTask._id,
-        "dependencyConfig.startTimeSetting": "actual-to-planned",
-        isDependent: true,
-      });
+      start = applyWorkShift(start, assignedUser.assignShift);
 
-      // Activate Children
-      for (const child of childTasks) {
-        const completionDate = new Date(); // Time of parent completion
+      depTask.startDate = start;
 
-        // Calculate Start Date based on Lag (X Value)
-        const activationDate = calculateActivationDate(
-          completionDate,
-          child.dependencyConfig.isDependentFrequency,
-          child.dependencyConfig.xValue,
-        );
-
-        // Logic: Start Now OR Schedule for Future
-        if (moment().isSameOrAfter(activationDate)) {
-          // Time beat ho gaya ya X=0 hai -> Start immediately
-          child.startDate = new Date();
-          child.status = "Pending"; // Makes it visible to user
-          child.isDependent = false; // Dependency resolved
-        } else {
-          // Future start date
-          child.startDate = activationDate;
-          // Status remains as is
-        }
-
-        // Calculate Due Date (Start Date + TaskEndDays)
-        if (child.taskEndDays) {
-          child.dueDate = moment(child.startDate)
-            .add(child.taskEndDays, "days")
-            .toDate();
-        }
-
-        await child.save();
-        console.log(`✅ Activated A2P Child Task: ${child.title}`);
+      // optional dueDate
+      if (depTask.taskEndDays) {
+        let due = new Date(start);
+        due.setDate(due.getDate() + depTask.taskEndDays);
+        depTask.dueDate = applyWorkShift(due, assignedUser.assignShift);
       }
-    } catch (err) {
-      // Log error but don't crash response. Main task update is already safe.
-      console.error("Error activating dependent tasks:", err);
+
+      await depTask.save();
     }
   }
   // =========================================================
