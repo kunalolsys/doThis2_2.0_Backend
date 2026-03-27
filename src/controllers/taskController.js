@@ -17,7 +17,12 @@ import * as XLSX from "xlsx";
 import Counter from "../models/Counter.js";
 import DeleteTaskHistory from "../models/DeleteTaskHistory.js";
 import moment from "moment";
-import { calculateActivationDate } from "../utils/dateCalculator.js";
+import {
+  calculateActivationDate,
+  nextWorkingShiftDate,
+  isWorkingDay,
+  addWorkingDays,
+} from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
 
 // Helper: Parse Date to IST safely handling strings
@@ -189,15 +194,389 @@ const isTaskValidForToday = (task, today) => {
 // ---------------------------------------------------------
 // CREATE TASK (Handles Bulk Assignment, Recurring & Delegation)
 // ---------------------------------------------------------
+// export const createTask = handleAsync(async (req, res, next) => {
+//   const {
+//     assignedTo, // Can be a single ID string, or a JSON string array of IDs
+//     title,
+//     description,
+//     departmentOfAssignToUser, // NEW: Accept department from frontend
+//     startDate,
+//     dueDate,
+//     taskEndDays, // New field for task end days
+//     checklist,
+//     frequency,
+//     weekDays,
+//     isDependent,
+//     parentTask,
+//     startTimeSetting,
+//     isDependentFrequency,
+//     xValue,
+//     isRecurrent,
+//     recurrenceFrequency,
+//     recurrenceEndDate,
+//   } = req.body;
+//   // 1. Basic Validation
+//   if (!assignedTo || !title || !description?.trim()) {
+//     return next(
+//       new AppError("Required fields: assignedTo, title, description", 400),
+//     );
+//   }
+
+//   // --- PARSE ASSIGNEES (Handle Multiple Users) ---
+//   let assigneeIds = [];
+//   try {
+//     // Check if it's a JSON string array (e.g. "['id1', 'id2']")
+//     if (
+//       typeof assignedTo === "string" &&
+//       (assignedTo.startsWith("[") || assignedTo.includes(","))
+//     ) {
+//       const parsed = JSON.parse(assignedTo);
+//       assigneeIds = Array.isArray(parsed) ? parsed : [assignedTo];
+//     } else {
+//       // Single ID
+//       assigneeIds = [assignedTo];
+//     }
+//   } catch (e) {
+//     // Fallback if JSON parse fails but it's just a simple string ID
+//     assigneeIds = [assignedTo];
+//   }
+
+//   // Validate all IDs
+//   const validAssigneeIds = assigneeIds.filter((id) =>
+//     mongoose.Types.ObjectId.isValid(id),
+//   );
+//   if (validAssigneeIds.length === 0) {
+//     return next(new AppError("Invalid User ID(s) provided", 400));
+//   }
+
+//   // 2. Parse FormData Booleans and Clean Data
+//   const isRec = isRecurrent === "true" || isRecurrent === true;
+//   const isDep = isDependent === "true" || isDependent === true;
+//   const isActualToPlanned = isDep && startTimeSetting === "actual-to-planned";
+
+//   // Parse Checklist
+//   let parsedChecklist = [];
+//   if (checklist) {
+//     try {
+//       if (typeof checklist === "string") {
+//         parsedChecklist = JSON.parse(checklist);
+//       } else if (Array.isArray(checklist)) {
+//         parsedChecklist = checklist;
+//       }
+//     } catch (error) {
+//       console.error("Error parsing checklist:", error);
+//       parsedChecklist = [];
+//     }
+//   }
+
+//   // Parse and sanitize taskEndDays so invalid values don't become NaN
+//   let parsedTaskEndDays = null;
+//   if (
+//     taskEndDays !== undefined &&
+//     taskEndDays !== null &&
+//     String(taskEndDays).trim() !== ""
+//   ) {
+//     const tmp = Number(taskEndDays);
+//     parsedTaskEndDays = Number.isFinite(tmp) ? tmp : null;
+//   }
+
+//   const dependencyData = {
+//     taskDependent: cleanField(parentTask),
+//     startTimeSetting: cleanField(startTimeSetting),
+//     isDependentFrequency: cleanField(isDependentFrequency),
+//     xValue:
+//       xValue && xValue !== "null" && xValue !== "" ? Number(xValue) : null,
+//   };
+
+//   const userId = req.user?._id || null;
+//   // If task is actual-to-planned, startDate must be null unless explicitly provided.
+//   // Otherwise, default to now.
+//   const parsedStartDate = cleanField(startDate)
+//     ? parseDateIST(startDate)
+//     : isActualToPlanned
+//       ? null
+//       : new Date();
+//   let calculatedDueDate = null;
+
+//   // Calculate due date if taskEndDays is provided and valid
+//   if (parsedTaskEndDays !== null && parsedStartDate) {
+//     const start = new Date(parsedStartDate);
+//     start.setDate(start.getDate() + parsedTaskEndDays);
+//     calculatedDueDate = start;
+//   }
+
+//   // 3. LOOP AND CREATE TASKS
+//   const createdTasks = [];
+
+//   // We loop through every selected user and create a separate task for them
+//   for (const assigneeId of validAssigneeIds) {
+//     // 3a. Get user to determine department
+//     const assignedUser = await User.findById(assigneeId);
+//     if (!assignedUser) {
+//       return next(new AppError(`User with ID ${assigneeId} not found`, 404));
+//     }
+
+//     // 3b. Determine department: use provided one, or first from user's departments
+//     let deptId = null;
+//     if (departmentOfAssignToUser) {
+//       // Frontend provided a specific department
+//       deptId = departmentOfAssignToUser;
+//     } else if (assignedUser.department) {
+//       // Use user's first/primary department
+//       if (
+//         Array.isArray(assignedUser.department) &&
+//         assignedUser.department.length > 0
+//       ) {
+//         deptId = assignedUser.department[0]._id || assignedUser.department[0];
+//       } else if (typeof assignedUser.department === "object") {
+//         deptId = assignedUser.department._id || assignedUser.department;
+//       } else {
+//         deptId = assignedUser.department;
+//       }
+//     }
+
+//     const commonFields = {
+//       title: title.trim(),
+//       description: description.trim(),
+//       assignedTo: assigneeId, // Unique per loop iteration
+//       assignedBy: userId,
+//       createdBy: userId,
+//       updatedBy: userId,
+//       isDependent: isDep,
+//       dependencyConfig: dependencyData,
+//       taskEndDays: parsedTaskEndDays,
+//       // status: 'Pending',
+//       startDate: parsedStartDate,
+//       dueDate: calculatedDueDate || cleanField(dueDate), // Use calculated due date if available
+//       departmentOfAssignToUser: deptId, // Set the department
+//       checklist: parsedChecklist,
+//     };
+//     // commonFields.status = calculateStatus({
+//     //   ...commonFields,
+//     //   completeStatus: false, // New field for status calculation
+//     // }); // Calculate initial status based on dates
+//     // If this is a dependent task and a parentTask is provided, compute child's startDate and dueDate
+//     if (isDep && dependencyData.taskDependent) {
+//       // This block calculates the start/due dates for PLANNED-TO-PLANNED dependent tasks at creation time.
+//       // For ACTUAL-TO-PLANNED, these fields remain null until the parent is completed.
+//       if (dependencyData.startTimeSetting === "planned-to-planned") {
+//         try {
+//           // Parent may be provided as TaskId string or ObjectId
+//           let parent = null;
+//           if (mongoose.Types.ObjectId.isValid(dependencyData.taskDependent)) {
+//             parent = await Task.findById(dependencyData.taskDependent).lean();
+//           }
+//           if (!parent) {
+//             // Try finding by TaskId field (e.g., '25120001')
+//             parent = await Task.findOne({
+//               TaskId: String(dependencyData.taskDependent),
+//             }).lean();
+//           }
+
+//       if (parent) {
+//             // Determine parent end date: prefer dueDate, then endDate (recurring), then startDate
+//             const parentEnd =
+//               parent.dueDate || parent.endDate || parent.startDate || null;
+//             if (parentEnd) {
+//               const baseDate = new Date(parentEnd);
+
+//               // Determine offset X and whether in days or hours
+//               const x =
+//                 dependencyData.xValue !== null &&
+//                 dependencyData.xValue !== undefined
+//                   ? Number(dependencyData.xValue)
+//                   : 0;
+//               const freqStr = (
+//               dependencyData.isDependentFrequency || ""
+//             ).toLowerCase();
+
+//               let childStart = new Date(baseDate);
+//               if (freqStr.includes("hour")) {
+//                 childStart.setHours(childStart.getHours() + x);
+//               } else {
+//                 // default to days
+//                 childStart.setDate(childStart.getDate() + x);
+//               }
+
+//               // Compute due date if a sanitized parsedTaskEndDays is available
+//               let childDue = null;
+//               if (parsedTaskEndDays !== null) {
+//                 childDue = new Date(childStart);
+//                 const addDays = Math.max(0, Number(parsedTaskEndDays) - 1); // off-by-one rule
+//                 childDue.setDate(childDue.getDate() + addDays);
+//               }
+
+//               // Override commonFields startDate / dueDate for this child
+//             commonFields.startDate = childStart;
+//               if (childDue) commonFields.dueDate = childDue;
+//             }
+//           }
+//         } catch (err) {
+//           console.error("Error computing dependent child dates:", err);
+//         }
+//       }
+//     }
+
+//     let newTask;
+
+//     // --- LOGIC BRANCHING (Same as before, just inside loop) ---
+//     if (isRec) {
+//       // Recurring Logic
+//       let modelFrequency = frequency || recurrenceFrequency;
+//       const freqMap = {
+//         daily: "Daily",
+//         weekly: "Weekly",
+//         fortnightly: "Fortnightly",
+//         monthly: "Monthly",
+//         quarterly: "Quarterly",
+//         "half-yearly": "Half Yearly",
+//         yearly: "Yearly",
+//       };
+//       if (modelFrequency && freqMap[modelFrequency.toLowerCase()]) {
+//         modelFrequency = freqMap[modelFrequency.toLowerCase()];
+//       }
+
+//       if (!modelFrequency)
+//         return next(new AppError("Frequency is required", 400));
+
+//       // Holiday Check (Start Date) - Check once ideally, but checking per loop is safe
+//       const startHoliday = await Holiday.findOne({
+//         date: startOfDay(parsedStartDate),
+//       });
+//       if (startHoliday)
+//         return next(
+//           new AppError(`Start date is a holiday: ${startHoliday.name}`, 400),
+//         );
+
+//       let parsedWeekDays = [];
+//       if (weekDays) {
+//         let days = [];
+//         try {
+//           if (typeof weekDays === "string") {
+//             days = JSON.parse(weekDays);
+//           } else if (Array.isArray(weekDays)) {
+//             days = weekDays;
+//           }
+//         } catch (error) {
+//           if (typeof weekDays === "string") {
+//             days = weekDays
+//               .split(",")
+//               .map((d) => d.trim())
+//               .filter(Boolean);
+//           }
+//         }
+//         if (Array.isArray(days)) {
+//           parsedWeekDays = days.map((day) => day.toLowerCase());
+//         }
+//       }
+
+//       // Debug: log whether file was received for recurring task creation
+//       console.log(
+//         "createTask: recurring req.file ->",
+//         req.file ? req.file.filename : null,
+//       );
+
+//       newTask = new RecurringTask({
+//         ...commonFields,
+//         frequency: modelFrequency,
+//         weekDays: parsedWeekDays,
+//         startDate: parsedStartDate,
+//         // status: calculateStatus(commonFields),
+//         endDate: cleanField(recurrenceEndDate)
+//           ? parseDateIST(recurrenceEndDate)
+//           : null,
+//         // attachmentFile: req.file ? req.file.filename : null, // Save attachment for recurring tasks
+//         attachmentFile: req.files
+//           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
+//           : [],
+//       });
+//     } else {
+//       // Delegation Logic
+//       // Prefer a dueDate computed earlier for dependent children (commonFields.dueDate).
+//       // Fall back to an explicitly provided dueDate from the request if no computed value exists.
+//       const due = commonFields.dueDate
+//         ? commonFields.dueDate
+//         : cleanField(dueDate)
+//           ? parseDateIST(dueDate)
+//           : null;
+
+//       if (due) {
+//         const dueHoliday = await Holiday.findOne({ date: startOfDay(due) });
+//         if (dueHoliday)
+//           return next(
+//             new AppError(`Due date is a holiday: ${dueHoliday.name}`, 400),
+//           );
+//       }
+
+//       if (cleanField(startDate)) {
+//         const startHoliday = await Holiday.findOne({
+//           date: startOfDay(parsedStartDate),
+//         });
+//         if (startHoliday)
+//           return next(
+//             new AppError(`Start date is a holiday: ${startHoliday.name}`, 400),
+//           );
+//       }
+
+//       newTask = new DelegationTask({
+//         ...commonFields,
+//         dueDate: due,
+//         // status: 'Pending',
+//         status: calculateStatus({
+//           ...commonFields,
+//           dueDate: due,
+//           completeStatus: false,
+//         }),
+//         // attachmentFile: req.file ? req.file.filename : null,
+//         attachmentFile: req.files
+//           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
+//           : [],
+//         taskDoneBy: null,
+//         completeStatus: false,
+//       });
+//     }
+
+//     // Save individual task
+//     await newTask.save();
+//     await createLog({
+//       action: "CREATE",
+//       module: "TASK",
+//       documentId: newTask._id,
+//       performedBy: req.cookies.userId,
+//       newData: newTask,
+//       message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId}`,
+//     });
+//     createdTasks.push(newTask);
+//   }
+
+//   // 4. Response
+//   const defaultMessage = `${createdTasks.length} Task(s) created successfully`;
+//   const responseJson = {
+//     success: true,
+//     message: defaultMessage,
+//     data:
+//       createdTasks.length === 1
+//         ? normalizeTask(createdTasks[0])
+//         : createdTasks.map(normalizeTask),
+//   };
+
+//   if (req.file && req.fileWasRenamed) {
+//     responseJson.message = `file already exist so your file name is-${req.file.filename}. ${defaultMessage}`;
+//     responseJson.renamedFile = req.file.filename;
+//   }
+
+//   res.status(201).json(responseJson);
+// });
+
 export const createTask = handleAsync(async (req, res, next) => {
   const {
-    assignedTo, // Can be a single ID string, or a JSON string array of IDs
+    assignedTo,
     title,
     description,
-    departmentOfAssignToUser, // NEW: Accept department from frontend
+    departmentOfAssignToUser,
     startDate,
     dueDate,
-    taskEndDays, // New field for task end days
+    taskEndDays,
     checklist,
     frequency,
     weekDays,
@@ -210,6 +589,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     recurrenceFrequency,
     recurrenceEndDate,
   } = req.body;
+
   // 1. Basic Validation
   if (!assignedTo || !title || !description?.trim()) {
     return next(
@@ -217,10 +597,9 @@ export const createTask = handleAsync(async (req, res, next) => {
     );
   }
 
-  // --- PARSE ASSIGNEES (Handle Multiple Users) ---
+  // --- PARSE ASSIGNEES ---
   let assigneeIds = [];
   try {
-    // Check if it's a JSON string array (e.g. "['id1', 'id2']")
     if (
       typeof assignedTo === "string" &&
       (assignedTo.startsWith("[") || assignedTo.includes(","))
@@ -228,15 +607,12 @@ export const createTask = handleAsync(async (req, res, next) => {
       const parsed = JSON.parse(assignedTo);
       assigneeIds = Array.isArray(parsed) ? parsed : [assignedTo];
     } else {
-      // Single ID
       assigneeIds = [assignedTo];
     }
   } catch (e) {
-    // Fallback if JSON parse fails but it's just a simple string ID
     assigneeIds = [assignedTo];
   }
 
-  // Validate all IDs
   const validAssigneeIds = assigneeIds.filter((id) =>
     mongoose.Types.ObjectId.isValid(id),
   );
@@ -244,27 +620,25 @@ export const createTask = handleAsync(async (req, res, next) => {
     return next(new AppError("Invalid User ID(s) provided", 400));
   }
 
-  // 2. Parse FormData Booleans and Clean Data
+  // 2. Parse inputs
   const isRec = isRecurrent === "true" || isRecurrent === true;
   const isDep = isDependent === "true" || isDependent === true;
   const isActualToPlanned = isDep && startTimeSetting === "actual-to-planned";
 
-  // Parse Checklist
   let parsedChecklist = [];
   if (checklist) {
     try {
-      if (typeof checklist === "string") {
-        parsedChecklist = JSON.parse(checklist);
-      } else if (Array.isArray(checklist)) {
-        parsedChecklist = checklist;
-      }
+      parsedChecklist =
+        typeof checklist === "string"
+          ? JSON.parse(checklist)
+          : Array.isArray(checklist)
+            ? checklist
+            : [];
     } catch (error) {
-      console.error("Error parsing checklist:", error);
       parsedChecklist = [];
     }
   }
 
-  // Parse and sanitize taskEndDays so invalid values don't become NaN
   let parsedTaskEndDays = null;
   if (
     taskEndDays !== undefined &&
@@ -284,40 +658,35 @@ export const createTask = handleAsync(async (req, res, next) => {
   };
 
   const userId = req.user?._id || null;
-  // If task is actual-to-planned, startDate must be null unless explicitly provided.
-  // Otherwise, default to now.
   const parsedStartDate = cleanField(startDate)
     ? parseDateIST(startDate)
     : isActualToPlanned
       ? null
       : new Date();
-  let calculatedDueDate = null;
 
-  // Calculate due date if taskEndDays is provided and valid
-  if (parsedTaskEndDays !== null && parsedStartDate) {
-    const start = new Date(parsedStartDate);
-    start.setDate(start.getDate() + parsedTaskEndDays);
-    calculatedDueDate = start;
-  }
-
-  // 3. LOOP AND CREATE TASKS
   const createdTasks = [];
 
-  // We loop through every selected user and create a separate task for them
+  // 🔥 3. LOOP PER ASSIGNEE - WORKSHIFT AWARE
   for (const assigneeId of validAssigneeIds) {
-    // 3a. Get user to determine department
-    const assignedUser = await User.findById(assigneeId);
+    // 🔥 GET USER WITH WORKSHIFT
+    const assignedUser =
+      await User.findById(assigneeId).populate("assignShift");
     if (!assignedUser) {
       return next(new AppError(`User with ID ${assigneeId} not found`, 404));
     }
 
-    // 3b. Determine department: use provided one, or first from user's departments
+    const workShift = assignedUser.assignShift;
+    if (!workShift) {
+      return next(
+        new AppError(`No workshift assigned to user ${assignedUser.name}`, 400),
+      );
+    }
+
+    // Department logic (unchanged)
     let deptId = null;
     if (departmentOfAssignToUser) {
-      // Frontend provided a specific department
       deptId = departmentOfAssignToUser;
     } else if (assignedUser.department) {
-      // Use user's first/primary department
       if (
         Array.isArray(assignedUser.department) &&
         assignedUser.department.length > 0
@@ -330,93 +699,104 @@ export const createTask = handleAsync(async (req, res, next) => {
       }
     }
 
+    // 🔥 COMPUTE EFFECTIVE DATES (WORKSHIFT AWARE)
+    let effectiveStartDate = parsedStartDate
+      ? await nextWorkingShiftDate(parsedStartDate, workShift._id)
+      : await nextWorkingShiftDate(new Date(), workShift._id);
+
+    let effectiveDueDate = null;
+    if (parsedTaskEndDays !== null && parsedTaskEndDays > 0) {
+      effectiveDueDate = await addWorkingDays(
+        effectiveStartDate,
+        parsedTaskEndDays,
+        workShift._id,
+      );
+    } else if (cleanField(dueDate)) {
+      effectiveDueDate = await nextWorkingShiftDate(
+        parseDateIST(dueDate),
+        workShift._id,
+      );
+    }
+
     const commonFields = {
       title: title.trim(),
       description: description.trim(),
-      assignedTo: assigneeId, // Unique per loop iteration
+      assignedTo: assigneeId,
       assignedBy: userId,
       createdBy: userId,
       updatedBy: userId,
       isDependent: isDep,
       dependencyConfig: dependencyData,
       taskEndDays: parsedTaskEndDays,
-      // status: 'Pending',
-      startDate: parsedStartDate,
-      dueDate: calculatedDueDate || cleanField(dueDate), // Use calculated due date if available
-      departmentOfAssignToUser: deptId, // Set the department
+      startDate: effectiveStartDate,
+      dueDate: effectiveDueDate,
+      departmentOfAssignToUser: deptId,
       checklist: parsedChecklist,
     };
-    // commonFields.status = calculateStatus({
-    //   ...commonFields,
-    //   completeStatus: false, // New field for status calculation
-    // }); // Calculate initial status based on dates
-    // If this is a dependent task and a parentTask is provided, compute child's startDate and dueDate
-    if (isDep && dependencyData.taskDependent) {
-      // This block calculates the start/due dates for PLANNED-TO-PLANNED dependent tasks at creation time.
-      // For ACTUAL-TO-PLANNED, these fields remain null until the parent is completed.
-      if (dependencyData.startTimeSetting === "planned-to-planned") {
-        try {
-          // Parent may be provided as TaskId string or ObjectId
-          let parent = null;
-          if (mongoose.Types.ObjectId.isValid(dependencyData.taskDependent)) {
-            parent = await Task.findById(dependencyData.taskDependent).lean();
-          }
-          if (!parent) {
-            // Try finding by TaskId field (e.g., '25120001')
-            parent = await Task.findOne({
-              TaskId: String(dependencyData.taskDependent),
-            }).lean();
-          }
 
-      if (parent) {
-            // Determine parent end date: prefer dueDate, then endDate (recurring), then startDate
-            const parentEnd =
-              parent.dueDate || parent.endDate || parent.startDate || null;
-            if (parentEnd) {
-              const baseDate = new Date(parentEnd);
+    // 🔥 DEPENDENT PLANNED-TO-PLANNED (WorkShift Aware)
+    if (
+      isDep &&
+      dependencyData.taskDependent &&
+      dependencyData.startTimeSetting === "planned-to-planned"
+    ) {
+      try {
+        let parent = null;
+        if (mongoose.Types.ObjectId.isValid(dependencyData.taskDependent)) {
+          parent = await Task.findById(dependencyData.taskDependent).lean();
+        }
+        if (!parent) {
+          parent = await Task.findOne({
+            TaskId: String(dependencyData.taskDependent),
+          }).lean();
+        }
 
-              // Determine offset X and whether in days or hours
-              const x =
-                dependencyData.xValue !== null &&
-                dependencyData.xValue !== undefined
-                  ? Number(dependencyData.xValue)
-                  : 0;
-              const freqStr = (
+        if (parent) {
+          const parentEnd =
+            parent.dueDate || parent.endDate || parent.startDate || null;
+          if (parentEnd) {
+            const x = Number(dependencyData.xValue) || 0;
+            const freqStr = (
               dependencyData.isDependentFrequency || ""
             ).toLowerCase();
 
-              let childStart = new Date(baseDate);
-              if (freqStr.includes("hour")) {
-                childStart.setHours(childStart.getHours() + x);
-              } else {
-                // default to days
-                childStart.setDate(childStart.getDate() + x);
-              }
+            let childBaseDate = new Date(parentEnd);
 
-              // Compute due date if a sanitized parsedTaskEndDays is available
-              let childDue = null;
-              if (parsedTaskEndDays !== null) {
-                childDue = new Date(childStart);
-                const addDays = Math.max(0, Number(parsedTaskEndDays) - 1); // off-by-one rule
-                childDue.setDate(childDue.getDate() + addDays);
-              }
+            if (freqStr.includes("hour")) {
+              // Hours: simple offset, then snap to next shift
+              childBaseDate.setHours(childBaseDate.getHours() + x);
+              commonFields.startDate = await nextWorkingShiftDate(
+                childBaseDate,
+                workShift._id,
+              );
+            } else {
+              // Days: working days offset
+              commonFields.startDate = await addWorkingDays(
+                parentEnd,
+                x,
+                workShift._id,
+              );
+            }
 
-              // Override commonFields startDate / dueDate for this child
-            commonFields.startDate = childStart;
-              if (childDue) commonFields.dueDate = childDue;
+            if (parsedTaskEndDays) {
+              commonFields.dueDate = await addWorkingDays(
+                commonFields.startDate,
+                parsedTaskEndDays,
+                workShift._id,
+              );
             }
           }
-        } catch (err) {
-          console.error("Error computing dependent child dates:", err);
         }
+      } catch (err) {
+        console.error("Error computing dependent dates:", err);
       }
     }
 
     let newTask;
 
-    // --- LOGIC BRANCHING (Same as before, just inside loop) ---
+    // --- TASK TYPE LOGIC ---
     if (isRec) {
-      // Recurring Logic
+      // 🔥 RECURRING: Validate startDate compatibility
       let modelFrequency = frequency || recurrenceFrequency;
       const freqMap = {
         daily: "Daily",
@@ -427,102 +807,61 @@ export const createTask = handleAsync(async (req, res, next) => {
         "half-yearly": "Half Yearly",
         yearly: "Yearly",
       };
-      if (modelFrequency && freqMap[modelFrequency.toLowerCase()]) {
-        modelFrequency = freqMap[modelFrequency.toLowerCase()];
-      }
+      modelFrequency = freqMap[modelFrequency?.toLowerCase()] || modelFrequency;
 
       if (!modelFrequency)
-        return next(new AppError("Frequency is required", 400));
-
-      // Holiday Check (Start Date) - Check once ideally, but checking per loop is safe
-      const startHoliday = await Holiday.findOne({
-        date: startOfDay(parsedStartDate),
-      });
-      if (startHoliday)
         return next(
-          new AppError(`Start date is a holiday: ${startHoliday.name}`, 400),
+          new AppError("Frequency is required for recurring tasks", 400),
         );
+
+      // 🔥 Validate recurring startDate is working day AND in weekDays (if specified)
+      if (!isWorkingDay(effectiveStartDate, workShift)) {
+        return next(
+          new AppError(
+            `Start date ${effectiveStartDate.toDateString()} is not a working day for ${workShift.name}`,
+            400,
+          ),
+        );
+      }
 
       let parsedWeekDays = [];
       if (weekDays) {
-        let days = [];
         try {
-          if (typeof weekDays === "string") {
-            days = JSON.parse(weekDays);
-          } else if (Array.isArray(weekDays)) {
-            days = weekDays;
+          parsedWeekDays =
+            typeof weekDays === "string"
+              ? JSON.parse(weekDays)
+              : Array.isArray(weekDays)
+                ? weekDays
+                : weekDays.split(",").map((d) => d.trim().toLowerCase());
+          parsedWeekDays = parsedWeekDays.map((d) => d.toLowerCase());
+
+          const startDayName = format(effectiveStartDate, "EEEE").toLowerCase();
+          if (parsedWeekDays.length && !parsedWeekDays.includes(startDayName)) {
+            return next(
+              new AppError(`Start date weekday not in recurring weekDays`, 400),
+            );
           }
         } catch (error) {
-          if (typeof weekDays === "string") {
-            days = weekDays
-              .split(",")
-              .map((d) => d.trim())
-              .filter(Boolean);
-          }
-        }
-        if (Array.isArray(days)) {
-          parsedWeekDays = days.map((day) => day.toLowerCase());
+          parsedWeekDays = [];
         }
       }
-
-      // Debug: log whether file was received for recurring task creation
-      console.log(
-        "createTask: recurring req.file ->",
-        req.file ? req.file.filename : null,
-      );
 
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
         weekDays: parsedWeekDays,
-        startDate: parsedStartDate,
-        // status: calculateStatus(commonFields),
         endDate: cleanField(recurrenceEndDate)
           ? parseDateIST(recurrenceEndDate)
           : null,
-        // attachmentFile: req.file ? req.file.filename : null, // Save attachment for recurring tasks
         attachmentFile: req.files
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
           : [],
       });
     } else {
-      // Delegation Logic
-      // Prefer a dueDate computed earlier for dependent children (commonFields.dueDate).
-      // Fall back to an explicitly provided dueDate from the request if no computed value exists.
-      const due = commonFields.dueDate
-        ? commonFields.dueDate
-        : cleanField(dueDate)
-          ? parseDateIST(dueDate)
-          : null;
-
-      if (due) {
-        const dueHoliday = await Holiday.findOne({ date: startOfDay(due) });
-        if (dueHoliday)
-          return next(
-            new AppError(`Due date is a holiday: ${dueHoliday.name}`, 400),
-          );
-      }
-
-      if (cleanField(startDate)) {
-        const startHoliday = await Holiday.findOne({
-          date: startOfDay(parsedStartDate),
-        });
-        if (startHoliday)
-          return next(
-            new AppError(`Start date is a holiday: ${startHoliday.name}`, 400),
-          );
-      }
-
+      // 🔥 DELEGATION
       newTask = new DelegationTask({
         ...commonFields,
-        dueDate: due,
-        // status: 'Pending',
-        status: calculateStatus({
-          ...commonFields,
-          dueDate: due,
-          completeStatus: false,
-        }),
-        // attachmentFile: req.file ? req.file.filename : null,
+        status: calculateStatus({ ...commonFields, completeStatus: false }),
         attachmentFile: req.files
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
           : [],
@@ -531,7 +870,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       });
     }
 
-    // Save individual task
+    // Save
     await newTask.save();
     await createLog({
       action: "CREATE",
@@ -539,30 +878,22 @@ export const createTask = handleAsync(async (req, res, next) => {
       documentId: newTask._id,
       performedBy: req.cookies.userId,
       newData: newTask,
-      message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId}`,
+      message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId} | WorkShift: ${workShift.name}`,
     });
     createdTasks.push(newTask);
   }
 
-  // 4. Response
+  // Response
   const defaultMessage = `${createdTasks.length} Task(s) created successfully`;
-  const responseJson = {
+  res.status(201).json({
     success: true,
     message: defaultMessage,
     data:
       createdTasks.length === 1
         ? normalizeTask(createdTasks[0])
         : createdTasks.map(normalizeTask),
-  };
-
-  if (req.file && req.fileWasRenamed) {
-    responseJson.message = `file already exist so your file name is-${req.file.filename}. ${defaultMessage}`;
-    responseJson.renamedFile = req.file.filename;
-  }
-
-  res.status(201).json(responseJson);
+  });
 });
-
 // ---------------------------------------------------------
 // EXPORT TASKS
 // ---------------------------------------------------------
@@ -987,9 +1318,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     });
   } else {
     if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
-      const usersInDept = await User.find({ department: departmentId }).select(
-        "_id",
-      );
+      const usersInDept = await User.find({ department: departmentId }).select("_id");
       const userIds = usersInDept.map((u) => u._id);
 
       if (userId && mongoose.Types.ObjectId.isValid(userId)) {
@@ -1013,10 +1342,6 @@ export const filterTasks = handleAsync(async (req, res) => {
       andConditions.push({ createdBy });
     }
   }
-  // 👤 USER
-  // if (userId) {
-  //   query.assignedTo = userId;
-  // }
 
   // 🔍 SEARCH
   if (search) {
@@ -1025,18 +1350,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     });
   }
 
-  // =========================
-  // 📊 STAT FILTER (TOP PRIORITY)
-  // =========================
-  // if (stat === "overdue") {
-  //   andConditions.push({
-  //     dueDate: { $lt: todayStart },
-  //   });
-
-  //   andConditions.push({
-  //     status: { $ne: "Completed" },
-  //   });
-  // }
+  // 📊 STAT FILTER
   if (stat === "overdue") {
     andConditions.push({
       $or: [
@@ -1068,9 +1382,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     query.status = "Pending";
   }
 
-  // =========================
   // 📌 TAB CATEGORY
-  // =========================
   if (!stat) {
     if (taskCategory === "today_backlog") {
       const start = startOfDay(new Date());
@@ -1095,30 +1407,22 @@ export const filterTasks = handleAsync(async (req, res) => {
     }
   }
 
-  // =========================
-  // 📊 STATUS FILTER (SECONDARY)
-  // =========================
+  // 📊 STATUS FILTER
   if (status && status !== "all") {
     query.status = status;
   }
 
-  // =========================
   // 🔁 TASK TYPE
-  // =========================
   if (taskType) {
     query.taskType = taskType;
   }
 
-  // =========================
   // ✅ MERGE CONDITIONS
-  // =========================
   if (andConditions.length > 0) {
     query.$and = andConditions;
   }
 
-  // =========================
   // 🚀 QUERY EXECUTION
-  // =========================
   const [tasks, total] = await Promise.all([
     Task.find(query)
       .populate("assignedTo", "name email department")
