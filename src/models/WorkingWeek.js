@@ -1,41 +1,43 @@
 import mongoose from "mongoose";
 
-const WorkingWeekSchema = mongoose.Schema({
- workingDays: {
+const WorkingWeekSchema = mongoose.Schema(
+  {
+    workingDays: {
       monday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       tuesday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       wednesday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       thursday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       friday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       saturday: {
         type: Boolean,
-        default: false
+        default: false,
       },
       sunday: {
         type: Boolean,
-        default: false
-      }
-    }
+        default: false,
+      },
+    },
+    isDefault: { type: Boolean, default: true },
   },
   {
-    timestamps: true // Automatically adds createdAt and updatedAt
-  }
+    timestamps: true, // Automatically adds createdAt and updatedAt
+  },
 );
 
-const WorkingWeek = mongoose.model('WorkingWeek', WorkingWeekSchema);
-export default WorkingWeek
+const WorkingWeek = mongoose.model("WorkingWeek", WorkingWeekSchema);
+export default WorkingWeek;

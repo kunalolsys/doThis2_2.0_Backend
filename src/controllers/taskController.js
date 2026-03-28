@@ -752,40 +752,79 @@ export const createTask = handleAsync(async (req, res, next) => {
         }
 
         if (parent) {
+          console.log("🔗 Parent found:", parent._id);
+
           const parentEnd =
             parent.dueDate || parent.endDate || parent.startDate || null;
+
+          console.log("📅 Parent End Date:", parentEnd);
+
           if (parentEnd) {
             const x = Number(dependencyData.xValue) || 0;
             const freqStr = (
               dependencyData.isDependentFrequency || ""
             ).toLowerCase();
 
+            console.log("⚙️ Dependency Config:", {
+              xValue: x,
+              frequency: freqStr,
+              parsedTaskEndDays,
+            });
+
             let childBaseDate = new Date(parentEnd);
+            console.log("📍 Initial Child Base Date:", childBaseDate);
 
             if (freqStr.includes("hour")) {
-              // Hours: simple offset, then snap to next shift
+              console.log("⏱️ Processing in HOURS mode");
+
               childBaseDate.setHours(childBaseDate.getHours() + x);
+              console.log("➕ After Hour Offset:", childBaseDate);
+
               commonFields.startDate = await nextWorkingShiftDate(
                 childBaseDate,
                 workShift._id,
               );
+
+              console.log(
+                "🟢 Final Start Date (after shift adjust):",
+                commonFields.startDate,
+              );
             } else {
-              // Days: working days offset
+              console.log("📆 Processing in DAYS mode");
+
               commonFields.startDate = await addWorkingDays(
                 parentEnd,
                 x,
                 workShift._id,
               );
+
+              console.log(
+                "🟢 Final Start Date (working days):",
+                commonFields.startDate,
+              );
             }
 
             if (parsedTaskEndDays) {
+              console.log(
+                "📅 Calculating Due Date with offset:",
+                parsedTaskEndDays,
+              );
+
               commonFields.dueDate = await addWorkingDays(
                 commonFields.startDate,
                 parsedTaskEndDays,
                 workShift._id,
               );
+
+              console.log("🔴 Final Due Date:", commonFields.dueDate);
+            } else {
+              console.log("⚠️ No parsedTaskEndDays provided, skipping dueDate");
             }
+          } else {
+            console.log("❌ No parentEnd date found");
           }
+        } else {
+          console.log("❌ No parent task found");
         }
       } catch (err) {
         console.error("Error computing dependent dates:", err);
@@ -1429,6 +1468,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (query.status !== "Upcoming") {
     query.isVisible = true;
   }
+  // query.taskType = { $ne: "RecurringTask" };
   // 🚀 QUERY EXECUTION
   const [tasks, total] = await Promise.all([
     Task.find(query) // 🔥 Only visible tasks
@@ -1451,7 +1491,121 @@ export const filterTasks = handleAsync(async (req, res) => {
     totalPages: Math.ceil(total / limit),
   });
 });
+//**get my task stats */
+export const getTaskStats = handleAsync(async (req, res) => {
+  const { userId, creatorOrAssignorId, departmentId, createdBy } = req.body;
 
+  const baseConditions = [];
+
+  const todayStart = startOfDay(new Date());
+  const todayEnd = endOfDay(new Date());
+
+  // =========================================================
+  // 👤 USER / DEPARTMENT FILTER (same as before)
+  // =========================================================
+  if (creatorOrAssignorId) {
+    baseConditions.push({
+      $or: [
+        { createdBy: creatorOrAssignorId },
+        { assignedBy: creatorOrAssignorId },
+      ],
+    });
+  } else {
+    if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
+      const usersInDept = await User.find({ department: departmentId }).select(
+        "_id",
+      );
+      const userIds = usersInDept.map((u) => u._id);
+
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        if (userIds.some((id) => id.equals(userId))) {
+          baseConditions.push({ assignedTo: userId });
+        } else {
+          return res.json({
+            success: true,
+            stats: { total: 0, overdue: 0, pending: 0, completed: 0 },
+          });
+        }
+      } else {
+        baseConditions.push({ assignedTo: { $in: userIds } });
+      }
+    } else if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      baseConditions.push({ assignedTo: userId });
+    }
+
+    if (createdBy) {
+      baseConditions.push({ createdBy });
+    }
+  }
+
+  // =========================================================
+  // 🧱 BASE QUERY
+  // =========================================================
+  const baseQuery = {};
+
+  if (baseConditions.length > 0) {
+    baseQuery.$and = baseConditions;
+  }
+
+  // visibility same as main API
+  baseQuery.isVisible = true;
+
+  // =========================================================
+  // 🚀 PARALLEL COUNTS (MATCHING YOUR MAIN LOGIC)
+  // =========================================================
+  const [total, completed, pending, overdue] = await Promise.all([
+    // TOTAL
+    Task.countDocuments(baseQuery),
+
+    // COMPLETED
+    Task.countDocuments({
+      ...baseQuery,
+      status: "Completed",
+    }),
+
+    // PENDING
+    Task.countDocuments({
+      ...baseQuery,
+      status: "Pending",
+    }),
+
+    // OVERDUE (🔥 SAME LOGIC AS filterTasks)
+    Task.countDocuments({
+      ...baseQuery,
+      $and: [
+        ...(baseQuery.$and || []),
+        {
+          $or: [
+            {
+              taskType: "DelegationTask",
+              dueDate: { $lt: todayStart },
+            },
+            {
+              taskType: "RecurringTask",
+              endDate: { $lt: todayStart },
+            },
+          ],
+        },
+        {
+          status: { $ne: "Completed" },
+        },
+      ],
+    }),
+  ]);
+
+  // =========================================================
+  // 📤 RESPONSE
+  // =========================================================
+  res.json({
+    success: true,
+    stats: {
+      total,
+      overdue,
+      pending,
+      completed,
+    },
+  });
+});
 //**for role based task listing */
 export const getRoleBasedTasks = handleAsync(async (req, res) => {
   const {

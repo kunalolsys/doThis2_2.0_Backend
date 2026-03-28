@@ -1,6 +1,7 @@
 import WorkingWeek from "../models/WorkingWeek.js";
 import {handleAsync} from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
+import WorkShift from "../models/WorkShift.js";
  
 // Get the single working week configuration
 export const getWorkingWeek = handleAsync(async (req, res, next) => {
@@ -38,7 +39,22 @@ export const updateWorkingWeek = handleAsync(async (req, res, next) => {
       upsert: true, // This is the key: creates a new doc if no match is found
     }
   );
- 
+  // ✅ 2. Extract workingDays only (IMPORTANT)
+  
+  const workingDays = {
+    monday: updatedWorkingWeek.workingDays.monday,
+    tuesday: updatedWorkingWeek.workingDays.tuesday,
+    wednesday: updatedWorkingWeek.workingDays.wednesday,
+    thursday: updatedWorkingWeek.workingDays.thursday,
+    friday: updatedWorkingWeek.workingDays.friday,
+    saturday: updatedWorkingWeek.workingDays.saturday,
+    sunday: updatedWorkingWeek.workingDays.sunday,
+  };
+  // ✅ 3. Update ALL WorkShifts with new workingDays
+  await WorkShift.updateMany(
+    {}, // update all shifts
+    { $set: { workingDays } }
+  );
   res.status(200).json({
     status: "success",
     data: {

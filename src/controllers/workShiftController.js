@@ -1,6 +1,7 @@
 import WorkShift from "../models/WorkShift.js";
 import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
+import WorkingWeek from "../models/WorkingWeek.js";
 
 // Get All WorkShifts
 export const getAllWorkShifts = handleAsync(async (req, res, next) => {
@@ -34,7 +35,7 @@ export const getAllWorkShifts = handleAsync(async (req, res, next) => {
 });
 export const getAllShiftsForDrops = handleAsync(async (req, res) => {
   // 🔥 NO PAGINATION HERE
-  const workShifts = await WorkShift.find()
+  const workShifts = await WorkShift.find();
 
   return res.status(200).json({
     success: true,
@@ -76,11 +77,16 @@ export const createWorkShift = handleAsync(async (req, res, next) => {
   if (existingWorkShift) {
     return next(new AppError("Work shift already exists", 400));
   }
-  
+  const defaultWorkingWeek = await WorkingWeek.findOne({ isDefault: true });
+
+  if (!defaultWorkingWeek) {
+    return next(new AppError("No default working week found", 400));
+  }
   const workShift = await WorkShift.create({
     name: name.trim(),
     startTime,
     endTime,
+    workingDays: defaultWorkingWeek.workingDays,
   });
 
   res.status(201).json({
