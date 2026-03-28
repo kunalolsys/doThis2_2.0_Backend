@@ -151,18 +151,16 @@ export const getLogs = async (req, res, next) => {
       )
       .populate("performedBy", "name email") // ✅ FIXED
       // .populate("checklist", "text") // ✅ FIXED
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+      .sort({ createdAt: -1 });
+    // .skip(skip)
+    // .limit(parseInt(limit));
 
-    const total = await Log.countDocuments(filter);
+    // const total = await Log.countDocuments(filter);
 
     res.status(200).json({
       success: true,
       data: logs,
-      total,
-      page: parseInt(page),
-      totalPages: Math.ceil(total / limit),
+      total: logs.length, // optional
     });
   } catch (err) {
     next(err);
