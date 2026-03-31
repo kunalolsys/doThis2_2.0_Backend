@@ -2,11 +2,12 @@ import WorkShift from "../models/WorkShift.js";
 import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
 import WorkingWeek from "../models/WorkingWeek.js";
+import User from "../models/User.js";
 
 // Get All WorkShifts
 export const getAllWorkShifts = handleAsync(async (req, res, next) => {
   const { page = 1, limit = 10, search } = req.body;
-  const filter = {};
+  const filter = { isDeleted: false };
 
   if (search) {
     filter.$or = [{ name: { $regex: search, $options: "i" } }];
@@ -35,7 +36,7 @@ export const getAllWorkShifts = handleAsync(async (req, res, next) => {
 });
 export const getAllShiftsForDrops = handleAsync(async (req, res) => {
   // 🔥 NO PAGINATION HERE
-  const workShifts = await WorkShift.find();
+  const workShifts = await WorkShift.find({ isDeleted: false });
 
   return res.status(200).json({
     success: true,
@@ -45,7 +46,7 @@ export const getAllShiftsForDrops = handleAsync(async (req, res) => {
 export const exportWorkShifts = handleAsync(async (req, res) => {
   const { search } = req.body;
 
-  const filter = {};
+  const filter = { isDeleted: false };
 
   if (search) {
     filter.$or = [{ name: { $regex: search, $options: "i" } }];
@@ -73,7 +74,7 @@ export const createWorkShift = handleAsync(async (req, res, next) => {
   }
 
   // Check if work shift already exists
-  const existingWorkShift = await WorkShift.findOne({ name });
+  const existingWorkShift = await WorkShift.findOne({ name, isDeleted: false });
   if (existingWorkShift) {
     return next(new AppError("Work shift already exists", 400));
   }
@@ -137,11 +138,31 @@ export const updateWorkShift = handleAsync(async (req, res, next) => {
 // Delete WorkShift
 export const deleteWorkShift = handleAsync(async (req, res, next) => {
   const { id } = req.params;
-  const workShift = await WorkShift.findByIdAndDelete(id);
-
+  const workShift = await WorkShift.findById(id);
   if (!workShift) {
-    return next(new AppError("Work shift not found", 404));
+    return next(new AppError("WorkShift not found", 404));
   }
+  if (workShift.isDeleted) {
+    return next(new AppError("WorkShift already deleted", 400));
+  }
+
+  // Check if any users are linked to this department
+  const userCount = await User.countDocuments({
+    assignShift: id,
+    isDeleted: false, // ✅ exclude deleted users
+  });
+  if (userCount > 0) {
+    return next(
+      new AppError(
+        `Cannot delete Workshift. ${userCount} user(s) are still linked. Unlink them first.`,
+        400,
+      ),
+    );
+  }
+
+  workShift.isDeleted = true;
+  await workShift.save();
+
   res.status(200).json({
     status: "success",
     message: "Work shift deleted successfully",

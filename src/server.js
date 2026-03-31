@@ -38,7 +38,7 @@ const logToDb = async (level, message) => {
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-  : ['https://fms.dothis2.com', 'http://localhost:4000']); // Default allowed origins
+  : ['https://fms.dothis2.com', 'http://localhost:4000','http://192.168.1.4:4000']); // Default allowed origins
 
 const io = new Server(server, {
   cors: {

@@ -1,11 +1,12 @@
 import Department from "../models/Department.js";
 import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
+import User from "../models/User.js";
 
 // Get All Department
 export const getAllDepartment = handleAsync(async (req, res, next) => {
   const { page = 1, limit = 10, search } = req.body;
-  const filter = {};
+  const filter = { isDeleted: false };
 
   if (search) {
     filter.$or = [{ name: { $regex: search, $options: "i" } }];
@@ -35,7 +36,7 @@ export const getAllDepartment = handleAsync(async (req, res, next) => {
 export const exportDepartment = handleAsync(async (req, res) => {
   const { search } = req.body;
 
-  const filter = {};
+  const filter = { isDeleted: false };
 
   if (search) {
     filter.$or = [{ name: { $regex: search, $options: "i" } }];
@@ -51,7 +52,7 @@ export const exportDepartment = handleAsync(async (req, res) => {
 });
 export const getAllDeptsForDrops = handleAsync(async (req, res) => {
   // 🔥 NO PAGINATION HERE
-  const department = await Department.find();
+  const department = await Department.find({ isDeleted: false });
 
   return res.status(200).json({
     success: true,
@@ -67,7 +68,10 @@ export const createDepartment = handleAsync(async (req, res, next) => {
   }
 
   // Check if department already exists
-  const existingDepartment = await Department.findOne({ name });
+  const existingDepartment = await Department.findOne({
+    name,
+    isDeleted: false,
+  });
   if (existingDepartment) {
     return next(new AppError("Department already exists", 400));
   }
@@ -107,11 +111,32 @@ export const updateDepartment = handleAsync(async (req, res, next) => {
 // Delete Department
 export const deleteDepartment = handleAsync(async (req, res, next) => {
   const { id } = req.params;
-  const department = await Department.findByIdAndDelete(id);
+  const department = await Department.findById(id);
 
   if (!department) {
     return next(new AppError("Department not found", 404));
   }
+  if (department.isDeleted) {
+    return next(new AppError("Department already deleted", 400));
+  }
+
+  // Check if any users are linked to this department
+  const userCount = await User.countDocuments({
+    department: id,
+    isDeleted: false, // ✅ exclude deleted users
+  });
+  if (userCount > 0) {
+    return next(
+      new AppError(
+        `Cannot delete department. ${userCount} user(s) are still linked. Unlink them first.`,
+        400,
+      ),
+    );
+  }
+
+  department.isDeleted = true;
+  await department.save();
+
   res.status(200).json({
     status: "success",
     message: "Department deleted successfully",

@@ -31,11 +31,11 @@ const workShiftSchema = new mongoose.Schema({
       friday: { type: Boolean, default: true },
       saturday: { type: Boolean, default: true },
       sunday: { type: Boolean, default: false },
+    },
+    isDeleted:{
+        type:Boolean,
+        default:false
     }
-    // isDeleted:{
-    //     type:Boolean,
-    //     default:false
-    // }
 },{timestamps:true});
 
 // Add Partial index for "name" where isDeleted is false

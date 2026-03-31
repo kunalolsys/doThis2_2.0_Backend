@@ -8,8 +8,6 @@ import {
 const router = express.Router();
 
 // router.route("/").get(getWorkingWeeks);
-router.route("/")
-    .get(getWorkingWeek)
-    .patch(updateWorkingWeek);
+router.route("/").get(getWorkingWeek).patch(updateWorkingWeek);
 
 export default router;

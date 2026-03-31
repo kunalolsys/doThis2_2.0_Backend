@@ -45,7 +45,7 @@ router.post('/role-based-tasks', authenticateJWT, getRoleBasedTasks);
 router.post('/tasks-with-stats', authenticateJWT, getAllTasksWithStats);
 
 // Export Tasks
-router.get('/export', authenticateJWT, exportTasks);
+router.post('/export', authenticateJWT, exportTasks);
 
 // Download attachment
 router.get('/download', downloadAttachment);

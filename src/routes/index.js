@@ -6,6 +6,7 @@ import taskRoutes from "./task.js";
 import userRoutes from "./user.js";
 import logsRoutes from "./logRoutes.js";
 import scheduleHolidayTaskRoutes from "./scheduleHolidayTask.js";
+import misReportRoutes from "./misReport.js";
 const router = express.Router();
 
 router.use("/setup", setupRoutes);
@@ -23,6 +24,8 @@ router.use("/tasks", taskRoutes);
 // user routes
 router.use("/users", userRoutes);
 router.use("/logs", logsRoutes);
+
+router.use("/mis", misReportRoutes);
 
 router.use("/schedule-holiday-task", scheduleHolidayTaskRoutes);
 

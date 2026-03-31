@@ -939,10 +939,81 @@ export const createTask = handleAsync(async (req, res, next) => {
 // ---------------------------------------------------------
 // EXPORT TASKS
 // ---------------------------------------------------------
-export const exportTasks = handleAsync(async (req, res, next) => {
-  const { format = "csv" } = req.query;
+const normalizeStatus = (status) => {
+  if (!status) return status;
 
-  const tasks = await Task.find({})
+  const map = {
+    pending: "Pending",
+    completed: "Completed",
+    delayed: "Delayed",
+    upcoming: "Upcoming",
+    overdue: "Overdue",
+  };
+
+  return map[status.toLowerCase()] || status;
+};
+export const exportTasks = handleAsync(async (req, res, next) => {
+  const { format = "csv", tabType, assignedTo, status, search } = req.body;
+  let filter = {};
+
+  // ✅ Apply same logic as frontend
+  if (tabType === "one-time") {
+    filter = {
+      $or: [
+        { taskType: "DelegationTask" },
+        {
+          $and: [
+            { recurrenceFrequency: { $exists: false } },
+            { taskType: { $ne: "RecurringTask" } },
+          ],
+        },
+      ],
+    };
+  }
+
+  if (tabType === "recurrence") {
+    filter = {
+      $or: [
+        { taskType: "RecurringTask" },
+        { recurrenceFrequency: { $exists: true, $ne: null } },
+      ],
+    };
+  }
+  if (search) {
+    const searchQuery = {
+      $or: [{ title: { $regex: search, $options: "i" } }, { TaskId: search }],
+    };
+
+    if (filter.$or) {
+      filter = { $and: [filter, searchQuery] };
+    } else {
+      filter = searchQuery;
+    }
+  }
+  // ✅ 2. Assigned To Filter
+  if (assignedTo && assignedTo !== "all") {
+    if (Array.isArray(assignedTo)) {
+      // multiple users
+      filter.assignedTo = { $in: assignedTo };
+    } else {
+      // single user
+      filter.assignedTo = { $in: [assignedTo] };
+    }
+  }
+
+  // ✅ 3. Status Filter
+  if (status && status !== "all") {
+    const formattedStatus = normalizeStatus(status);
+
+    // support single OR multiple
+    if (Array.isArray(formattedStatus)) {
+      filter.status = { $in: formattedStatus };
+    } else {
+      filter.status = formattedStatus;
+    }
+  }
+
+  const tasks = await Task.find(filter)
     .populate("assignedTo", "name email")
     .populate("departmentOfAssignToUser", "name")
     .populate("assignedBy", "name email")
@@ -3032,6 +3103,11 @@ export const updateTask = handleAsync(async (req, res, next) => {
   }
   if (shouldRecalculateStatus && task.status !== "Completed") {
     task.status = calculateStatus(task);
+  }
+  if (status === "Completed") {
+    task.completedAt = new Date();
+  } else if (status && status !== "Completed") {
+    task.completedAt = null;
   }
   // 6. SAVE THE TASK (Parent/Current Task)
   const updatedTask = await task.save();

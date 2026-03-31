@@ -1,16 +1,45 @@
-# Task Visibility Cron Fix - ReferenceError: result is not defined
+# MIS Report Implementation
 
-## Steps:
-- [x] Step 1: Read utils/dateCalculator.js ✓ (startOfDay exists from date-fns)
-- [x] Step 2: Import startOfDay from dateCalculator.js
-- [x] Step 3: Fix manual loop and remove undefined 'result' references ✓
-- [x] Step 4: Remove duplicate result logic ✓
-- [x] Step 5: Task complete - ReferenceError fixed
-</xai:function_call >
-<xai:function_call name="edit_file">
-<parameter name="path">d:/Kunal/dothis2_2.0/dothis2_2.0/dothis2_2.0_Backend/src/cron/taskVisibilityCron.js
-- [ ] Step 2: Implement efficient updateMany in makeTasksVisible()
-- [ ] Step 3: Fix undefined result reference and remove manual loop
-- [ ] Step 4: Test cron functionality
-- [ ] Step 5: Complete task
+## Previous Task
+Department soft delete complete ✓
+
+## New Task: MIS Report
+**Goal:** POST /api/v1/mis-reports
+Body: {period? ('weekly'|'quarterly'|'yearly'), startDate?, endDate?, srManagerId?, managerId?, memberIds:[] }
+Response: array [ {userName, role, totalTasks, doneOnTime, notDoneOnTime, notDone, score} ]
+
+**Steps:**
+- [x] Step 1: Create src/utils/reportHelpers.js ✓
+- [x] Step 2: Create src/controllers/misReportController.js ✓
+- [x] Step 3: Create src/routes/misReport.js ✓
+- [x] Step 4: Add route to src/routes/index.js ✓
+- [ ] Step 5: Test & complete
+
+**API Ready:** POST /api/v1/mis-reports
+Auth required.
+
+Example body:
+```json
+{
+  "period": "weekly",
+  "srManagerId": "sr_user_id",
+  "managerId": "manager_id",
+  "memberIds": ["member1_id", "member2_id"],
+  "startDate": "2024-01-01",
+  "endDate": "2024-12-31"
+}
+```
+
+**Test:**
+1. npm start (restart server)
+2. POST with valid auth token, get report table.
+
+Suggest indexes: db.tasks.createIndex({taskType:1, dueDate:1, assignedTo:1, status:1})
+
+Logic:
+- Users: union of self (logged?), subordinates under srManager/manager, memberIds
+- Date: compute from period or custom
+- Tasks: {taskType: 'DelegationTask', dueDate in range, assignedTo in users}
+- Stats: group by assignedTo, count status Completed/Delayed+Overdue/Pending
+- Score: (doneOnTime/total * 100).toFixed(2)+'%'
 

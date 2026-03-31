@@ -54,6 +54,7 @@ const BaseTaskSchema = new mongoose.Schema(
     taskEndDays: {
       type: Number,
       default: null,
+      required: true,
     },
 
     // --- NEW FIELD: Checklist ---
@@ -81,6 +82,10 @@ const BaseTaskSchema = new mongoose.Schema(
       type: String,
       enum: ["Pending", "Completed", "Delayed", "Upcoming", "Overdue"],
       default: "Pending",
+    },
+    completedAt: {
+      type: Date,
+      default: null,
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -120,7 +125,7 @@ const BaseTaskSchema = new mongoose.Schema(
     // 🔥 NEW: Task Visibility based on workshift
     isVisible: {
       type: Boolean,
-      default: false
+      default: false,
     },
   },
   baseOptions,
