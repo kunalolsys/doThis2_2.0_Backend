@@ -55,6 +55,120 @@ export const getMisReport = handleAsync(async (req, res, next) => {
   if (userIdArray.length > 0) {
     matchCondition.assignedTo = { $in: userIdArray };
   }
+  const globalTopPerformers = await Task.aggregate([
+    {
+      $match: {
+        isDeleted: { $ne: true },
+        isVisible: true,
+        $or: [
+          { dueDate: { $ne: null, $gte: start, $lte: end } },
+          { endDate: { $ne: null, $gte: start, $lte: end } },
+        ],
+      },
+    },
+    {
+      $group: {
+        _id: "$assignedTo",
+        totalTasks: { $sum: 1 },
+        doneOnTime: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: ["$completedAt", null] },
+                  { $lte: ["$completedAt", "$dueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        notDoneOnTime: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: ["$completedAt", null] },
+                  { $gt: ["$completedAt", "$dueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        score: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: [
+                    "$doneOnTime",
+                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
+                  ],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+        lateScore: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: [
+                    "$notDoneOnTime",
+                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
+                  ],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+      },
+    },
+
+    // ✅ ❗ REMOVE score = 0 performers
+    {
+      $match: {
+        score: { $gt: 0 },
+      },
+    },
+
+    { $sort: { score: -1, totalTasks: -1 } },
+    { $limit: 3 },
+
+    {
+      $lookup: {
+        from: "users",
+        localField: "_id",
+        foreignField: "_id",
+        as: "user",
+      },
+    },
+    { $unwind: "$user" },
+
+    {
+      $project: {
+        _id: 0,
+        userId: "$user._id",
+        name: "$user.name",
+        totalTasks: 1,
+        doneOnTime: 1,
+        score: 1,
+        lateScore: 1,
+      },
+    },
+  ]);
   // ✅ Aggregation
   const reports = await Task.aggregate([
     {
@@ -173,6 +287,22 @@ export const getMisReport = handleAsync(async (req, res, next) => {
             2,
           ],
         },
+        lateScore: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: [
+                    "$notDoneOnTime",
+                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
+                  ],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
       },
     },
 
@@ -184,12 +314,24 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     .populate("createdBy", "name")
     .sort({ createdAt: -1 })
     .lean();
+  //**filter top performer */
+  // let finalTopPerformers = globalTopPerformers;
+
+  // // 👉 If filters exist → keep only matching users
+  // if (userIdArray.length > 0) {
+  //   const userIdsSet = new Set(userIdArray.map((id) => id.toString()));
+
+  //   finalTopPerformers = globalTopPerformers.filter((user) =>
+  //     userIdsSet.has(user.userId.toString()),
+  //   );
+  // }
   // ✅ Response
   res.status(200).json({
     success: true,
     count: reports.length,
     data: reports,
     tasks: filteredTasks,
+    topPerformers: globalTopPerformers,
     filters: {
       period,
       startDate,

@@ -2527,13 +2527,53 @@ export const uploadAttachment = handleAsync(async (req, res, next) => {
     data: { filenames: filenames },
   });
 });
+const parseFlexibleDate = (dateStr) => {
+  if (!dateStr) return null;
 
+  const parts = dateStr.split(/[-/]/).map((p) => parseInt(p, 10));
+
+  if (parts.length !== 3) return null;
+
+  let day, month, year;
+
+  // YYYY-MM-DD
+  if (parts[0] > 1000) {
+    [year, month, day] = parts;
+  }
+  // DD-MM-YYYY OR MM-DD-YYYY
+  else {
+    const [p1, p2, p3] = parts;
+
+    year = p3;
+
+    // If second value > 12 → it's DD-MM
+    if (p2 > 12) {
+      day = p2;
+      month = p1;
+    }
+    // If first value > 12 → it's DD-MM
+    else if (p1 > 12) {
+      day = p1;
+      month = p2;
+    }
+    // Ambiguous (like 05-06-2024)
+    else {
+      // 👉 Default assume DD-MM-YYYY (recommended for India)
+      day = p1;
+      month = p2;
+    }
+  }
+
+  const date = new Date(year, month - 1, day);
+
+  return isNaN(date.getTime()) ? null : date;
+};
 export const importTasks = handleAsync(async (req, res, next) => {
   if (!req.file) {
     return next(new AppError("No file uploaded.", 400));
   }
 
-  const filePath = path.join(process.cwd(), "uploads", req.file.filename);
+  const filePath = req.file.path;
   const errors = [];
   const validTasks = [];
   let rows = [];
@@ -2576,7 +2616,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
         .toLowerCase()
         .replace(/[^a-z0-9]/g, "");
     const normalized = headers.map(normalize);
-
+    console.log(normalized);
     // Define required headers for each template (normalized)
     const required = {
       delegation: [
@@ -2585,7 +2625,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
         "assigntoemail",
         "assigntouserdepartment",
         "startdate",
-        "duedate",
+        "taskenddays",
       ],
       recurring: [
         "tasktitle",
@@ -2662,6 +2702,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
           "Assign To UserDepartment": departmentName,
           "Start Date": startDateStr,
           "Due Date": dueDateStr,
+          "Task End Days": taskEndDaysStr,
           isDependent: isDependentStr,
           "Attachment File": attachmentFile,
           "Check List": checkListStr, // Added checklist
@@ -2675,6 +2716,9 @@ export const importTasks = handleAsync(async (req, res, next) => {
         // Trim whitespace from string fields
         const trimmedStartDateStr = startDateStr
           ? String(startDateStr).trim()
+          : "";
+        const trimmedTaskEndDays = taskEndDaysStr
+          ? String(taskEndDaysStr).trim()
           : "";
         const trimmedDueDateStr = dueDateStr ? String(dueDateStr).trim() : "";
         const trimmedIsDependentStr = isDependentStr
@@ -2770,13 +2814,32 @@ export const importTasks = handleAsync(async (req, res, next) => {
           Boolean(trimmedParentTaskId);
 
         // Date Validation
+        // const startDate = trimmedStartDateStr
+        //   ? parseDateIST(trimmedStartDateStr)
+        //   : null;
+        // const dueDate = trimmedDueDateStr
+        //   ? parseDateIST(trimmedDueDateStr)
+        //   : null;
         const startDate = trimmedStartDateStr
-          ? parseDateIST(trimmedStartDateStr)
-          : null;
-        const dueDate = trimmedDueDateStr
-          ? parseDateIST(trimmedDueDateStr)
+          ? parseFlexibleDate(trimmedStartDateStr)
           : null;
 
+        // const dueDate = trimmedDueDateStr
+        //   ? parseFlexibleDate(trimmedDueDateStr)
+        //   : null;
+        const taskEndDays = trimmedTaskEndDays
+          ? Number(trimmedTaskEndDays)
+          : null;
+        let dueDate = null;
+
+        if (startDate && taskEndDays) {
+          dueDate = new Date(startDate);
+          dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
+        }
+
+        if (!taskEndDays || isNaN(taskEndDays)) {
+          throw new Error("Task End Days must be a valid number.");
+        }
         // For non-dependent tasks, start date is required and must be valid
         if (!isDependent && !startDate) {
           throw new Error(
@@ -2866,6 +2929,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
             createdBy: req.user._id,
             startDate,
             dueDate,
+            taskEndDays,
             attachmentFile: finalAttachmentPath,
             isDependent,
             departmentOfAssignToUser: department._id, // <--- Department is now from the single lookup
