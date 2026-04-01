@@ -9,18 +9,39 @@ import {
   format,
   parse,
 } from "date-fns";
+import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
 
 // ==================== UTILITY HELPERS ====================
 
 /**
  * Check if date is a holiday
  */
+// export async function isHoliday(date) {
+//   const startDay = startOfDay(new Date(date));
+//   const holiday = await Holiday.findOne({ date: startDay })
+//   console.log(holiday,startDay);
+//   return !!holiday;
+// }
 export async function isHoliday(date) {
   const startDay = startOfDay(new Date(date));
-  const holiday = await Holiday.findOne({ date: startDay });
+  const endDay = endOfDay(new Date(date));
+
+  const holiday = await Holiday.findOne({
+    date: {
+      $gte: startDay,
+      $lte: endDay,
+    },
+  });
+
+  // console.log("CHECK HOLIDAY:", {
+  //   input: date,
+  //   startDay,
+  //   endDay,
+  //   found: !!holiday,
+  // });
+
   return !!holiday;
 }
-
 /**
  * Check if day is working day per workShift
  */
@@ -85,12 +106,144 @@ export async function nextWorkingShiftDate(
  * Add N WORKING DAYS from startDate
  * Returns end-of-shift on target day
  */
+export async function addWorkingDaysHoliday(
+  startDate,
+  daysCount,
+  workShiftId,
+  isDep = false,
+  options = {}
+) {
+  if (!daysCount || daysCount <= 0) return null;
+
+  const { skipHolidays = true } = options;
+
+  const workShift = await WorkShift.findById(workShiftId);
+  if (!workShift) throw new Error("WorkShift not found");
+
+  let current = new Date(startDate);
+  let workingDaysAdded = 0;
+
+  // =====================================================
+  // ✅ STEP 1: ALWAYS CALCULATE USING DAYS COUNT
+  // =====================================================
+  while (workingDaysAdded < daysCount) {
+    if (daysCount == 1) {
+      current = addDays(current, 0);
+    } else {
+      current = addDays(current, 1);
+    }
+
+    if (skipHolidays && (await isHoliday(current))) continue;
+    if (!isWorkingDay(current, workShift)) continue;
+
+    workingDaysAdded++;
+  }
+
+  // =====================================================
+  // ✅ STEP 2: APPLY HOLIDAY LOGIC ONLY IF DEPENDENT
+  // =====================================================
+  if (!isDep) {
+    return snapToShiftTime(current, workShift, false);
+  }
+
+  const schedule = await ScheduleHolidayTask.findOne();
+  if (!schedule) {
+    return snapToShiftTime(current, workShift, false);
+  }
+
+  const holidayAction = schedule.holidayAction || "AFTER";
+
+  // =====================================================
+  // ✅ STEP 3: IF FINAL DATE IS HOLIDAY → SHIFT
+  // =====================================================
+  if (await isHoliday(current)) {
+    if (holidayAction === "BEFORE") {
+      current = addDays(current, -1);
+
+      while (
+        (await isHoliday(current)) ||
+        !isWorkingDay(current, workShift)
+      ) {
+        current = addDays(current, -1);
+      }
+    }
+
+    if (holidayAction === "AFTER") {
+      current = addDays(current, 1);
+
+      while (
+        (await isHoliday(current)) ||
+        !isWorkingDay(current, workShift)
+      ) {
+        current = addDays(current, 1);
+      }
+    }
+  }
+
+  return snapToShiftTime(current, workShift, false);
+}
+// export async function addWorkingDaysHoliday(
+//   startDate,
+//   workShiftId
+// ) {
+//   let current = new Date(startDate);
+
+//   const workShift = await WorkShift.findById(workShiftId);
+//   if (!workShift) throw new Error("WorkShift not found");
+
+//   // ✅ get schedule config
+//   const schedule = await ScheduleHolidayTask.findOne();
+//   const holidayAction = schedule?.holidayAction || "AFTER";
+
+//   let holidayDate = null;
+
+//   // 🔍 find nearest holiday (next 30 days)
+//   for (let i = 0; i < 30; i++) {
+//     const checkDate = addDays(current, i);
+//     if (await isHoliday(checkDate)) {
+//       holidayDate = checkDate;
+//       break;
+//     }
+//   }
+
+//   // fallback
+//   if (!holidayDate) {
+//     return snapToShiftTime(current, workShift, false);
+//   }
+
+//   // ================= LOGIC =================
+
+//   if (holidayAction === "BEFORE") {
+//     current = addDays(holidayDate, -1);
+
+//     while (
+//       (await isHoliday(current)) ||
+//       !isWorkingDay(current, workShift)
+//     ) {
+//       current = addDays(current, -1);
+//     }
+//   }
+
+//   if (holidayAction === "AFTER") {
+//     current = addDays(holidayDate, 1);
+
+//     while (
+//       (await isHoliday(current)) ||
+//       !isWorkingDay(current, workShift)
+//     ) {
+//       current = addDays(current, 1);
+//     }
+//   }
+
+//   return snapToShiftTime(current, workShift, false);
+// }
 export async function addWorkingDays(
   startDate,
   daysCount,
   workShiftId,
   options = {},
 ) {
+  console.log("run")
   if (!daysCount || daysCount <= 0) return null;
 
   const { skipHolidays = true } = options;
@@ -136,4 +289,5 @@ export default {
   nextWorkingShiftDate,
   addWorkingDays,
   calculateActivationDate,
+  addWorkingDaysHoliday
 };

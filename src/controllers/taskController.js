@@ -21,6 +21,7 @@ import {
   nextWorkingShiftDate,
   isWorkingDay,
   addWorkingDays,
+  addWorkingDaysHoliday,
 } from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
 import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
@@ -754,10 +755,6 @@ export const createTask = handleAsync(async (req, res, next) => {
         if (parent) {
           const parentEnd =
             parent.dueDate || parent.endDate || parent.startDate || null;
-          const scheduledHolidaysTasks = await ScheduleHolidayTask.find();
-          const assignedTaskAt = scheduledHolidaysTasks
-            ? scheduledHolidaysTasks[0]?.holidayAction
-            : "AFTER";
           if (parentEnd) {
             const x = Number(dependencyData.xValue) || 0;
             const freqStr = (
@@ -774,7 +771,7 @@ export const createTask = handleAsync(async (req, res, next) => {
                 workShift._id,
               );
             } else {
-              commonFields.startDate = await addWorkingDays(
+              commonFields.startDate = await addWorkingDaysHoliday(
                 parentEnd,
                 x,
                 workShift._id,
@@ -782,7 +779,7 @@ export const createTask = handleAsync(async (req, res, next) => {
             }
 
             if (parsedTaskEndDays) {
-              commonFields.dueDate = await addWorkingDays(
+              commonFields.dueDate = await addWorkingDaysHoliday(
                 commonFields.startDate,
                 parsedTaskEndDays,
                 workShift._id,
@@ -800,7 +797,7 @@ export const createTask = handleAsync(async (req, res, next) => {
         console.error("Error computing dependent dates:", err);
       }
     }
-
+    console.log(commonFields)
     let newTask;
 
     // --- TASK TYPE LOGIC ---
