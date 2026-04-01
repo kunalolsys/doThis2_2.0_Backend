@@ -54,7 +54,7 @@ const BaseTaskSchema = new mongoose.Schema(
     taskEndDays: {
       type: Number,
       default: null,
-      required: true,
+      // required: true,
     },
 
     // --- NEW FIELD: Checklist ---

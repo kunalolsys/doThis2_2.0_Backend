@@ -16,7 +16,6 @@ import Department from "../models/Department.js";
 import * as XLSX from "xlsx";
 import Counter from "../models/Counter.js";
 import DeleteTaskHistory from "../models/DeleteTaskHistory.js";
-import moment from "moment";
 import {
   calculateActivationDate,
   nextWorkingShiftDate,
@@ -24,6 +23,7 @@ import {
   addWorkingDays,
 } from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
+import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -752,71 +752,41 @@ export const createTask = handleAsync(async (req, res, next) => {
         }
 
         if (parent) {
-          console.log("🔗 Parent found:", parent._id);
-
           const parentEnd =
             parent.dueDate || parent.endDate || parent.startDate || null;
-
-          console.log("📅 Parent End Date:", parentEnd);
-
+          const scheduledHolidaysTasks = await ScheduleHolidayTask.find();
+          const assignedTaskAt = scheduledHolidaysTasks
+            ? scheduledHolidaysTasks[0]?.holidayAction
+            : "AFTER";
           if (parentEnd) {
             const x = Number(dependencyData.xValue) || 0;
             const freqStr = (
               dependencyData.isDependentFrequency || ""
             ).toLowerCase();
 
-            console.log("⚙️ Dependency Config:", {
-              xValue: x,
-              frequency: freqStr,
-              parsedTaskEndDays,
-            });
-
             let childBaseDate = new Date(parentEnd);
-            console.log("📍 Initial Child Base Date:", childBaseDate);
 
             if (freqStr.includes("hour")) {
-              console.log("⏱️ Processing in HOURS mode");
-
               childBaseDate.setHours(childBaseDate.getHours() + x);
-              console.log("➕ After Hour Offset:", childBaseDate);
 
               commonFields.startDate = await nextWorkingShiftDate(
                 childBaseDate,
                 workShift._id,
               );
-
-              console.log(
-                "🟢 Final Start Date (after shift adjust):",
-                commonFields.startDate,
-              );
             } else {
-              console.log("📆 Processing in DAYS mode");
-
               commonFields.startDate = await addWorkingDays(
                 parentEnd,
                 x,
                 workShift._id,
               );
-
-              console.log(
-                "🟢 Final Start Date (working days):",
-                commonFields.startDate,
-              );
             }
 
             if (parsedTaskEndDays) {
-              console.log(
-                "📅 Calculating Due Date with offset:",
-                parsedTaskEndDays,
-              );
-
               commonFields.dueDate = await addWorkingDays(
                 commonFields.startDate,
                 parsedTaskEndDays,
                 workShift._id,
               );
-
-              console.log("🔴 Final Due Date:", commonFields.dueDate);
             } else {
               console.log("⚠️ No parsedTaskEndDays provided, skipping dueDate");
             }
@@ -884,7 +854,6 @@ export const createTask = handleAsync(async (req, res, next) => {
           parsedWeekDays = days.map((day) => day.toLowerCase());
         }
       }
-      console.log(parsedWeekDays);
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
@@ -2616,7 +2585,6 @@ export const importTasks = handleAsync(async (req, res, next) => {
         .toLowerCase()
         .replace(/[^a-z0-9]/g, "");
     const normalized = headers.map(normalize);
-    console.log(normalized);
     // Define required headers for each template (normalized)
     const required = {
       delegation: [
@@ -2711,8 +2679,9 @@ export const importTasks = handleAsync(async (req, res, next) => {
           "Task ID": parentTaskId,
           "Start Time Setting": startTimeSetting,
           "X Value": xValue,
+          "End Date": endDateStr,
+          "Week Days": weekDaysStr,
         } = row;
-
         // Trim whitespace from string fields
         const trimmedStartDateStr = startDateStr
           ? String(startDateStr).trim()
@@ -2721,6 +2690,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
           ? String(taskEndDaysStr).trim()
           : "";
         const trimmedDueDateStr = dueDateStr ? String(dueDateStr).trim() : "";
+        const trimmedEndDateStr = endDateStr ? String(endDateStr).trim() : "";
         const trimmedIsDependentStr = isDependentStr
           ? String(isDependentStr).trim()
           : "";
@@ -2738,7 +2708,12 @@ export const importTasks = handleAsync(async (req, res, next) => {
         const trimmedCheckListStr = checkListStr
           ? String(checkListStr).trim()
           : "";
-
+        const weekDaysArr = weekDaysStr
+          ? weekDaysStr
+              .split(",")
+              .map((day) => day.trim().toLowerCase())
+              .filter(Boolean)
+          : [];
         // Basic required fields
         if (!title || !description || !assignToEmail || !departmentName) {
           throw new Error(
@@ -2820,25 +2795,33 @@ export const importTasks = handleAsync(async (req, res, next) => {
         // const dueDate = trimmedDueDateStr
         //   ? parseDateIST(trimmedDueDateStr)
         //   : null;
-        const startDate = trimmedStartDateStr
+        let startDate = trimmedStartDateStr
           ? parseFlexibleDate(trimmedStartDateStr)
           : null;
 
-        // const dueDate = trimmedDueDateStr
-        //   ? parseFlexibleDate(trimmedDueDateStr)
-        //   : null;
+        let dueDate = trimmedDueDateStr
+          ? parseFlexibleDate(trimmedDueDateStr)
+          : null;
+        let endDate = trimmedEndDateStr
+          ? parseFlexibleDate(trimmedEndDateStr)
+          : null;
         const taskEndDays = trimmedTaskEndDays
           ? Number(trimmedTaskEndDays)
           : null;
-        let dueDate = null;
+        // let dueDate = null;
 
         if (startDate && taskEndDays) {
           dueDate = new Date(startDate);
           dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
         }
+        const isRecurrent = detected === "recurring"; // ⚠️ also fix spelling
 
-        if (!taskEndDays || isNaN(taskEndDays)) {
-          throw new Error("Task End Days must be a valid number.");
+        if (!isDependent && !isRecurrent) {
+          if (!taskEndDays || isNaN(taskEndDays)) {
+            throw new Error(
+              "Task End Days must be a valid number for delegation tasks.",
+            );
+          }
         }
         // For non-dependent tasks, start date is required and must be valid
         if (!isDependent && !startDate) {
@@ -2940,21 +2923,50 @@ export const importTasks = handleAsync(async (req, res, next) => {
 
           // Delegation vs Recurring vs Dependent
           if (isDependent) {
-            // Find parent task
             const parentTask = await Task.findOne({
               TaskId: trimmedParentTaskId,
             });
-            if (!parentTask)
+
+            if (!parentTask) {
               throw new Error(
                 `Parent task with ID "${trimmedParentTaskId}" not found.`,
               );
+            }
+            const parentEnd =
+              parentTask.dueDate || parentTask.endDate || parentTask.startDate;
 
-            // Duplicate check for dependent tasks: same title + same assigned user + same parent
+            if (!parentEnd) {
+              throw new Error("Parent task has no valid date.");
+            }
+
+            const x = Number(trimmedXValue) || 0;
+            const freq = (trimmedFrequency || "").toLowerCase();
+
+            let calculatedStartDate = new Date(parentEnd);
+
+            // ✅ Handle T+X
+            if (freq.includes("hour")) {
+              calculatedStartDate.setHours(calculatedStartDate.getHours() + x);
+            } else {
+              calculatedStartDate.setDate(calculatedStartDate.getDate() + x);
+            }
+
+            // ✅ Override startDate
+            startDate = calculatedStartDate;
+
+            // ✅ Now calculate dueDate using taskEndDays
+            if (taskEndDays && !isNaN(taskEndDays)) {
+              dueDate = new Date(startDate);
+              dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
+            }
+
+            // Duplicate check (keep yours)
             const existingDependent = await Task.findOne({
               title: title.trim(),
               assignedTo: user._id,
               "dependencyConfig.taskDependent": parentTask._id,
             });
+
             if (existingDependent) {
               throw new Error(
                 `A dependent task with the same title for user ${user.email} linked to parent ${trimmedParentTaskId} already exists.`,
@@ -2963,6 +2975,8 @@ export const importTasks = handleAsync(async (req, res, next) => {
 
             taskInstance = new DelegationTask({
               ...taskData,
+              startDate,
+              dueDate,
               dependencyConfig: {
                 taskDependent: parentTask._id,
                 startTimeSetting:
@@ -2970,13 +2984,15 @@ export const importTasks = handleAsync(async (req, res, next) => {
                     ? "planned-to-planned"
                     : "actual-to-planned",
                 isDependentFrequency: depFreqNormalized,
-                xValue: trimmedXValue ? Number(trimmedXValue) : 1,
+                xValue: x,
               },
             });
           } else if (trimmedFrequency) {
             // Recurring Task
             taskInstance = new RecurringTask({
               ...taskData,
+              endDate,
+              weekDays: weekDaysArr,
               frequency: trimmedFrequency, // e.g., 'Daily', 'Weekly'
               // endDate will be handled by recurring logic if needed
             });

@@ -139,8 +139,8 @@ const generateRecurringTasks = async () => {
 
 // Schedule: Daily at shift start time? Or keep 00:01 for batching
 const startCronJobs = () => {
-  // cron.schedule("1 0 * * *", generateRecurringTasks, {
-  cron.schedule("*/5 * * * * *", generateRecurringTasks, {
+  cron.schedule("1 0 * * *", generateRecurringTasks, {
+  // cron.schedule("*/5 * * * * *", generateRecurringTasks, {
     timezone: "Asia/Kolkata",
   });
   console.log("🔄 Recurring Cron scheduled: Daily 00:01 IST (WorkShift Aware)");
