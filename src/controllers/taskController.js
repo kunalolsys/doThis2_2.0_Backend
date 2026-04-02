@@ -707,7 +707,7 @@ export const createTask = handleAsync(async (req, res, next) => {
 
     let effectiveDueDate = null;
     if (parsedTaskEndDays !== null && parsedTaskEndDays > 0) {
-      effectiveDueDate = await addWorkingDays(
+      effectiveDueDate = await addWorkingDaysHoliday(
         effectiveStartDate,
         parsedTaskEndDays,
         workShift._id,
