@@ -127,6 +127,10 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    waitingForParent: {
+      type: Boolean,
+      default: false,
+    },
   },
   baseOptions,
 );

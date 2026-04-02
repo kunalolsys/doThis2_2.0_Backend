@@ -729,8 +729,14 @@ export const createTask = handleAsync(async (req, res, next) => {
       isDependent: isDep,
       dependencyConfig: dependencyData,
       taskEndDays: parsedTaskEndDays,
-      startDate: effectiveStartDate,
-      dueDate: effectiveDueDate,
+      // ✅ FIX: ACTUAL-TO-PLANNED
+      startDate: isActualToPlanned ? null : effectiveStartDate,
+      dueDate: isActualToPlanned ? null : effectiveDueDate,
+
+      // ✅ NEW FLAG
+      waitingForParent: isActualToPlanned,
+      // startDate: effectiveStartDate,
+      // dueDate: effectiveDueDate,
       departmentOfAssignToUser: deptId,
       checklist: parsedChecklist,
     };
@@ -797,7 +803,6 @@ export const createTask = handleAsync(async (req, res, next) => {
         console.error("Error computing dependent dates:", err);
       }
     }
-    console.log(commonFields)
     let newTask;
 
     // --- TASK TYPE LOGIC ---
@@ -2240,7 +2245,100 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     newData,
     message,
   });
+  // =========================================================
+  // ✅ ACTUAL-TO-PLANNED TRIGGER (CORRECT PLACE)
+  // =========================================================
 
+  const justCompleted =
+    completeStatus === true && oldData.completeStatus !== true;
+
+  if (justCompleted) {
+    const dependentTasks = await Task.find({
+      "dependencyConfig.taskDependent": updatedTask._id,
+      "dependencyConfig.startTimeSetting": "actual-to-planned",
+      waitingForParent: true,
+    }).populate({
+      path: "assignedTo",
+      populate: { path: "assignShift" },
+    });
+
+    console.log("Dependent tasks found:", dependentTasks.length);
+
+    for (const depTask of dependentTasks) {
+      try {
+        const workShift = depTask.assignedTo.assignShift;
+
+        const x = Number(depTask.dependencyConfig.xValue || 0);
+        const freq = (
+          depTask.dependencyConfig.isDependentFrequency || ""
+        ).toLowerCase();
+
+        // ✅ USE PARENT DUE DATE (IMPORTANT CHANGE)
+        let baseDate = updatedTask.dueDate
+          ? new Date(updatedTask.dueDate)
+          : updatedTask.completedAt
+            ? new Date(updatedTask.completedAt)
+            : new Date();
+
+        let newStartDate;
+
+        // ✅ HOURS CASE
+        if (freq.includes("hour")) {
+          baseDate.setHours(baseDate.getHours() + x);
+
+          newStartDate = await nextWorkingShiftDate(baseDate, workShift._id);
+        }
+        // ✅ DAYS CASE (WORKING DAYS + HOLIDAYS)
+        else {
+          newStartDate = await addWorkingDaysHoliday(
+            baseDate,
+            x,
+            workShift._id,
+          );
+        }
+
+        let newDueDate = null;
+
+        // ✅ FORCE VALID NUMBER
+        // ✅ STRICT VALIDATION + LOGGING
+        const taskDays = Number(depTask.taskEndDays);
+        console.log(
+          `Child ${depTask.TaskId}: taskEndDays="${depTask.taskEndDays}" → parsed: ${taskDays}`,
+        );
+
+        if (!isNaN(taskDays) && taskDays > 0) {
+          // ✅ FIXED
+          newDueDate = await addWorkingDaysHoliday(
+            newStartDate,
+            taskDays,
+            workShift._id,
+          );
+          console.log(`✅ Due: ${newDueDate}`);
+        } else {
+          console.log(`⚠️ Skip dueDate: invalid taskEndDays (${taskDays})`);
+        }
+
+        // ✅ FIXED: Use populate + direct save for discriminator
+        const childTask = await Task.findById(depTask._id).populate(
+          "assignedTo",
+        );
+        if (childTask) {
+          childTask.startDate = newStartDate;
+          childTask.dueDate = newDueDate;
+          childTask.waitingForParent = false;
+          childTask.updatedAt = new Date();
+          await childTask.save();
+          console.log(
+            `✅ SAVED child ${depTask.TaskId}: dueDate=${newDueDate}`,
+          );
+        }
+
+        console.log("✅ Child updated:", depTask._id);
+      } catch (err) {
+        console.error("❌ Error updating child:", err);
+      }
+    }
+  }
   // 🔥 6. RESPONSE
   res.status(200).json({
     success: true,
@@ -3198,45 +3296,104 @@ export const updateTask = handleAsync(async (req, res, next) => {
     message: `Task Updated | Title: ${task.title} | ID: ${task.TaskId}`,
   });
   // =========================================================
-  //  MAGIC LOGIC: ACTUAL-TO-PLANNED TRIGGER
-  //  (This runs AFTER the main task is successfully saved)
+  // ✅ ACTUAL-TO-PLANNED FIX (FINAL)
   // =========================================================
-  if (task.completeStatus === true) {
+
+  // ✅ Trigger ONLY when task just completed
+  const justCompleted =
+    status === "Completed" && oldData.status !== "Completed";
+
+  if (justCompleted) {
     const dependentTasks = await Task.find({
       "dependencyConfig.taskDependent": task._id,
       "dependencyConfig.startTimeSetting": "actual-to-planned",
+      waitingForParent: true, // ✅ VERY IMPORTANT
+    }).populate({
+      path: "assignedTo",
+      populate: { path: "assignShift" },
     });
 
     for (const depTask of dependentTasks) {
-      let start = new Date(); // completion trigger time
+      try {
+        const workShift = depTask.assignedTo.assignShift;
 
-      const x = Number(depTask.dependencyConfig.xValue || 0);
-      const freq = (
-        depTask.dependencyConfig.isDependentFrequency || ""
-      ).toLowerCase();
+        const x = Number(depTask.dependencyConfig.xValue || 0);
+        const freq = (
+          depTask.dependencyConfig.isDependentFrequency || ""
+        ).toLowerCase();
 
-      if (freq.includes("hour")) {
-        start.setHours(start.getHours() + x);
-      } else {
-        start.setDate(start.getDate() + x);
+        // ✅ Use ACTUAL completion time
+        let baseDate = new Date(task.completedAt);
+
+        let newStartDate;
+
+        // ✅ HANDLE HOURS
+        if (freq.includes("hour")) {
+          baseDate.setHours(baseDate.getHours() + x);
+
+          newStartDate = await nextWorkingShiftDate(baseDate, workShift._id);
+        }
+        // ✅ HANDLE DAYS (WITH HOLIDAY + SHIFT)
+        else {
+          newStartDate = await addWorkingDaysHoliday(
+            baseDate,
+            x,
+            workShift._id,
+          );
+        }
+
+        let newDueDate = null;
+
+        // ✅ HANDLE DUE DATE BASED ON CHILD CONFIG
+        // if (depTask.taskEndDays) {
+        //   newDueDate = await addWorkingDaysHoliday(
+        //     newStartDate,
+        //     depTask.taskEndDays,
+        //     workShift._id,
+        //   );
+        // }
+
+        // // ✅ UPDATE CHILD TASK
+        // await Task.findByIdAndUpdate(depTask._id, {
+        //   startDate: newStartDate,
+        //   dueDate: newDueDate,
+        //   waitingForParent: false, // ✅ unlock
+        //   updatedAt: new Date(),
+        // });
+
+
+
+        const taskDays = Number(depTask.taskEndDays);
+
+        if (!isNaN(taskDays) && taskDays > 0) {
+          // ✅ FIXED
+          newDueDate = await addWorkingDaysHoliday(
+            newStartDate,
+            taskDays,
+            workShift._id,
+          );
+          console.log(`✅ Due: ${newDueDate}`);
+        } else {
+          console.log(`⚠️ Skip dueDate: invalid taskEndDays (${taskDays})`);
+        }
+
+        // ✅ FIXED: Use populate + direct save for discriminator
+        const childTask = await Task.findById(depTask._id).populate(
+          "assignedTo",
+        );
+        if (childTask) {
+          childTask.startDate = newStartDate;
+          childTask.dueDate = newDueDate;
+          childTask.waitingForParent = false;
+          childTask.updatedAt = new Date();
+          await childTask.save();
+          console.log(
+            `✅ SAVED child ${depTask.TaskId}: dueDate=${newDueDate}`,
+          );
+        }
+      } catch (err) {
+        console.error("❌ Error updating child task:", err);
       }
-
-      const assignedUser = await User.findById(depTask.assignedTo).populate(
-        "workShift",
-      );
-
-      start = applyWorkShift(start, assignedUser.assignShift);
-
-      depTask.startDate = start;
-
-      // optional dueDate
-      if (depTask.taskEndDays) {
-        let due = new Date(start);
-        due.setDate(due.getDate() + depTask.taskEndDays);
-        depTask.dueDate = applyWorkShift(due, assignedUser.assignShift);
-      }
-
-      await depTask.save();
     }
   }
   // =========================================================
