@@ -760,41 +760,46 @@ export const createTask = handleAsync(async (req, res, next) => {
 
         if (parent) {
           const parentEnd =
-            parent.dueDate || parent.endDate || parent.startDate || null;
-          if (parentEnd) {
-            const x = Number(dependencyData.xValue) || 0;
-            const freqStr = (
-              dependencyData.isDependentFrequency || ""
-            ).toLowerCase();
+            parent.dueDate || parent.endDate || parent.startDate;
+          if (!parentEnd) return;
 
-            let childBaseDate = new Date(parentEnd);
+          const x = Number(dependencyData.xValue) || 0;
+          const freqStr = (
+            dependencyData.isDependentFrequency || ""
+          ).toLowerCase();
 
-            if (freqStr.includes("hour")) {
-              childBaseDate.setHours(childBaseDate.getHours() + x);
+          // 🔹 Step 1: Use only parent DATE
+          let baseDate = new Date(parentEnd);
+          baseDate.setHours(0, 0, 0, 0); // zero time
 
-              commonFields.startDate = await nextWorkingShiftDate(
-                childBaseDate,
-                workShift._id,
-              );
-            } else {
-              commonFields.startDate = await addWorkingDaysHoliday(
-                parentEnd,
-                x,
-                workShift._id,
-              );
-            }
-
-            if (parsedTaskEndDays) {
-              commonFields.dueDate = await addWorkingDaysHoliday(
-                commonFields.startDate,
-                parsedTaskEndDays,
-                workShift._id,
-              );
-            } else {
-              console.log("⚠️ No parsedTaskEndDays provided, skipping dueDate");
-            }
+          // 🔹 Step 2: Determine start date based on frequency type
+          let childStart;
+          if (freqStr.includes("hour")) {
+            // Hour-based: shift start + X hours
+            const shiftStart = await nextWorkingShiftDate(
+              baseDate,
+              workShift._id,
+            );
+            childStart = new Date(shiftStart);
+            childStart.setHours(childStart.getHours() + x);
           } else {
-            console.log("❌ No parentEnd date found");
+            // Day-based: add X working days → shift start of that day
+            childStart = await addWorkingDaysHoliday(
+              baseDate,
+              x,
+              workShift._id,
+            );
+          }
+
+          commonFields.startDate = childStart;
+
+          // 🔹 Step 3: Compute dueDate if taskEndDays exist
+          if (parsedTaskEndDays) {
+            commonFields.dueDate = await addWorkingDaysHoliday(
+              commonFields.startDate,
+              parsedTaskEndDays,
+              workShift._id,
+            );
           }
         } else {
           console.log("❌ No parent task found");
@@ -2267,75 +2272,61 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     for (const depTask of dependentTasks) {
       try {
         const workShift = depTask.assignedTo.assignShift;
+        if (!workShift) continue;
 
         const x = Number(depTask.dependencyConfig.xValue || 0);
-        const freq = (
+        const freqStr = (
           depTask.dependencyConfig.isDependentFrequency || ""
         ).toLowerCase();
 
-        // ✅ USE PARENT DUE DATE (IMPORTANT CHANGE)
+        // 🔹 Step 1: Base date = parent dueDate (or completedAt) → only DATE part
         let baseDate = updatedTask.dueDate
           ? new Date(updatedTask.dueDate)
           : updatedTask.completedAt
             ? new Date(updatedTask.completedAt)
             : new Date();
+        baseDate.setHours(0, 0, 0, 0);
 
-        let newStartDate;
-
-        // ✅ HOURS CASE
-        if (freq.includes("hour")) {
-          baseDate.setHours(baseDate.getHours() + x);
-
-          newStartDate = await nextWorkingShiftDate(baseDate, workShift._id);
-        }
-        // ✅ DAYS CASE (WORKING DAYS + HOLIDAYS)
-        else {
-          newStartDate = await addWorkingDaysHoliday(
+        // 🔹 Step 2: Compute child start date based on hours or days
+        let childStart;
+        if (freqStr.includes("hour")) {
+          // Hour-based: shift start + X hours
+          const shiftStart = await nextWorkingShiftDate(
             baseDate,
-            x,
             workShift._id,
           );
+          childStart = new Date(shiftStart);
+          childStart.setHours(childStart.getHours() + x);
+        } else {
+          // Day-based: add X working days → shift start of that day
+          childStart = await addWorkingDaysHoliday(baseDate, x, workShift._id);
         }
 
-        let newDueDate = null;
-
-        // ✅ FORCE VALID NUMBER
-        // ✅ STRICT VALIDATION + LOGGING
-        const taskDays = Number(depTask.taskEndDays);
-        console.log(
-          `Child ${depTask.TaskId}: taskEndDays="${depTask.taskEndDays}" → parsed: ${taskDays}`,
-        );
-
+        // 🔹 Step 3: Compute child due date if taskEndDays exist
+        let childDue = null;
+        const taskDays = Number(depTask.taskEndDays || 0);
         if (!isNaN(taskDays) && taskDays > 0) {
-          // ✅ FIXED
-          newDueDate = await addWorkingDaysHoliday(
-            newStartDate,
+          childDue = await addWorkingDaysHoliday(
+            childStart,
             taskDays,
             workShift._id,
           );
-          console.log(`✅ Due: ${newDueDate}`);
-        } else {
-          console.log(`⚠️ Skip dueDate: invalid taskEndDays (${taskDays})`);
         }
 
-        // ✅ FIXED: Use populate + direct save for discriminator
-        const childTask = await Task.findById(depTask._id).populate(
-          "assignedTo",
-        );
+        // 🔹 Step 4: Update child task
+        const childTask = await Task.findById(depTask._id);
         if (childTask) {
-          childTask.startDate = newStartDate;
-          childTask.dueDate = newDueDate;
+          childTask.startDate = childStart;
+          childTask.dueDate = childDue;
           childTask.waitingForParent = false;
           childTask.updatedAt = new Date();
           await childTask.save();
           console.log(
-            `✅ SAVED child ${depTask.TaskId}: dueDate=${newDueDate}`,
+            `✅ Updated child ${depTask.TaskId}: start=${childStart}, due=${childDue}`,
           );
         }
-
-        console.log("✅ Child updated:", depTask._id);
       } catch (err) {
-        console.error("❌ Error updating child:", err);
+        console.error("❌ Error updating child task:", err);
       }
     }
   }
@@ -3360,8 +3351,6 @@ export const updateTask = handleAsync(async (req, res, next) => {
         //   waitingForParent: false, // ✅ unlock
         //   updatedAt: new Date(),
         // });
-
-
 
         const taskDays = Number(depTask.taskEndDays);
 
