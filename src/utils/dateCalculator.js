@@ -179,7 +179,7 @@ if (isFinalHoliday || !isFinalWorkingDay) {
   }
 }
 
-  return snapToShiftTime(current, workShift, true);
+  return snapToShiftTime(current, workShift, false);
 }
 // export async function addWorkingDaysHoliday(
 //   startDate,
