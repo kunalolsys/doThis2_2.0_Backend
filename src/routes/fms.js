@@ -26,7 +26,7 @@ router.post('/instances/:templateId/launch',  fmsInstanceController.launchFmsIns
 router.get('/instances',  fmsInstanceController.getFmsInstances);
 router.get('/instances/:id',  fmsInstanceController.getFmsInstanceById);
 router.get('/instances/:id/tasks',  fmsInstanceController.getInstanceTasks);
-// router.put('/instances/:id/tasks/:taskId/complete',  fmsInstanceController.completeInstanceTask);
+router.put('/instances/:id/tasks/:taskId/complete',  fmsInstanceController.completeInstanceTask);
 
 export default router;
 

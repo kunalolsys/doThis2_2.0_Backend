@@ -128,13 +128,15 @@ const hideFmsCompletedShiftTasks = async () => {
 const startFmsVisibilityCron = () => {
   // Same schedule as main cron
   cron.schedule('*/5 9-18 * * 1-5', makeFmsTasksVisible, {
+//   cron.schedule("*/3 * * * * *", makeFmsTasksVisible, {
+
     timezone: "Asia/Kolkata",
   });
 
-  // Hide at night
-  cron.schedule('0 18 * * *', hideFmsCompletedShiftTasks, {
-    timezone: "Asia/Kolkata"
-  });
+//   // Hide at night
+//   cron.schedule('0 18 * * *', hideFmsCompletedShiftTasks, {
+//     timezone: "Asia/Kolkata"
+//   });
   
   console.log("👁️  FMS Instance Task Visibility Cron Started ✅");
 };
