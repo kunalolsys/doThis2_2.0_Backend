@@ -5,62 +5,42 @@ import Department from '../models/Department.js';
 import { handleAsync } from '../utils/handleAsync.js';
 import AppError from '../utils/AppError.js';
 import { createLog } from './logController.js';
-import { nextWorkingShiftDate, addWorkingDaysHoliday } from '../utils/dateCalculator.js';
-
-const calculateTaskStatus = (startDate, dueDate) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  if (!startDate) return 'Upcoming';
-  const s = new Date(startDate);
-  if (s > today) return 'Upcoming';
-  
-  if (dueDate) {
-    const d = new Date(dueDate);
-    if (d < today) return 'Overdue';
-    if (d.getTime() === today.getTime()) return 'Delayed';
-  }
-  return 'Pending';
-};
 
 export const createFmsTasks = handleAsync(async (req, res, next) => {
   const { id: templateId } = req.params;
   let rows = Array.isArray(req.body) ? req.body : [req.body];
 
-  const template = await FmsTemplate.findById(templateId);
+  const template = await FmsTemplate.findById(templateId).populate('manager');
   if (!template) return next(new AppError('Template not found', 404));
 
-  const fmsStart = new Date();
-  const fmsEnd = template.fmsDuration === 'Fixed Period' ? template.endDate : null;
   const created = [];
   const errors = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     try {
+      const description = row.taskDescription?.trim();
+      if (!description) throw new Error('taskDescription required');
+
       const taskData = {
         fmsTemplateId: template._id,
-        description: row.taskDescription,
+        description,
         departmentOfAssignToUser: row.department,
         assignedTo: row.doer,
         frequency: row.frequency,
         xValue: parseFloat(row.value || 0),
-        isDependent: row['is it dependent?'] === 'Yes',
-        dependentOn: row['dependent on'],
-        startTimeSetting: row['start time setting'],
+        isDependent: row['is it dependent?'] === 'Yes' || false,
+        dependentOn: row['dependent on'] || null,
+        startTimeSetting: row['start time setting'] || null,
         decisionStep: row['decision step?'] === 'Yes',
         ifTrueStep: row['if true -> step'],
         elseStep: row['else -> step'],
         taskEndDays: parseFloat(row.taskEndDays || 0),
-        assignedBy: req.user._id,
-        createdBy: req.user._id,
+        assignedBy:  req.cookies.userId,
+        createdBy:  req.cookies.userId,
       };
 
-      // Validation
-      if (!taskData.description || !taskData.departmentOfAssignToUser || !taskData.assignedTo || !taskData.frequency) {
-        throw new Error('Missing required fields');
-      }
-
+      // Validate references
       const dept = await Department.findById(taskData.departmentOfAssignToUser);
       if (!dept) throw new Error('Invalid department');
 
@@ -69,48 +49,19 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         throw new Error('Doer must be Member with shift');
       }
 
-      if (taskData.isDependent && !taskData.dependentOn) {
-        throw new Error('Dependent On required');
-      }
-
-      const workShift = doer.assignShift._id;
-
-      // Scheduling Logic
-      let startDate, dueDate, waitingForParent = false;
-
-      if (taskData.isDependent) {
-        const parentTask = [...created, ...await FmsTask.find({ fmsTemplateId })].find(t => t.taskId === taskData.dependentOn);
-        if (!parentTask) throw new Error('Parent task not found');
-
-        const x = taskData.xValue;
-        if (taskData.startTimeSetting === 'planned-to-planned') {
-          startDate = await addWorkingDaysHoliday(parentTask.dueDate || parentTask.startDate, x, workShift);
-        } else {
-          waitingForParent = true;
-        }
-      } else {
-        startDate = await nextWorkingShiftDate(fmsStart, workShift);
-        if (taskData.frequency.startsWith('D+') || taskData.frequency.startsWith('Start+')) {
-          const x = taskData.xValue;
-          startDate = await addWorkingDaysHoliday(startDate, x, workShift);
-        } else if (taskData.frequency.startsWith('Event')) {
-          startDate = await addWorkingDaysHoliday(fmsEnd, taskData.xValue, workShift);
-        }
-      }
-
-      dueDate = taskData.taskEndDays > 0 ? await addWorkingDaysHoliday(startDate, taskData.taskEndDays, workShift) : null;
-
-      const task = new FmsTask({
-        ...taskData,
-        startDate,
-        dueDate,
-        waitingForParent,
-        status: calculateTaskStatus(startDate, dueDate),
-      });
-
+      // Template tasks: NO dates (null) - set at launch
+      const task = new FmsTask(taskData);
       await task.save();
-      await task.populate(['departmentOfAssignToUser', 'assignedTo']);
+
+      await task.populate([
+        'fmsTemplateId',
+        'departmentOfAssignToUser', 
+        'assignedTo', 
+        'assignedBy'
+      ]);
+
       created.push(task);
+      console.log(`📋 Planning task ${task.taskId}: ${task.frequency}`);
 
     } catch (err) {
       errors.push({ row: i + 1, error: err.message });
@@ -119,16 +70,30 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
 
   res.json({
     success: true,
-    created: created.length,
-    errors,
-    data: created,
+    message: `${created.length}/${rows.length} template tasks planned (dates set at launch)`,
+    created,
+    errors
   });
 });
 
 export const getFmsTasksByTemplate = handleAsync(async (req, res) => {
-  const tasks = await FmsTask.find({ fmsTemplateId: req.params.id })
-    .populate('departmentOfAssignToUser assignedTo')
-    .sort('taskId');
-  res.json({ success: true, data: tasks });
+  const { page = 1, limit = 20, status, assignedTo } = req.query;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+
+  const filter = { fmsTemplateId: req.params.id };
+  const [tasks, total] = await Promise.all([
+    FmsTask.find(filter)
+      .populate('fmsTemplateId assignedTo departmentOfAssignToUser assignedBy createdBy')
+      .sort('taskId')
+      .skip(skip)
+      .limit(parseInt(limit)),
+    FmsTask.countDocuments(filter)
+  ]);
+
+  res.json({ 
+    success: true, 
+    data: tasks,
+    pagination: { total, page: parseInt(page), limit: parseInt(limit) }
+  });
 });
 

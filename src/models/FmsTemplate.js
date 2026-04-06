@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import Counter from './Counter.js';
 import User from './User.js';
+import FmsTask from './FmsTask.js';
+import FmsInstance from './FmsInstance.js';
 
 const FmsTemplateSchema = new mongoose.Schema({
   fmsId: {
@@ -12,7 +14,9 @@ const FmsTemplateSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Template name required'],
     trim: true,
-    maxLength: 100
+    maxLength: 100,
+    unique: true, // Prevent duplicates as per user request
+    index: true
   },
   description: {
     type: String,
@@ -28,13 +32,24 @@ const FmsTemplateSchema = new mongoose.Schema({
   manager: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true
   },
   srManager: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }
+    ref: 'User',
+    index: true
+  },
+  tasks: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FmsTask'
+  }] // Bidirectional ref to tasks
 }, { timestamps: true });
+
+// Indexes for performance
+FmsTemplateSchema.index({ fmsId: 1 });
+FmsTemplateSchema.index({ manager: 1 });
+FmsTemplateSchema.index({ templateName: 1 }); // Explicit for queries
 
 // BRD: Fixed Period → endDate required
 FmsTemplateSchema.pre('validate', function(next) {
@@ -60,6 +75,25 @@ FmsTemplateSchema.pre('save', async function(next) {
   }
   next();
 });
+
+// Virtuals for stats
+FmsTemplateSchema.virtual('taskCount', {
+  ref: 'FmsTask',
+  localField: '_id',
+  foreignField: 'fmsTemplateId',
+  count: true
+});
+
+FmsTemplateSchema.virtual('instanceCount', {
+  ref: 'FmsInstance',
+  localField: '_id',
+  foreignField: 'fmsTemplateId',
+  count: true
+});
+
+// Ensure virtuals in JSON
+FmsTemplateSchema.set('toJSON', { virtuals: true });
+FmsTemplateSchema.set('toObject', { virtuals: true });
 
 export default mongoose.model('FmsTemplate', FmsTemplateSchema);
 

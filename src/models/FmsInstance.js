@@ -23,17 +23,17 @@ const FmsInstanceSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
 }, { timestamps: true });
 
-// Auto instanceId FMS-ID-LNNNN
+// Auto instanceId
 FmsInstanceSchema.pre('save', async function(next) {
   if (this.isNew && !this.instanceId) {
     const template = await FmsTemplate.findById(this.fmsTemplateId);
     const ym = new Date().toISOString().slice(2,7).replace('-','');
     const counter = await Counter.findByIdAndUpdate(
-      `fmsInstance_${template.fmsId}_${ym}`,
+      `fmsInstance_${ym}`,
       { $inc: { seq: 1 } },
       { upsert: true, new: true }
     );
-    this.instanceId = `${template.fmsId}-L${counter.seq.toString().padStart(4,'0')}`;
+    this.instanceId = `${template.fmsId}-I${counter.seq.toString().padStart(4,'0')}`;
   }
   next();
 });

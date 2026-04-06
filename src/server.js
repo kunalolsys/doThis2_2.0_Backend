@@ -7,6 +7,9 @@ import startCronJobs from './cron/assignRecurringTask.js'
 import {runDependencyCron} from './cron/dependancyCron.js';
 
 import startTaskStatusCron from './cron/taskStatusUpdate.js';
+import startVisibilityCron from './cron/taskVisibilityCron.js';
+import startFmsVisibilityCron from './cron/fmsInstanceTaskVisibilityCron.js';
+
 import { setIo, connectedUsers } from './socket.js';
 // import Remark from './models/Remark.js';
 import User from './models/User.js';
@@ -14,7 +17,6 @@ import User from './models/User.js';
 
 // --- NEW IMPORT FOR LOGGING ---
 import ServerLog from './models/ServerLog.js';
-import startVisibilityCron from './cron/taskVisibilityCron.js';
 
 dotenv.config();
 
@@ -96,12 +98,14 @@ mongoose.connect(MONGODB_URI)
         startTaskStatusCron();
         startCronJobs();
         runDependencyCron(); // Initial run
-        startVisibilityCron()
+        startVisibilityCron();
+        startFmsVisibilityCron();
       } catch (err) {
-        console.error('Failed to start task status cron', err);
+        console.error('Failed to start crons', err);
       }
     });
   })
   .catch((error) => {
     console.error('Error connecting to MongoDB:', error);
   });
+
