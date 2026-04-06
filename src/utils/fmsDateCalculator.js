@@ -52,7 +52,9 @@ export async function calculateFmsTaskDates(taskData, fmsStart, fmsEnd, workShif
     if (freq.includes('hour')) {
       dueDate = new Date(shiftBase.getTime() + (Math.abs(xValue) * 3600000 * (xValue >= 0 ? 1 : -1)));
     } else {
+      // console.log(fmsEnd,xValue,dueDate)
       dueDate = await addWorkingDaysHoliday(fmsEnd, xValue, workShiftId);
+      // console.log(dueDate)
     }
   }
 

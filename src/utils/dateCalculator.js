@@ -113,7 +113,7 @@ export async function addWorkingDaysHoliday(
   isDep = false,
   options = {},
 ) {
-  if (!daysCount || daysCount <= 0) return null;
+  if (!daysCount) return null;
 
   const { skipHolidays = true } = options;
 
@@ -122,14 +122,20 @@ export async function addWorkingDaysHoliday(
 
   let current = new Date(startDate);
 
-  // =====================================================
-  // ✅ STEP 1: CORRECT DAY COUNT LOGIC
-  // =====================================================
-  let remainingDays = daysCount - 1;
+  // ✅ NEW: detect direction (NO IMPACT on old logic)
+  const isNegative = daysCount < 0;
+  const step = isNegative ? -1 : 1;
 
+  // ✅ KEEP OLD LOGIC INTACT
+  let remainingDays = Math.abs(daysCount) - 1;
+
+  // =====================================================
+  // ✅ STEP 1: SAME LOGIC, JUST CHANGE DIRECTION
+  // =====================================================
   while (remainingDays > 0) {
-    current = addDays(current, 1);
+    current = addDays(current, step);
 
+    // (keeping your original comments untouched)
     // if (skipHolidays && (await isHoliday(current))) continue;
     // if (!isWorkingDay(current, workShift)) continue;
 
@@ -137,47 +143,34 @@ export async function addWorkingDaysHoliday(
   }
 
   // =====================================================
-  // ✅ STEP 2: APPLY HOLIDAY LOGIC ONLY IF DEPENDENT
+  // ✅ STEP 2: SAME AS BEFORE
   // =====================================================
-  // if (!isDep) {
-  //   return snapToShiftTime(current, workShift, false);
-  // }
-
   const schedule = await ScheduleHolidayTask.findOne();
   if (!schedule) {
     return snapToShiftTime(current, workShift, false);
   }
-console.log(schedule.holidayAction)
+
   const holidayAction = schedule.holidayAction || "AFTER";
 
   // =====================================================
-  // ✅ STEP 3: FINAL DATE HOLIDAY ADJUSTMENT
+  // ✅ STEP 3: FINAL ADJUSTMENT (UNCHANGED BEHAVIOR)
   // =====================================================
- // =====================================================
-// ✅ STEP 3: FINAL DATE ADJUSTMENT (ONLY IF INVALID DAY)
-// =====================================================
-const isFinalHoliday = await isHoliday(current);
-const isFinalWorkingDay = isWorkingDay(current, workShift);
-console.log(current,isFinalHoliday,isFinalWorkingDay)
-if (isFinalHoliday || !isFinalWorkingDay) {
-  if (holidayAction === "BEFORE") {
-    do {
-      current = addDays(current, -1);
-    } while (
-      (await isHoliday(current)) ||
-      !isWorkingDay(current, workShift)
-    );
-  }
+  const isFinalHoliday = await isHoliday(current);
+  const isFinalWorkingDay = isWorkingDay(current, workShift);
 
-  if (holidayAction === "AFTER") {
-    do {
-      current = addDays(current, 1);
-    } while (
-      (await isHoliday(current)) ||
-      !isWorkingDay(current, workShift)
-    );
+  if (isFinalHoliday || !isFinalWorkingDay) {
+    if (holidayAction === "BEFORE") {
+      do {
+        current = addDays(current, -1);
+      } while ((await isHoliday(current)) || !isWorkingDay(current, workShift));
+    }
+
+    if (holidayAction === "AFTER") {
+      do {
+        current = addDays(current, 1);
+      } while ((await isHoliday(current)) || !isWorkingDay(current, workShift));
+    }
   }
-}
 
   return snapToShiftTime(current, workShift, false);
 }
