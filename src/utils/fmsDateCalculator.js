@@ -35,6 +35,10 @@ export async function calculateFmsTaskDates(taskData, fmsStart, fmsEnd, workShif
       } else {
         dueDate = await addWorkingDaysHoliday(parentRef, xValue, workShiftId);
       }
+    } else {
+    // A-T-P: NULL until parent actual complete
+      startDate = null;
+      dueDate = null; 
     }
   }
   // CASE 2-3 Start

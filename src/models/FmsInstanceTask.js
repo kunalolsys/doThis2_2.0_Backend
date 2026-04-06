@@ -36,7 +36,8 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     taskEndDays: { type: Number, default: 0 },
 
     // FINAL RUNTIME DATES (computed at launch)
-    plannedStartDate: { type: Date, required: true },
+    // plannedStartDate: { type: Date, required: true },
+    plannedStartDate: Date,
     plannedDueDate: Date,
 
     // ACTUAL progress
