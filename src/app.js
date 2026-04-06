@@ -5,7 +5,8 @@ import cookieParser from "cookie-parser"
 import { errorHandler } from "./middleware/errorHandler.js"
 import path from "path"
 import { fileURLToPath } from "url"
-import allRoutes from "./routes/index.js" // Import ko upar rakhein
+import allRoutes from "./routes/index.js";
+import fmsRoutes from "./routes/fms.js";
 
 dotenv.config()
 

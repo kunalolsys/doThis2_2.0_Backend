@@ -1,45 +1,35 @@
-# MIS Report Implementation
+# FMS Template Designer Backend Implementation
+Current Working Directory: d:/Kunal/dothis2_2.0/dothis2_2.0/dothis2_2.0_Backend
 
-## Previous Task
-Department soft delete complete ✓
+## Overview
+✅ **Plan Approved**: Separate FmsTemplate/FmsTask models, reuse Task.js fields (description=Task Description, assignedTo=Doer), use dateCalculator helpers.
 
-## New Task: MIS Report
-**Goal:** POST /api/v1/mis-reports
-Body: {period? ('weekly'|'quarterly'|'yearly'), startDate?, endDate?, srManagerId?, managerId?, memberIds:[] }
-Response: array [ {userName, role, totalTasks, doneOnTime, notDoneOnTime, notDone, score} ]
+## Steps (In Order):
 
-**Steps:**
-- [x] Step 1: Create src/utils/reportHelpers.js ✓
-- [x] Step 2: Create src/controllers/misReportController.js ✓
-- [x] Step 3: Create src/routes/misReport.js ✓
-- [x] Step 4: Add route to src/routes/index.js ✓
-- [ ] Step 5: Test & complete
+### 1. **Models** [PENDING]
+   - [ ] Create `src/models/FmsTemplate.js`
+   - [ ] Create `src/models/FmsTask.js` 
+   - [ ] Update `src/models/Counter.js` (add fms counters)
 
-**API Ready:** POST /api/v1/mis-reports
-Auth required.
+### 2. **Controllers** [PENDING]
+   - [ ] Create `src/controllers/fmsTemplateController.js` (CRUD templates)
+   - [ ] Create `src/controllers/fmsTaskController.js` (create/list tasks for template)
 
-Example body:
-```json
-{
-  "period": "weekly",
-  "srManagerId": "sr_user_id",
-  "managerId": "manager_id",
-  "memberIds": ["member1_id", "member2_id"],
-  "startDate": "2024-01-01",
-  "endDate": "2024-12-31"
-}
-```
+### 3. **Routes** [PENDING]
+   - [ ] Create `src/routes/fms.js`
+   - [ ] Update `src/app.js` (mount /api/fms)
 
-**Test:**
-1. npm start (restart server)
-2. POST with valid auth token, get report table.
+### 4. **Testing** [PENDING]
+   - [ ] Test POST /api/fms/templates
+   - [ ] Test POST /api/fms/templates/:id/tasks (bulk)
+   - [ ] Verify validations/dependencies
 
-Suggest indexes: db.tasks.createIndex({taskType:1, dueDate:1, assignedTo:1, status:1})
+### 5. **Polish** [PENDING]
+   - [ ] Bulk CSV upload (extend importTasks logic)
+   - [ ] Decision logic validation (ifTrue/elseStep exist)
+   - [ ] Export templates
 
-Logic:
-- Users: union of self (logged?), subordinates under srManager/manager, memberIds
-- Date: compute from period or custom
-- Tasks: {taskType: 'DelegationTask', dueDate in range, assignedTo in users}
-- Stats: group by assignedTo, count status Completed/Delayed+Overdue/Pending
-- Score: (doneOnTime/total * 100).toFixed(2)+'%'
+**Next Step: Create models (Step 1)**
+
+**Progress: 0/5 complete**
 

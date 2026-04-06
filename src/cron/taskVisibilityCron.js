@@ -170,9 +170,9 @@ const hideCompletedShiftTasks = async () => {
 // Schedule: Every minute during working hours (more efficient than 00:01)
 const startVisibilityCron = () => {
   // Check every 5 minutes during 9AM-6PM IST
-  // cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
+  cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
   // cron.schedule('*/5 * * * * *', makeTasksVisible, {
-  cron.schedule("*/3 * * * * *", makeTasksVisible, {
+  // cron.schedule("*/3 * * * * *", makeTasksVisible, {
     timezone: "Asia/Kolkata",
   });
 

@@ -1,0 +1,30 @@
+import express from 'express';
+import { authenticateJWT } from '../middleware/auth.js';
+import upload from '../middleware/upload.js';
+import * as fmsTemplateController from '../controllers/fmsTemplateController.js';
+import * as fmsTaskController from '../controllers/fmsTaskController.js';
+import * as fmsInstanceController from '../controllers/fmsInstanceController.js';
+
+const router = express.Router();
+
+// BRD 5.1 Template Management
+router.post('/templates', authenticateJWT, fmsTemplateController.createTemplate);
+router.get('/templates', authenticateJWT, fmsTemplateController.getTemplates);
+router.get('/templates/:id', authenticateJWT, fmsTemplateController.getTemplateById);
+router.delete('/templates/:id', authenticateJWT, fmsTemplateController.deleteTemplate);
+
+// BRD 5.2 Template Tasks (Bulk + Single)
+router.post('/templates/:id/tasks', authenticateJWT, upload.array('files'), fmsTaskController.createFmsTasks);
+router.get('/templates/:id/tasks', authenticateJWT, fmsTaskController.getFmsTasksByTemplate);
+router.put('/templates/:id/tasks/:taskId', authenticateJWT, fmsTaskController.updateFmsTask);
+router.delete('/templates/:id/tasks/:taskId', authenticateJWT, fmsTaskController.deleteFmsTask);
+
+// BRD 002.2 Launch & Runtime
+router.post('/instances/:templateId/launch', authenticateJWT, fmsInstanceController.launchFmsInstance);
+router.get('/instances', authenticateJWT, fmsInstanceController.getFmsInstances);
+router.get('/instances/:id', authenticateJWT, fmsInstanceController.getFmsInstanceById);
+router.get('/instances/:id/tasks', authenticateJWT, fmsInstanceController.getInstanceTasks);
+router.put('/instances/:id/tasks/:taskId/complete', authenticateJWT, fmsInstanceController.completeInstanceTask);
+
+export default router;
+
