@@ -1,10 +1,9 @@
 import { nextWorkingShiftDate, addWorkingDaysHoliday } from './dateCalculator.js';
 import FmsTask from '../models/FmsTask.js';
-import ScheduleHolidayTask from '../models/ScheduleHolidayTask.js';
-import { startOfDay } from 'date-fns';
+import moment from 'moment';
 
 /**
- * EXACT BRD FMS LAUNCH - ALL CONDITIONS ✓
+ * ALL 5 CASES - NO addHours/subHours dependency ✓
  */
 export async function calculateFmsTaskDates(taskData, fmsStart, fmsEnd, workShiftId, previousTasks = []) {
   const { 
@@ -12,71 +11,53 @@ export async function calculateFmsTaskDates(taskData, fmsStart, fmsEnd, workShif
     xValue = 0, 
     isDependent, 
     dependentOn, 
-    startTimeSetting, 
-    taskEndDays = 0 
+    startTimeSetting,
+    taskEndDays = 0
   } = taskData;
   
-  const absX = Math.abs(xValue);
-  const sign = xValue >= 0 ? 1 : -1;
-  const freq = frequency?.toLowerCase() || '';
-  
-  let startDate, dueDate;
+  const freq = frequency?.trim().toLowerCase() || '';
+  let startDate = await nextWorkingShiftDate(fmsStart, workShiftId);
+  let dueDate;
 
-  // ===== DEPENDENT (PARENT MUST EXIST) =====
-  if (isDependent && dependentOn) {
-    let parentTask = previousTasks.find(t => t.taskId === dependentOn);
-    if (!parentTask) {
-      parentTask = await FmsTask.findOne({ taskId: dependentOn });
-    }
+  // CASE 1: "Anytime"
+  if (freq === 'anytime') { /* default */ }
+  // CASE 4 DEP
+  else if (isDependent && dependentOn) {
+    const parentTask = previousTasks.find(t => t.taskId === dependentOn) || await FmsTask.findOne({ taskId: dependentOn });
+    if (!parentTask) throw new Error(`DEP ERROR: "${dependentOn}" missing`);
     
-    if (!parentTask) {
-      throw new Error(`PARENT REQUIRED: "${dependentOn}" missing`);
-    }
-
     const parentRef = parentTask.plannedDueDate || parentTask.plannedStartDate || fmsStart;
+    const shiftBase = await nextWorkingShiftDate(parentRef, workShiftId);
     
-    // P-T-P: immediate from parent planned
     if (startTimeSetting === 'planned-to-planned') {
       if (freq.includes('hour')) {
-        const shiftStart = await nextWorkingShiftDate(parentRef, workShiftId);
-        startDate = new Date(shiftStart.getTime() + (absX * 3600000 * sign));
+        dueDate = new Date(shiftBase.getTime() + (Math.abs(xValue) * 3600000 * (xValue >= 0 ? 1 : -1)));
       } else {
-        startDate = await addWorkingDaysHoliday(parentRef, absX * sign, workShiftId);
+        dueDate = await addWorkingDaysHoliday(parentRef, xValue, workShiftId);
       }
+    }
+  }
+  // CASE 2-3 Start
+  else if (freq.startsWith('start')) {
+    const shiftBase = await nextWorkingShiftDate(fmsStart, workShiftId);
+    if (freq.includes('hour')) {
+      dueDate = new Date(shiftBase.getTime() + (Math.abs(xValue) * 3600000 * (xValue >= 0 ? 1 : -1)));
     } else {
-      // A-T-P: null until parent finish
-      startDate = null;
+      dueDate = await addWorkingDaysHoliday(fmsStart, xValue, workShiftId);
     }
-  } 
-  // ===== NON-DEPENDENT =====
-  else {
-    // START +/- → fmsStart
-    if (freq.includes('start')) {
-      if (freq.includes('hour')) {
-        const shiftStart = await nextWorkingShiftDate(fmsStart, workShiftId);
-        startDate = new Date(shiftStart.getTime() + (absX * 3600000 * sign));
-      } else {
-        startDate = await addWorkingDaysHoliday(fmsStart, absX * sign, workShiftId);
-      }
-    } 
-    // EVENT +/- → fmsEnd
-    else if (freq.includes('event')) {
-      if (!fmsEnd) throw new Error('Event needs fmsEnd');
-      if (freq.includes('hour')) {
-        const shiftStart = await nextWorkingShiftDate(fmsEnd, workShiftId);
-        startDate = new Date(shiftStart.getTime() + (absX * 3600000 * sign));
-      } else {
-        startDate = await addWorkingDaysHoliday(fmsEnd, absX * sign, workShiftId);
-      }
-    }
-    // DEFAULT
-    else {
-      startDate = await nextWorkingShiftDate(fmsStart, workShiftId);
+  }
+  // CASE 5 Event
+  else if (freq.startsWith('event') && fmsEnd) {
+    const shiftBase = await nextWorkingShiftDate(fmsEnd, workShiftId);
+    if (freq.includes('hour')) {
+      dueDate = new Date(shiftBase.getTime() + (Math.abs(xValue) * 3600000 * (xValue >= 0 ? 1 : -1)));
+    } else {
+      dueDate = await addWorkingDaysHoliday(fmsEnd, xValue, workShiftId);
     }
   }
 
-  // DUE always
-  if (taskEndDays > 0 && startDate) {
+  // taskEndDays OVERRIDE
+  if (taskEndDays > 0) {
     dueDate = await addWorkingDaysHoliday(startDate, taskEndDays, workShiftId);
   }
 
