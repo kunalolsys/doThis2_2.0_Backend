@@ -112,7 +112,10 @@ export const getTemplateById = handleAsync(async (req, res, next) => {
 
   // Load tasks separately (since one-to-many)
   const tasks = await FmsTask.find({ fmsTemplateId: template._id })
-    .populate('assignedTo departmentOfAssignToUser', 'name email')
+    // .populate('assignedTo departmentOfAssignToUser', 'name email')
+    .populate("assignedTo", "name email")
+    .populate("departmentOfAssignToUser", "name")
+    .populate("assignedBy", "name email")
     .sort('taskId');
 
   res.json({ 
@@ -207,7 +210,10 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
 
 export const getTemplateTasks = handleAsync(async (req, res) => {
   const tasks = await FmsTask.find({ fmsTemplateId: req.params.id })
-    .populate('departmentOfAssignToUser assignedTo')
+    // .populate('departmentOfAssignToUser assignedTo')
+    .populate("assignedTo", "name email")
+    .populate("departmentOfAssignToUser", "name")
+    .populate("assignedBy", "name email")
     .sort('taskId');
   res.json({ success: true, data: tasks });
 });

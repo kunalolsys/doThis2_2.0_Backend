@@ -15,6 +15,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
 
   const created = [];
   const errors = [];
+  const createdTasksIds = []; // NEW: Track task IDs for template update
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -58,7 +59,8 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       // Template tasks: NO dates (null) - set at launch
       const task = new FmsTask(taskData);
       await task.save();
-
+      // NEW: Track successful task ID
+      createdTasksIds.push(task._id);
       await task.populate([
         "fmsTemplateId",
         "departmentOfAssignToUser",
@@ -72,7 +74,16 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       errors.push({ row: i + 1, error: err.message });
     }
   }
-
+  if (createdTasksIds.length > 0) {
+    await FmsTemplate.findByIdAndUpdate(templateId, {
+      $push: {
+        tasks: { $each: createdTasksIds },
+      },
+    });
+    console.log(
+      `🔗 Linked ${createdTasksIds.length} tasks to template ${templateId}`,
+    );
+  }
   res.json({
     success: true,
     message: `${created.length}/${rows.length} template tasks planned (dates set at launch)`,
