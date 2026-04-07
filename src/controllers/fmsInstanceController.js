@@ -22,7 +22,20 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     "srManager",
   ]);
   if (!template) return next(new AppError("Template not found", 404));
+  // 🔒 CHECK BEFORE CREATING INSTANCE
+  const existingInstance = await FmsInstance.findOne({
+    fmsTemplateId: templateId,
+  status: { $in: ['Upcoming', 'Ongoing'] }
+  });
 
+  if (existingInstance) {
+    return next(
+      new AppError(
+        `FMS already launched (Instance: ${existingInstance.instanceName})`,
+        400,
+      ),
+    );
+  }
   const launchDate = new Date(launchDateStr || Date.now());
   const instanceEnd =
     template.fmsDuration === "Fixed Period" ? template.endDate : null;
@@ -174,15 +187,25 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
     // ± x hr/days to parent due → child start
     if (child.frequency.includes("hour")) {
-      const ms =
-        Math.abs(child.xValue) * 3600000 * (child.xValue >= 0 ? 1 : -1);
-      childStart = new Date(parentDue.getTime() + ms);
+      const isNegative = child.frequency.includes("-");
+      const multiplier = isNegative ? -1 : 1;
+      const shiftStart = await nextWorkingShiftDate(childStart, workShift._id);
+      childStart = new Date(shiftStart);
+      childStart.setHours(childStart.getHours() + child.xValue * multiplier);
     } else {
-      childStart = await addWorkingDaysHoliday(
+      const isNegative = child.frequency.includes("-");
+      const multiplier = isNegative ? -1 : 1;
+
+      // DAYS
+      // 1. Get target DAY from parentDue + x days
+      const targetDay = await addWorkingDaysHoliday(
         parentDue,
-        child.xValue,
+        child.xValue * multiplier,
         workShift._id,
       );
+
+      // 2. SNAP to shift START time (same day)
+      childStart = snapToShiftTime(targetDay, workShift, true); // true=START
     }
 
     // child.due = childStart same day → shift END
@@ -195,10 +218,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     child.waitingForParent = false;
     child.status = calculateTaskStatus(childStart, childDue);
     await child.save();
-
-    console.log(
-      `✅ ${child.taskId}: parentDue=${parentDue} +x${child.xValue} → start=${childStart} due=${childDue} (shiftEnd)`,
-    );
   }
 
   res.json({
