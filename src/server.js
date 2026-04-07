@@ -17,6 +17,8 @@ import User from './models/User.js';
 
 // --- NEW IMPORT FOR LOGGING ---
 import ServerLog from './models/ServerLog.js';
+import startFMSProgressCronJobs from './cron/fmsInstanceTaskProgressCron.js';
+import startRecurringFmsTaskJob from './cron/assignRecurringFmsTask.js';
 
 dotenv.config();
 
@@ -100,6 +102,8 @@ mongoose.connect(MONGODB_URI)
         runDependencyCron(); // Initial run
         startVisibilityCron();
         startFmsVisibilityCron();
+        startFMSProgressCronJobs()
+        startRecurringFmsTaskJob()
       } catch (err) {
         console.error('Failed to start crons', err);
       }

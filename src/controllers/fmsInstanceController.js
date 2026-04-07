@@ -11,7 +11,8 @@ import {
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
-
+import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
+const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
 export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const { templateId } = req.params;
   const { launchDate: launchDateStr } = req.body;
@@ -25,7 +26,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   // 🔒 CHECK BEFORE CREATING INSTANCE
   const existingInstance = await FmsInstance.findOne({
     fmsTemplateId: templateId,
-  status: { $in: ['Upcoming', 'Ongoing'] }
+    status: { $in: ["Upcoming", "Ongoing"] },
   });
 
   if (existingInstance) {
@@ -39,7 +40,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const launchDate = new Date(launchDateStr || Date.now());
   const instanceEnd =
     template.fmsDuration === "Fixed Period" ? template.endDate : null;
-
+  // console.log(template)
   // Create instance
   const instance = await FmsInstance.create({
     fmsTemplateId: template._id,
@@ -61,6 +62,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
 
   for (let i = 0; i < templateTasks.length; i++) {
     const tmplTask = templateTasks[i];
+    //**skip recurrent task creation */
+    if (RECURRING_FREQUENCIES.includes(tmplTask.frequency)) {
+      console.log(`⏭️ Skipping recurring task: ${tmplTask.taskId}`);
+      continue;
+    }
+
     const prevTasks = instanceTasks.slice(0, i);
 
     console.log(
@@ -117,6 +124,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       `✅ ${instanceTask.taskId} → start=${dates.startDate?.toISOString()} due=${dates.dueDate?.toISOString()}`,
     );
   }
+  await generateRecurringFmsTasks();
 
   await instance.populate(["manager", "srManager", "fmsTemplateId"]);
 
@@ -225,7 +233,28 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
   });
 });
+export const stopFmsInstance = handleAsync(async (req, res) => {
+  const instance = await FmsInstance.findById(req.params.id);
+  instance.status = "Stopped";
+  instance.isStopped = true;
+  instance.history.push({
+    event: "stopped",
+    byUser: req.cookies.userId,
+    reason: req.body.reason,
+  });
 
+  // Optional: cancel pending tasks
+  await FmsInstanceTask.updateMany(
+    {
+      fmsInstanceId: instance._id,
+      // status: { $in: ['Upcoming', 'Pending'] }
+    },
+    { status: "Cancelled", isVisible: false },
+  );
+
+  await instance.save();
+  res.json({ success: true });
+});
 export const getFmsInstances = handleAsync(async (req, res) => {
   const instances = await FmsInstance.find()
     .populate(

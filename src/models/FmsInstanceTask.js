@@ -45,7 +45,7 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     actualCompleteDate: Date,
     status: {
       type: String,
-      enum: ["Upcoming", "Pending", "Delayed", "Overdue", "Completed"],
+      enum: ["Upcoming", "Pending", "Delayed", "Overdue", "Completed","Cancelled"],
       default: "Upcoming",
       index: true,
     },
