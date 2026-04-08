@@ -67,7 +67,7 @@ const updateInstanceProgress = async () => {
 // Schedule: at every 5 minutes
 const startFMSProgressCronJobs = () => {
     cron.schedule("*/5 * * * *", updateInstanceProgress, {
-//   cron.schedule("*/3 * * * * *", updateInstanceProgress, {
+  // cron.schedule("*/3 * * * * *", updateInstanceProgress, {
     timezone: "Asia/Kolkata",
   });
   console.log("🔄 FMS Instance Progress Cron scheduled: At every 5 min");
