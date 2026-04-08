@@ -13,6 +13,9 @@ import {
 } from "../utils/dateCalculator.js";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
+import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
+
+//**TO LAUNCH FMS */
 export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const { templateId } = req.params;
   const { launchDate: launchDateStr } = req.body;
@@ -112,8 +115,8 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       status: calculateTaskStatus(dates.startDate, dates.dueDate),
       isVisible: false, // Cron taskVisibilityCron.js handles
       updatedBy: userId,
-      checklist:tmplTask.checklist||[],
-      createdForm:tmplTask.createdForm||[]
+      checklist: tmplTask.checklist || [],
+      createdForm: tmplTask.createdForm || [],
     };
     if (tmplTask.startTimeSetting === "actual-to-planned") {
       instanceTaskData.waitingForParent = true;
@@ -155,6 +158,85 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   });
 });
 
+//**UPDATE FMS TASKS */
+export const updateFmsInstanceTask = handleAsync(async (req, res) => {
+  const { id: instanceId, taskId: taskIdParam } = req.params;
+
+  const task = await FmsInstanceTask.findOne({
+    fmsInstanceId: instanceId,
+    taskId: taskIdParam,
+  });
+
+  // ✅ 1. Handle not found
+  if (!task) {
+    return res.status(404).json({ error: "Task not found" });
+  }
+
+  // ✅ 2. Safe updates
+  if (req.body.checklist) {
+    task.checklist = req.body.checklist;
+  }
+
+  if (req.body.formData) {
+    task.formData = {
+      ...(task.formData || {}),
+      ...req.body.formData,
+    };
+  }
+
+  // ✅ 3. Always calculate progress
+  const checklistComplete = task.checklist?.length
+    ? task.checklist.every((item) => item.completed)
+    : true;
+
+  // ✅ Check mandatory form fields properly
+  const formsComplete = (task.createdForm || []).every((field) => {
+    if (!field.isMandatory) return true;
+
+    const value = task.formData?.[field.fieldName];
+
+    // ❗ handle empty cases properly
+    if (value === undefined || value === null || value === "") {
+      return false;
+    }
+
+    return true;
+  });
+
+  // ✅ 4. Validate only when marking completed
+  if (req.body.status === "Completed") {
+    if (!checklistComplete || !formsComplete) {
+      return res.status(400).json({
+        error: "Checklist & mandatory forms required",
+        checklistComplete,
+        formsComplete,
+      });
+    }
+
+    task.actualCompleteDate = new Date();
+  }
+
+  // ✅ 5. Update status
+  if (req.body.status) {
+    task.status = req.body.status;
+  }
+
+  await task.save();
+
+  // ✅ 6. Better progress calculation
+  const progress =
+    ((Number(checklistComplete) + Number(formsComplete)) / 2) * 100;
+
+  res.json({
+    success: true,
+    status: task.status,
+    checklistComplete,
+    formsComplete,
+    progress: `${progress}%`,
+  });
+});
+
+//**COMPLETE TASK */
 export const completeInstanceTask = handleAsync(async (req, res, next) => {
   const { id: instanceId, taskId: taskIdParam } = req.params;
   const task = await FmsInstanceTask.findOne({
@@ -168,8 +250,14 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   if (!task) return next(new AppError("Task not found", 404));
 
   // Mark complete
+  if (!isFmsTaskFullyComplete(task)) {
+    return res
+      .status(400)
+      .json({ error: "Complete checklist and mandatory forms first" });
+  }
   task.actualCompleteDate = new Date();
   task.status = "Completed";
+  task.updatedBy = req.cookies.userId;
   await task.save();
 
   // 🔥 FIND CHILDREN (reverse: who depends ON this parent)
@@ -235,6 +323,8 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
   });
 });
+
+//**STOP FMS INSTANCE */
 export const stopFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
   instance.status = "Stopped";
@@ -257,6 +347,8 @@ export const stopFmsInstance = handleAsync(async (req, res) => {
   await instance.save();
   res.json({ success: true });
 });
+
+//**GET LAUNCHED FMS */
 export const getFmsInstances = handleAsync(async (req, res) => {
   const instances = await FmsInstance.find()
     .populate(
@@ -267,6 +359,7 @@ export const getFmsInstances = handleAsync(async (req, res) => {
   res.json({ success: true, data: instances });
 });
 
+//**GET LAUNCHED FMS BY ID */
 export const getFmsInstanceById = handleAsync(async (req, res, next) => {
   const instance = await FmsInstance.findById(req.params.id)
     .populate({
@@ -278,6 +371,7 @@ export const getFmsInstanceById = handleAsync(async (req, res, next) => {
   res.json({ success: true, data: instance });
 });
 
+//**GET TASKS OF LAUNCHED FMS */
 export const getInstanceTasks = handleAsync(async (req, res) => {
   const tasks = await FmsInstanceTask.find({ fmsInstanceId: req.params.id })
     .populate(
@@ -286,7 +380,6 @@ export const getInstanceTasks = handleAsync(async (req, res) => {
     .sort("taskId");
   res.json({ success: true, data: tasks });
 });
-
 
 //** helper functions */
 const calculateTaskStatus = (startDate, dueDate) => {

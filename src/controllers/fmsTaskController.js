@@ -120,3 +120,13 @@ export const getFmsTasksByTemplate = handleAsync(async (req, res) => {
     pagination: { total, page: parseInt(page), limit: parseInt(limit) },
   });
 });
+//**update fms tasks */
+export const updateFmsTask = handleAsync(async (req, res, next) => {
+  const task = await FmsTask.findOneAndUpdate(
+    { fmsTemplateId: req.params.templateId, taskId: req.params.taskId },
+    req.body,
+    { new: true }
+  ).populate('fmsTemplateId');
+
+  res.json({ success: true, data: task });
+});
