@@ -112,6 +112,8 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       status: calculateTaskStatus(dates.startDate, dates.dueDate),
       isVisible: false, // Cron taskVisibilityCron.js handles
       updatedBy: userId,
+      checklist:tmplTask.checklist||[],
+      createdForm:tmplTask.createdForm||[]
     };
     if (tmplTask.startTimeSetting === "actual-to-planned") {
       instanceTaskData.waitingForParent = true;

@@ -43,6 +43,8 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         assignedBy: req.cookies.userId,
         createdBy: req.cookies.userId,
         isRecurringTask: isRecurrent,
+        checklist:row.checkList||[],
+        createdForm:row.createdForm||[]
       };
 
       // Validate references
@@ -52,7 +54,11 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       const doer = await User.findById(taskData.assignedTo).populate(
         "role assignShift",
       );
-      if (!doer || doer.role.name !== "Member" || !doer.assignShift) {
+      if (
+        !doer ||
+        //  || doer.role.name !== "Member"
+        !doer.assignShift
+      ) {
         throw new Error("Doer must be Member with shift");
       }
 

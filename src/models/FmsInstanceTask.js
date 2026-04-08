@@ -45,7 +45,14 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     actualCompleteDate: Date,
     status: {
       type: String,
-      enum: ["Upcoming", "Pending", "Delayed", "Overdue", "Completed","Cancelled"],
+      enum: [
+        "Upcoming",
+        "Pending",
+        "Delayed",
+        "Overdue",
+        "Completed",
+        "Cancelled",
+      ],
       default: "Upcoming",
       index: true,
     },
@@ -53,7 +60,42 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     waitingForParent: { type: Boolean, default: false },
     decisionResult: String,
     isVisible: { type: Boolean, default: false }, // Shift-aware visibility
-
+    checklist: [
+      {
+        text: { type: String, required: true },
+        completed: { type: Boolean, default: false },
+      },
+    ],
+    createdForm: [
+      {
+        fieldName: { type: String, required: true },
+        fieldType: {
+          type: String,
+          enum: [
+            "text", // simple text
+            "textarea", // long text / description
+            "number", // numeric input
+            "email", // email input
+            "password", // password field
+            "phone", // mobile number
+            "date", // date picker
+            "datetime", // date + time
+            "time", // only time
+            "file", // file upload
+            "image", // image upload
+            "dropdown", // select (single)
+            "multiselect", // select (multiple)
+            "checkbox", // true/false or multiple options
+            "radio", // single choice
+            "boolean", // true/false toggle
+            "url", // link input
+            "json", // structured data
+            "richtext", // formatted editor (bold, etc.)
+          ],
+        },
+        isMandatory: { type: Boolean, default: false },
+      },
+    ],
     // Audit
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

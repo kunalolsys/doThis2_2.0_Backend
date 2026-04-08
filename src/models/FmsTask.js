@@ -87,6 +87,36 @@ const FmsTaskSchema = new mongoose.Schema(
         completed: { type: Boolean, default: false },
       },
     ],
+    createdForm: [
+      {
+        fieldName: { type: String, required: true },
+        fieldType: {
+          type: String,
+          enum: [
+            "text", // simple text
+            "textarea", // long text / description
+            "number", // numeric input
+            "email", // email input
+            "password", // password field
+            "phone", // mobile number
+            "date", // date picker
+            "datetime", // date + time
+            "time", // only time
+            "file", // file upload
+            "image", // image upload
+            "dropdown", // select (single)
+            "multiselect", // select (multiple)
+            "checkbox", // true/false or multiple options
+            "radio", // single choice
+            "boolean", // true/false toggle
+            "url", // link input
+            "json", // structured data
+            "richtext", // formatted editor (bold, etc.)
+          ],
+        },
+        isMandatory: { type: Boolean, default: false },
+      },
+    ],
     // Audit
     assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
