@@ -94,8 +94,13 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
           ],
         },
         isMandatory: { type: Boolean, default: false },
+        completed: { type: Boolean, default: false }, // NEW: track if filled
       },
     ],
+    formData: {
+      // e.g. { "clientName": "ABC", "amount": 1000, "file": {path: "..."} }
+      type: mongoose.Schema.Types.Mixed, // flexible for all fieldTypes
+    },
     // Audit
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

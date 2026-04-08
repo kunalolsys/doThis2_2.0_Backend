@@ -287,6 +287,8 @@ export const getInstanceTasks = handleAsync(async (req, res) => {
   res.json({ success: true, data: tasks });
 });
 
+
+//** helper functions */
 const calculateTaskStatus = (startDate, dueDate) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);

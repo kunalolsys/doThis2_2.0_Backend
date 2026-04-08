@@ -115,6 +115,7 @@ const FmsTaskSchema = new mongoose.Schema(
           ],
         },
         isMandatory: { type: Boolean, default: false },
+        completed: { type: Boolean, default: false }, // NEW: track if filled
       },
     ],
     // Audit
