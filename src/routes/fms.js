@@ -20,6 +20,7 @@ router.get('/templates/:id/tasks',  fmsTemplateController.getTemplateTasks);
 router.post('/templates/:id/tasks',  upload.array('files'), fmsTaskController.createFmsTasks);
 router.get('/fms-templates/:id/tasks',  fmsTaskController.getFmsTasksByTemplate);
 router.put('/templates/:id/tasks/:taskId',  fmsTaskController.updateFmsTask);
+router.post('/templates/:id/tasks/import', upload.single('file'), fmsTaskController.importFmsTasksUniversal);
 // router.delete('/templates/:id/tasks/:taskId',  fmsTaskController.deleteFmsTask);
 
 // BRD 002.2 Launch & Runtime

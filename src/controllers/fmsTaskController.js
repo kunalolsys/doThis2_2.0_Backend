@@ -6,6 +6,7 @@ import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
 import { createLog } from "./logController.js";
 
+//**CREATE FMS TASK */
 export const createFmsTasks = handleAsync(async (req, res, next) => {
   const { id: templateId } = req.params;
   let rows = Array.isArray(req.body) ? req.body : [req.body];
@@ -98,6 +99,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
   });
 });
 
+//**GET TASK BY TEMPLATES */
 export const getFmsTasksByTemplate = handleAsync(async (req, res) => {
   const { page = 1, limit = 20, status, assignedTo } = req.query;
   const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -120,7 +122,8 @@ export const getFmsTasksByTemplate = handleAsync(async (req, res) => {
     pagination: { total, page: parseInt(page), limit: parseInt(limit) },
   });
 });
-//**update fms tasks */
+
+//**UPDATE FMS TASK */
 export const updateFmsTask = handleAsync(async (req, res, next) => {
   const task = await FmsTask.findOneAndUpdate(
     { fmsTemplateId: req.params.templateId, taskId: req.params.taskId },
@@ -129,4 +132,148 @@ export const updateFmsTask = handleAsync(async (req, res, next) => {
   ).populate('fmsTemplateId');
 
   res.json({ success: true, data: task });
+});
+
+//**IMPORT FMS TASK */
+export const importFmsTasksUniversal = handleAsync(async (req, res) => {
+  const templateId = req.params.id;
+  const file = req.files?.[0];
+
+  if (!file) {
+    return res.status(400).json({ error: "File is required" });
+  }
+
+  const format = file.originalname.split(".").pop().toLowerCase();
+  let rows = [];
+
+  // ✅ 1. Parse file safely
+  try {
+    if (format === "csv") {
+      const csv = file.buffer.toString();
+      rows = parse(csv, { header: true, skipEmptyLines: true });
+    } else if (format === "json") {
+      rows = JSON.parse(file.buffer.toString());
+    } else if (["xlsx", "xls"].includes(format)) {
+      const workbook = XLSX.read(file.buffer);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } else {
+      return res.status(400).json({ error: "Supported: CSV, JSON, XLSX" });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid file format" });
+  }
+
+  const created = [];
+  const errors = [];
+
+  // ✅ 2. Process each row
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+
+    try {
+      // 🔥 Mandatory fields check
+      if (!row.taskDescription) throw new Error("Missing taskDescription");
+      if (!row.doer) throw new Error("Missing assignedTo (doer)");
+      if (!row.department) throw new Error("Missing department");
+      if (!row.frequency) throw new Error("Missing frequency");
+
+      // ✅ Validate frequency enum
+      const allowedFrequencies = [
+        "Anytime","Daily","Weekly","Monthly",
+        "Start+X in days","Start+X in hours",
+        "Task+X in days","Task+X in hours",
+        "Task-X in days","Task-X in hours",
+        "Event+X in days","Event+X in hours",
+        "Event-X in days","Event-X in hours"
+      ];
+
+      if (!allowedFrequencies.includes(row.frequency)) {
+        throw new Error(`Invalid frequency: ${row.frequency}`);
+      }
+
+      // ✅ Parse checklist safely
+      let checklist = [];
+      if (row.checkList) {
+        try {
+          const parsed = JSON.parse(row.checkList);
+          checklist = Array.isArray(parsed)
+            ? parsed.map((item) => ({
+                text: item.text || item,
+                completed: false,
+              }))
+            : [];
+        } catch {
+          throw new Error("Invalid checklist JSON");
+        }
+      }
+
+      // ✅ Parse createdForm safely
+      let createdForm = [];
+      if (row.createdForm) {
+        try {
+          const parsed = JSON.parse(row.createdForm);
+          createdForm = Array.isArray(parsed)
+            ? parsed.map((f) => ({
+                fieldName: f.fieldName,
+                fieldType: f.fieldType || "text",
+                isMandatory: !!f.isMandatory,
+              }))
+            : [];
+        } catch {
+          throw new Error("Invalid createdForm JSON");
+        }
+      }
+
+      // ✅ Resolve User & Department (IMPORTANT)
+      const user = await User.findOne({ email: row.doer });
+      if (!user) throw new Error(`User not found: ${row.doer}`);
+
+      const dept = await Department.findOne({ name: row.department });
+      if (!dept) throw new Error(`Department not found: ${row.department}`);
+
+      // ✅ Build dynamic object (handles ALL fields)
+      const taskData = {
+        fmsTemplateId: templateId,
+        description: row.taskDescription,
+        assignedTo: user._id,
+        departmentOfAssignToUser: dept._id,
+        frequency: row.frequency,
+        xValue: Number(row.value) || 0,
+        checklist,
+        createdForm,
+
+        // 🔥 Optional fields (auto pick if present)
+        isDependent: row.isDependent === "true" || row.isDependent === true,
+        dependentOn: row.dependentOn || null,
+        startTimeSetting: row.startTimeSetting || undefined,
+        isRecurringTask: row.isRecurringTask === "true",
+        decisionStep: row.decisionStep === "true",
+        ifTrueStep: row.ifTrueStep,
+        elseStep: row.elseStep,
+        taskEndDays: Number(row.taskEndDays) || 0,
+
+        createdBy: req.cookies.userId,
+      };
+
+      const task = await FmsTask.create(taskData);
+      created.push(task.taskId);
+
+    } catch (err) {
+      errors.push({
+        row: i + 1,
+        message: err.message,
+      });
+    }
+  }
+
+  res.json({
+    success: true,
+    format,
+    total: rows.length,
+    imported: created.length,
+    failed: errors.length,
+    createdTaskIds: created,
+    errors,
+  });
 });
