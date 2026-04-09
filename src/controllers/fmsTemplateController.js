@@ -64,7 +64,7 @@ export const getTemplates = handleAsync(async (req, res) => {
     search, 
     managerId, 
     fmsDuration 
-  } = req.query;
+  } = req.body;
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
   const filter = {};

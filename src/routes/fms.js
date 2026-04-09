@@ -10,8 +10,8 @@ const router = express.Router();
 
 // BRD 5.1 Template Management (PERFECTED)
 router.post('/templates',  fmsTemplateController.createTemplate);
-router.get('/templates',  fmsTemplateController.getTemplates);
-router.get('/templates/:id',  fmsTemplateController.getTemplateById);
+router.post('/templates-list',  fmsTemplateController.getTemplates);
+router.get('/templates-details/:id',  fmsTemplateController.getTemplateById);
 router.put('/templates/:id',  fmsTemplateController.updateTemplate);
 router.delete('/templates/:id',  fmsTemplateController.deleteTemplate);
 router.get('/templates/:id/tasks',  fmsTemplateController.getTemplateTasks);

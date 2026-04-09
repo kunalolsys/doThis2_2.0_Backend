@@ -62,16 +62,13 @@ FmsTemplateSchema.pre('validate', function(next) {
 // Auto FMS ID (FMS-YYMMNNNN)
 FmsTemplateSchema.pre('save', async function(next) {
   if (this.isNew && !this.fmsId) {
-    const now = new Date();
-    const ym = `${now.getFullYear()%100}${(now.getMonth()+1).toString().padStart(2,'0')}`;
-    
     const counter = await Counter.findByIdAndUpdate(
-      { _id: `fms_${ym}` },
+      { _id: 'fms' },
       { $inc: { seq: 1 } },
       { upsert: true, new: true }
     );
-    
-    this.fmsId = `FMS-${ym}${counter.seq.toString().padStart(4,'0')}`;
+
+    this.fmsId = `FMS-${counter.seq}`;
   }
   next();
 });

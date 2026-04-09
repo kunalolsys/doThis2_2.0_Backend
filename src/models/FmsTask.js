@@ -131,18 +131,20 @@ FmsTaskSchema.index({ fmsTemplateId: 1, isDependent: 1 });
 FmsTaskSchema.index({ dependentOn: 1 });
 
 // Pre-save: taskId only
-FmsTaskSchema.pre("save", async function (next) {
-  if (this.isNew && !this.taskId) {
-    const template = await FmsTemplate.findById(this.fmsTemplateId);
-    const counter = await Counter.findByIdAndUpdate(
-      `fmsTask_${this.fmsTemplateId}`,
-      { $inc: { seq: 1 } },
-      { upsert: true, new: true },
-    );
-    this.taskId = `${template.fmsId}-${counter.seq.toString().padStart(2, "0")}`;
-  }
-  next();
-});
+// FmsTaskSchema.pre("save", async function (next) {
+//   if (this.isNew && !this.taskId) {
+//     const template = await FmsTemplate.findById(this.fmsTemplateId);
+
+//     const counter = await Counter.findByIdAndUpdate(
+//       { _id: `fmsTask_${this.fmsTemplateId}` },
+//       { $inc: { seq: 1 } },
+//       { upsert: true, new: true }
+//     );
+
+//     this.taskId = `${template.fmsId}-${String(counter.seq).padStart(2, "0")}`;
+//   }
+//   next();
+// });
 
 FmsTaskSchema.virtual("template", {
   ref: "FmsTemplate",

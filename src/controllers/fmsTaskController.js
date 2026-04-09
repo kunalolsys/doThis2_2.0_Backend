@@ -10,7 +10,6 @@ import { createLog } from "./logController.js";
 export const createFmsTasks = handleAsync(async (req, res, next) => {
   const { id: templateId } = req.params;
   let rows = Array.isArray(req.body) ? req.body : [req.body];
-
   const template = await FmsTemplate.findById(templateId).populate("manager");
   if (!template) return next(new AppError("Template not found", 404));
 
@@ -24,28 +23,29 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       row.frequency,
     );
     try {
-      const description = row.taskDescription?.trim();
+      const description = row.description?.trim();
       if (!description) throw new Error("taskDescription required");
 
       const taskData = {
-        fmsTemplateId: template._id,
+        fmsTemplateId: row.fmsTemplateId,
         description,
-        departmentOfAssignToUser: row.department,
-        assignedTo: row.doer,
-        frequency: row.frequency,
-        xValue: parseFloat(row.value || 0),
-        isDependent: row["is it dependent?"] === "Yes" || false,
-        dependentOn: row["dependent on"] || null,
-        startTimeSetting: row["start time setting"] || null,
-        decisionStep: row["decision step?"] === "Yes",
-        ifTrueStep: row["if true -> step"],
-        elseStep: row["else -> step"],
+        taskId: row.taskId,
+        departmentOfAssignToUser: row.departmentOfAssignToUser,
+        assignedTo: row.assignedTo,
+        frequency: row.frequency == "none" ? undefined : row.frequency,
+        xValue: parseFloat(row.xValue || 0),
+        isDependent: row.isDependent || false,
+        dependentOn: row.dependentOn || null,
+        startTimeSetting: row.startTimeSetting || null,
+        decisionStep: row.decisionStep,
+        ifTrueStep: row.ifTrueStep,
+        elseStep: row.elseStep,
         taskEndDays: parseFloat(row.taskEndDays || 0),
         assignedBy: req.cookies.userId,
         createdBy: req.cookies.userId,
         isRecurringTask: isRecurrent,
-        checklist:row.checkList||[],
-        createdForm:row.createdForm||[]
+        checklist: row.checklist || [],
+        createdForm: row.createdForm || [],
       };
 
       // Validate references
@@ -128,8 +128,8 @@ export const updateFmsTask = handleAsync(async (req, res, next) => {
   const task = await FmsTask.findOneAndUpdate(
     { fmsTemplateId: req.params.templateId, taskId: req.params.taskId },
     req.body,
-    { new: true }
-  ).populate('fmsTemplateId');
+    { new: true },
+  ).populate("fmsTemplateId");
 
   res.json({ success: true, data: task });
 });
@@ -173,19 +173,27 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
 
     try {
       // 🔥 Mandatory fields check
-      if (!row.taskDescription) throw new Error("Missing taskDescription");
+      if (!row.description) throw new Error("Missing taskDescription");
       if (!row.doer) throw new Error("Missing assignedTo (doer)");
       if (!row.department) throw new Error("Missing department");
       if (!row.frequency) throw new Error("Missing frequency");
 
       // ✅ Validate frequency enum
       const allowedFrequencies = [
-        "Anytime","Daily","Weekly","Monthly",
-        "Start+X in days","Start+X in hours",
-        "Task+X in days","Task+X in hours",
-        "Task-X in days","Task-X in hours",
-        "Event+X in days","Event+X in hours",
-        "Event-X in days","Event-X in hours"
+        "Anytime",
+        "Daily",
+        "Weekly",
+        "Monthly",
+        "Start+X in days",
+        "Start+X in hours",
+        "Task+X in days",
+        "Task+X in hours",
+        "Task-X in days",
+        "Task-X in hours",
+        "Event+X in days",
+        "Event+X in hours",
+        "Event-X in days",
+        "Event-X in hours",
       ];
 
       if (!allowedFrequencies.includes(row.frequency)) {
@@ -235,7 +243,7 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
       // ✅ Build dynamic object (handles ALL fields)
       const taskData = {
         fmsTemplateId: templateId,
-        description: row.taskDescription,
+        description: row.description,
         assignedTo: user._id,
         departmentOfAssignToUser: dept._id,
         frequency: row.frequency,
@@ -258,7 +266,6 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
 
       const task = await FmsTask.create(taskData);
       created.push(task.taskId);
-
     } catch (err) {
       errors.push({
         row: i + 1,
