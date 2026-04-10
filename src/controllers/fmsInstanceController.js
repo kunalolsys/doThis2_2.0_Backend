@@ -14,11 +14,19 @@ import {
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
 import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
+const calculateInstanceStatus = (startDate) => {
+  const now = new Date();
 
+  if (startDate && now < startDate) {
+    return "Upcoming";
+  }
+
+  return "Ongoing";
+};
 //**TO LAUNCH FMS */
 export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const { templateId } = req.params;
-  const { launchDate: launchDateStr } = req.body;
+  const { launchDate: launchDateStr, endDate } = req.body;
 
   const userId = req.cookies.userId;
   const template = await FmsTemplate.findById(templateId).populate([
@@ -44,15 +52,24 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const instanceEnd =
     template.fmsDuration === "Fixed Period" ? template.endDate : null;
   // console.log(template)
+  const parsedEndDate =
+    template.fmsDuration === "Fixed Period"
+      ? endDate
+        ? new Date(endDate)
+        : template.endDate
+      : null;
+
+  const status = calculateInstanceStatus(launchDate, parsedEndDate);
   // Create instance
   const instance = await FmsInstance.create({
     fmsTemplateId: template._id,
-    instanceName: `${template.templateName} (${launchDate.toLocaleDateString()})`,
+    instanceName: `${template.templateName}`,
     startDate: launchDate,
-    endDate: instanceEnd,
+    endDate: endDate ? endDate : instanceEnd,
     manager: template.manager._id,
     srManager: template.srManager?._id || null,
     createdBy: userId,
+    status,
   });
 
   // Get template tasks IN ORDER
@@ -130,7 +147,10 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     );
   }
   await generateRecurringFmsTasks();
-
+  //**Set islaunched true for FMS template */
+  await FmsTemplate.findByIdAndUpdate(templateId, {
+    isLaunched: true,
+  });
   await instance.populate(["manager", "srManager", "fmsTemplateId"]);
 
   // FIXED LOG - use valid enum
