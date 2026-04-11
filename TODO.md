@@ -1,10 +1,8 @@
-# Delete FMS Task Implementation
-
-## Steps
-- [x] 1. Create TODO.md ✅
-- [x] 2. Add deleteFmsTask function to src/controllers/fmsTaskController.js ✅
-- [x] 3. Test DELETE /templates/:id/tasks/:taskId ✅ (manual verification via implementation)
-- [x] 4. Mark complete & attempt_completion ✅
-
-**COMPLETE** ✅
+# FMS Instance Progress Cron Fix - Steps ✅
+## 1. ✅ Create TODO.md 
+## 2. ✅ Edit src/cron/fmsInstanceTaskProgressCron.js (Single loop, correct progress calc, every 5min)
+## 3. [ ] Restart server  
+## 4. [ ] Monitor logs  
+## 5. [ ] Verify progress  
+## 6. [ ] Complete
 

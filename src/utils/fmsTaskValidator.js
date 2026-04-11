@@ -1,4 +1,9 @@
 export const isFmsTaskFullyComplete = (task) => {
+  const checklist = task.checklist || [];
+  const createdForm = task.createdForm || [];
+  if (checklist.length === 0 && createdForm.length === 0) {
+    return false;
+  }
   // ✅ 1. Checklist validation (strict like checkbox)
   const allChecklistDone = Array.isArray(task.checklist)
     ? task.checklist.every((item) => item?.completed === true)

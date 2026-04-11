@@ -26,7 +26,7 @@ router.delete('/templates/:id/tasks/:taskId',  fmsTaskController.deleteFmsTask);
 
 // BRD 002.2 Launch & Runtime
 router.post('/instances/:templateId/launch',  fmsInstanceController.launchFmsInstance);
-router.get('/instances',  fmsInstanceController.getFmsInstances);
+router.post('/instances',  fmsInstanceController.getFmsInstances);
 router.get('/instances/:id',  fmsInstanceController.getFmsInstanceById);
 router.get('/instances/:id/tasks',  fmsInstanceController.getInstanceTasks);
 router.patch('/instances/:id/tasks/:taskId',  fmsInstanceController.updateFmsInstanceTask);

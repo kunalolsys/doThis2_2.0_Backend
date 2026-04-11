@@ -1,11 +1,12 @@
 import cron from "node-cron";
 import { isBefore, isAfter, differenceInCalendarDays, addDays } from "date-fns";
 import Task from "../models/Task.js";
-// Runs every 5 minutes — adjust the schedule if you want hourly/daily runs
-// const SCHEDULE = '*/5 * * * * *';
+import FmsInstanceTask from "../models/FmsInstanceTask.js"; // 👈 ADDED
+
 const SCHEDULE = "*/5 * * * *";
 
 function resolveDueDate(task) {
+  if (task.plannedDueDate) return task.plannedDueDate; // FMS Priority
   if (task.dueDate) return task.dueDate;
   if (task.endDate) return task.endDate;
   if (task.startDate && typeof task.taskEndDays === "number") {
@@ -17,22 +18,22 @@ function resolveDueDate(task) {
 function isChecklistComplete(task) {
   if (!Array.isArray(task.checklist) || task.checklist.length === 0)
     return false;
-  return task.checklist.every((c) => c.isCompleted === true);
+  return task.checklist.every(
+    (c) => c.completed === true || c.isCompleted === true,
+  );
 }
 
 async function updateTaskStatuses() {
   try {
     const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    // Fetch tasks that potentially need status updates. We include all tasks
-    // since the dataset may be small; adjust the filter for large collections.
-    const tasks = await Task.find({}).lean();
+    // 1️⃣ REGULAR TASKS
+    const regularTasks = await Task.find({}).lean();
+    const regularUpdates = [];
 
-    const updates = [];
-    for (const t of tasks) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
+    for (const t of regularTasks) {
       const start = t.startDate ? new Date(t.startDate) : null;
       const due = resolveDueDate(t);
 
@@ -43,8 +44,7 @@ async function updateTaskStatuses() {
         t.completeStatus === true ||
         t.status === "Completed" ||
         isChecklistComplete(t);
-
-      let newStatus;
+      let newStatus = t.status || "Pending";
 
       if (completed) {
         newStatus = "Completed";
@@ -59,81 +59,90 @@ async function updateTaskStatuses() {
       }
 
       if (t.status !== newStatus) {
-        updates.push({ id: t._id, status: newStatus });
+        regularUpdates.push({ id: t._id, status: newStatus });
       }
     }
-    // for (const t of tasks) {
-    //     const due = resolveDueDate(t);
 
-    //     const completed = t.completeStatus === true || t.status === 'Completed' || isChecklistComplete(t);
+    // 2️⃣ FMS INSTANCE TASKS (NEW!)
+    const fmsTasks = await FmsInstanceTask.find({}).lean();
+    const fmsUpdates = [];
 
-    //     let newStatus = t.status || 'Pending';
+    for (const t of fmsTasks) {
+      // Skip already completed/cancelled
+      if (t.status === "Completed" || t.status === "Cancelled") continue;
 
-    //     if (completed) {
-    //         if (due && t.updatedAt && isAfter(new Date(t.updatedAt), new Date(due))) {
-    //             newStatus = 'Delayed';
-    //         } else {
-    //             newStatus = 'Completed';
-    //         }
-    //     } else {
-    //         if (due && isBefore(new Date(due), now)) {
-    //             newStatus = 'Overdue';
-    //         } else if (due) {
-    //             const daysDiff = differenceInCalendarDays(new Date(due), now);
-    //             if (daysDiff >= 0 && daysDiff <= 2) {
-    //                 newStatus = 'Upcoming';
-    //             } else {
-    //                 newStatus = 'Pending';
-    //             }
-    //         } else {
-    //             newStatus = 'Pending';
-    //         }
-    //     }
+      const start = t.plannedStartDate ? new Date(t.plannedStartDate) : null;
+      const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;
 
-    //     if (t.status !== newStatus) {
-    //         updates.push({ id: t._id, status: newStatus });
-    //     }
-    // }
+      if (start) start.setHours(0, 0, 0, 0);
+      if (due) due.setHours(0, 0, 0, 0);
 
-    // Log updated task IDs and new statuses
-    if (updates.length > 0) {
-      console.log(
-        "[taskStatusUpdate] Updating tasks with IDs and new statuses:",
+      let newStatus = t.status || "Upcoming";
+
+      if (start && start > today) {
+        newStatus = "Upcoming";
+      } else if (due && due.getTime() === today.getTime()) {
+        newStatus = "Delayed";
+      } else if (due && due < today) {
+        newStatus = "Overdue";
+      } else {
+        newStatus = "Pending";
+      }
+
+      if (t.status !== newStatus) {
+        fmsUpdates.push({ id: t._id, status: newStatus });
+      }
+    }
+
+    // 3️⃣ BULK UPDATES
+    const allBulkOps = [];
+
+    if (regularUpdates.length > 0) {
+      console.log(`[REGULAR] ${regularUpdates.length} task updates`);
+      allBulkOps.push(
+        ...regularUpdates.map((u) => ({
+          updateOne: {
+            filter: { _id: u.id },
+            update: { $set: { status: u.status } },
+          },
+        })),
       );
-      updates.forEach((u) =>
-        console.log(`  - ID: ${u.id}, New Status: ${u.status}`),
+      await Task.bulkWrite(
+        regularUpdates.map((u) => ({
+          updateOne: {
+            filter: { _id: u.id },
+            update: { $set: { status: u.status } },
+          },
+        })),
       );
     }
 
-    // Apply updates in bulk
-    const bulkOps = updates.map((u) => ({
-      updateOne: {
-        filter: { _id: u.id },
-        update: { $set: { status: u.status } },
-      },
-    }));
-    if (bulkOps.length) {
-      await Task.bulkWrite(bulkOps);
+    if (fmsUpdates.length > 0) {
+      console.log(`[FMS] ${fmsUpdates.length} instance task updates`);
+      await FmsInstanceTask.bulkWrite(
+        fmsUpdates.map((u) => ({
+          updateOne: {
+            filter: { _id: u.id },
+            update: { $set: { status: u.status } },
+          },
+        })),
+      );
     }
 
     console.log(
-      `[taskStatusUpdate] checked ${tasks.length} tasks, updated ${bulkOps.length} statuses`,
+      `✅ Cron: Checked ${regularTasks.length} tasks + ${fmsTasks.length} FMS tasks | Updated ${regularUpdates.length} + ${fmsUpdates.length}`,
     );
   } catch (err) {
-    console.error("[taskStatusUpdate] error updating task statuses", err);
+    console.error("[taskStatusUpdate] Error:", err);
   }
 }
 
 let started = false;
-
 export default function startTaskStatusCron() {
   if (started) return;
   started = true;
-  // Do an immediate run, then schedule
-  updateTaskStatuses();
-  cron.schedule(SCHEDULE, () => {
-    updateTaskStatuses();
-  });
+  updateTaskStatuses(); // Immediate run
+  cron.schedule(SCHEDULE, updateTaskStatuses);
 }
 
 export { updateTaskStatuses };

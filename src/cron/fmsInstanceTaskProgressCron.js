@@ -6,71 +6,82 @@ import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
 
 const updateInstanceProgress = async () => {
-  console.log("🔄 FMS Instance Progress Cron scheduled: At every 5 min");
+  console.log("🔄 FMS Instance Progress Cron - Processing ALL active instances (every 5 min)");
 
+  // Broaden query to catch ALL potentially active instances
   const instances = await FmsInstance.find({
-    status: { $in: ["Upcoming", "Ongoing"] },
+    status: { $nin: ["Completed", "Cancelled", "Stopped"] },
   });
+  console.log(`📊 Found ${instances.length} FMS instances to process`);
 
-  // Auto-complete ready tasks
-  for (const instance of instances) {
-    const readyTasks = await FmsInstanceTask.find({
-      fmsInstanceId: instance._id,
-      status: { $nin: ['Completed', 'Cancelled'] },
-    });
+  // SINGLE LOOP: Process each instance completely
+  for (let i = 0; i < instances.length; i++) {
+    const instance = instances[i];
+    console.log(`🔄 Processing instance ${i+1}/${instances.length}: ${instance.instanceId}`);
+    
+    // Fetch ALL tasks for this instance ONCE
+    const allTasks = await FmsInstanceTask.find({ fmsInstanceId: instance._id });
+    console.log(`📝 Instance ${instance.instanceId}: ${allTasks.length} total tasks`);
+    
+    if (allTasks.length === 0) {
+      console.log(`⏭️ Skipping ${instance.instanceId} - no tasks`);
+      continue;
+    }
 
-    for (const task of readyTasks) {
-      if (isFmsTaskFullyComplete(task) && task.status !== 'Completed') {
-        task.status = 'Completed';
+    // 1. Auto-complete ready tasks
+    let autoCompletedCount = 0;
+    for (const task of allTasks) {
+      if (task.status !== "Completed" && task.status !== "Cancelled" && isFmsTaskFullyComplete(task)) {
+        task.status = "Completed";
         task.actualCompleteDate = new Date();
         await task.save();
-        console.log(`✅ Auto-completed task ${task.taskId}`);
+        console.log(`✅ Auto-completed ${instance.instanceId}/${task.taskId}`);
+        autoCompletedCount++;
       }
     }
-  }
-
-  // Then calculate progress
-  for (const instance of instances) {
-    const totalTasks = await FmsInstanceTask.countDocuments({
-      fmsInstanceId: instance._id,
-    });
-    const pendingTasks = await FmsInstanceTask.find({
-      fmsInstanceId: instance._id,
-      status: { $in: ['Upcoming', 'Pending', 'Delayed', 'Overdue'] }
-    });
-
-    const fullyCompleteCount = pendingTasks.filter(isFmsTaskFullyComplete).length;
-    const completed = totalTasks - pendingTasks.length + fullyCompleteCount;
-    const total = totalTasks;
-
-    const rate = total ? Math.round((completed / total) * 100) : 0;
-
-    // AUTO COMPLETE 100%
-    if (rate === 100) {
-      instance.status = "Completed";
-      instance.history.push({ event: "auto-completed", rate: 100 });
+    if (autoCompletedCount > 0) {
+      console.log(`🎉 ${instance.instanceId}: Auto-completed ${autoCompletedCount} tasks`);
     }
 
+    // 2. CORRECT progress calculation (after auto-complete)
+    const completedTasks = allTasks.filter(task => task.status === "Completed").length;
+    const totalTasks = allTasks.length;
+    const rate = totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    
+    console.log(`📊 ${instance.instanceId}: ${completedTasks}/${totalTasks} completed (${rate}%)`);
+    
+    // 3. Auto-complete instance if 100%
+    const wasCompleted = instance.status === "Completed";
+    if (rate === 100 && !wasCompleted) {
+      instance.status = "Completed";
+      instance.history.push({ 
+        event: "auto-completed", 
+        rate: 100,
+        timestamp: new Date(),
+        autoCompletedTasks: autoCompletedCount
+      });
+      console.log(`🏆 Instance ${instance.instanceId} AUTO-COMPLETED! 🎉`);
+    }
+    
+    // 4. Update progress
     instance.progress = {
-      totalTasks: total,
-      completedTasks: completed,
+      totalTasks,
+      completedTasks,
       rate,
       lastUpdated: new Date(),
     };
     await instance.save();
-
-    // Update TEMPLATE progress too
-    await updateTemplateFromInstance(instance._id);
+    
+    console.log(`✅ ${instance.instanceId} updated: ${rate}%`);
   }
 };
 
-// Schedule: at every 5 minutes
+// Schedule: every 5 minutes
 const startFMSProgressCronJobs = () => {
-    cron.schedule("*/5 * * * *", updateInstanceProgress, {
-  // cron.schedule("*/3 * * * * *", updateInstanceProgress, {
+  cron.schedule("*/5 * * * *", updateInstanceProgress, {
     timezone: "Asia/Kolkata",
   });
-  console.log("🔄 FMS Instance Progress Cron scheduled: At every 5 min");
+  console.log("🔄 FMS Instance Progress Cron scheduled: Every 5 minutes (*/5 * * * *)");
 };
 
 export default startFMSProgressCronJobs;

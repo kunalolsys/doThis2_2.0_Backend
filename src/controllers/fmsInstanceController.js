@@ -370,23 +370,79 @@ export const stopFmsInstance = handleAsync(async (req, res) => {
 
 //**GET LAUNCHED FMS */
 export const getFmsInstances = handleAsync(async (req, res) => {
-  const instances = await FmsInstance.find()
+  const {
+    page = 1,
+    limit = 10,
+    search = "",
+    status,
+    instanceId,
+    instanceName,
+  } = req.body;
+
+  // Build query
+  const query = {};
+
+  // Search by instanceId OR instanceName
+  if (search) {
+    query.$or = [
+      { instanceId: { $regex: search, $options: "i" } },
+      { instanceName: { $regex: search, $options: "i" } },
+    ];
+  }
+
+  // Filter by instanceId
+  if (instanceId) {
+    query.instanceId = { $regex: instanceId, $options: "i" };
+  }
+
+  // Filter by instanceName
+  if (instanceName) {
+    query.instanceName = { $regex: instanceName, $options: "i" };
+  }
+
+  // Status filter (upcoming, ongoing, completed)
+  if (
+    status &&
+    ["upcoming", "ongoing", "completed"].includes(status.toLowerCase())
+  ) {
+    const statusMap = {
+      upcoming: "Upcoming",
+      ongoing: "Ongoing",
+      completed: { $in: ["Completed", "Stopped", "Cancelled"] },
+    };
+    query.status = statusMap[status.toLowerCase()];
+  }
+
+  // Pagination
+  const skip = (Number(page) - 1) * Number(limit);
+  const total = await FmsInstance.countDocuments(query);
+
+  const instances = await FmsInstance.find(query)
     .populate(
       "fmsTemplateId manager srManager createdBy",
-      "templateName fmsId name",
+      "templateName fmsId name email",
     )
-    .sort({ startDate: -1 });
-  res.json({ success: true, data: instances });
+    .sort({ startDate: -1, createdAt: -1 })
+    .skip(skip)
+    .limit(Number(limit));
+
+  res.json({
+    success: true,
+    data: instances,
+    pagination: {
+      current: Number(page),
+      pages: Math.ceil(total / Number(limit)),
+      total,
+      limit: Number(limit),
+    },
+  });
 });
 
 //**GET LAUNCHED FMS BY ID */
 export const getFmsInstanceById = handleAsync(async (req, res, next) => {
   const instance = await FmsInstance.findById(req.params.id)
-    .populate({
-      path: "tasks",
-      populate: ["assignedTo", "departmentOfAssignToUser", "fmsTaskId"],
-    })
-    .populate("manager srManager fmsTemplateId createdBy");
+    .populate("srManager", "name email")
+    .populate("manager", "name email");
   if (!instance) return next(new AppError("Instance not found", 404));
   res.json({ success: true, data: instance });
 });
@@ -394,9 +450,30 @@ export const getFmsInstanceById = handleAsync(async (req, res, next) => {
 //**GET TASKS OF LAUNCHED FMS */
 export const getInstanceTasks = handleAsync(async (req, res) => {
   const tasks = await FmsInstanceTask.find({ fmsInstanceId: req.params.id })
-    .populate(
-      "fmsInstanceId fmsTaskId assignedTo departmentOfAssignToUser updatedBy",
-    )
+    .populate({
+      path: "fmsInstanceId",
+      select: "instanceName status progress",
+    })
+    .populate({
+      path: "fmsTaskId",
+      select: "taskId assignedBy", // only what you need
+      populate: {
+        path: "assignedBy",
+        select: "name email",
+      },
+    })
+    .populate({
+      path: "assignedTo",
+      select: "name email",
+    })
+    .populate({
+      path: "departmentOfAssignToUser",
+      select: "name",
+    })
+    .populate({
+      path: "updatedBy",
+      select: "name",
+    })
     .sort("taskId");
   res.json({ success: true, data: tasks });
 });

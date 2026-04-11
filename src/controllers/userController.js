@@ -11,7 +11,7 @@ import {
   taskAssignedTemplate,
 } from "../services/templates.js";
 import { createLog } from "./logController.js";
-import mongoose from 'mongoose'
+import mongoose from "mongoose";
 // Get all users
 async function getAllSubordinates(managerId) {
   const subordinates = await User.find({
@@ -348,12 +348,16 @@ export const updateUser = handleAsync(async (req, res, next) => {
 // Delete user
 export const deleteUser = handleAsync(async (req, res, next) => {
   const { id } = req.params;
+  const currentUserId = req.cookies.userId;
   const user = await User.findById(id);
   if (!user) {
     return next(new AppError("User not found", 404));
   }
   user.isDeleted = true;
+  user.isActive = false;
   user.deletedAt = new Date();
+  user.deletedBy = currentUserId;
+
   await user.save();
   await createLog({
     action: "DELETE",

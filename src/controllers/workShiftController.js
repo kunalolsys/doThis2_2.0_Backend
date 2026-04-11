@@ -74,7 +74,11 @@ export const createWorkShift = handleAsync(async (req, res, next) => {
   }
 
   // Check if work shift already exists
-  const existingWorkShift = await WorkShift.findOne({ name, isDeleted: false });
+  const existingWorkShift = await WorkShift.findOne({
+    startTime,
+    endTime,
+    isDeleted: false,
+  });
   if (existingWorkShift) {
     return next(new AppError("Work shift already exists", 400));
   }
@@ -138,6 +142,8 @@ export const updateWorkShift = handleAsync(async (req, res, next) => {
 // Delete WorkShift
 export const deleteWorkShift = handleAsync(async (req, res, next) => {
   const { id } = req.params;
+  const currentUserId = req.cookies.userId;
+
   const workShift = await WorkShift.findById(id);
   if (!workShift) {
     return next(new AppError("WorkShift not found", 404));
@@ -161,6 +167,7 @@ export const deleteWorkShift = handleAsync(async (req, res, next) => {
   }
 
   workShift.isDeleted = true;
+  workShift.deletedBy = currentUserId;
   await workShift.save();
 
   res.status(200).json({

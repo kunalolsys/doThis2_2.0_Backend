@@ -3170,7 +3170,8 @@ export const updateTask = handleAsync(async (req, res, next) => {
     frequency,
     endDate,
     weekDays,
-    status, // <--- We capture this explicitly to check later
+    status,
+    taskEndDays, // <--- We capture this explicitly to check later
     ...otherUpdates
   } = req.body;
 
@@ -3244,6 +3245,21 @@ export const updateTask = handleAsync(async (req, res, next) => {
   if (dueDate !== undefined) {
     task.dueDate = cleanField(dueDate) ? parseDateIST(dueDate) : null;
     shouldRecalculateStatus = true;
+  }
+  let effectiveStartDate = cleanField(startDate)
+    ? parseDateIST(startDate)
+    : null;
+  if (taskEndDays !== null && taskEndDays > 0 && task.assignedTo) {
+    task.taskEndDays = Number(taskEndDays);
+    const user = await User.findById(task.assignedTo).populate("assignShift");
+    if (user?.assignShift) {
+      const workShiftId = user.assignShift._id;
+      task.dueDate = await addWorkingDaysHoliday(
+        effectiveStartDate,
+        Number(taskEndDays),
+        workShiftId,
+      );
+    }
   }
 
   // 5. Handle discriminator-specific fields (RecurringTask)
