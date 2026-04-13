@@ -119,6 +119,7 @@ const generateRecurringTasks = async () => {
         startDate: todayShiftStart,
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
+        recurringRefId:task.TaskId,
         checklist: task.checklist?.map(item => ({ ...item, isCompleted: false })) || [],
         status: 'Pending',
         isVisible: false, // 🔥 Cron visibility system

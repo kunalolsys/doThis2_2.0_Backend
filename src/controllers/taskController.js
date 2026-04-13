@@ -1260,9 +1260,98 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   // 🔥 STEP 4: MERGE in response
   //**GETING FMS TASKS */
-  const fmsQuery = { ...query }; // Copy ALL filters
-  fmsQuery.isVisible = query.status !== "Upcoming" ? true : { $exists: true };
+  const fmsQuery = {};
 
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // SEARCH
+  if (search) {
+    fmsQuery.$or = [
+      { description: { $regex: search, $options: "i" } },
+      { taskId: search },
+    ];
+  }
+
+  // STATUS
+  if (status && status !== "all") fmsQuery.status = status;
+
+  // TASK TYPE (ignore for FMS)
+  delete query.taskType;
+
+  // DATE RANGE
+  if (startDate || endDate) {
+    const dateFilter = {};
+    if (startDate) dateFilter.$gte = startOfDay(parseISO(startDate));
+    if (endDate) dateFilter.$lte = endOfDay(parseISO(endDate));
+    fmsQuery.$or = [
+      { plannedStartDate: dateFilter },
+      { plannedDueDate: dateFilter },
+    ];
+  }
+
+  // =========================
+  // 📊 STATUS / STAT FILTER
+  // =========================
+  if (stat === "overdue") {
+    fmsQuery.plannedDueDate = { $lt: todayStart };
+    fmsQuery.status = { $ne: "Completed" };
+  }
+
+  if (stat === "dueToday") {
+    fmsQuery.plannedDueDate = { $gte: todayStart, $lte: todayEnd };
+  }
+
+  if (stat === "completed") {
+    fmsQuery.status = "Completed";
+  }
+
+  if (stat === "pending") {
+    fmsQuery.status = "Pending";
+  }
+
+  // =========================
+  // 📌 TAB CATEGORY
+  // =========================
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      const start = startOfDay(new Date());
+      const end = endOfDay(new Date());
+
+      fmsQuery.status = { $in: ["Pending", "Delayed", "Overdue"] };
+      fmsQuery.plannedStartDate = { $gte: start, $lte: end };
+    }
+
+    if (taskCategory === "upcoming") {
+      fmsQuery.status = "Upcoming";
+    }
+
+    if (taskCategory === "completed") {
+      fmsQuery.status = "Completed";
+    }
+  }
+
+  // =========================
+  // 📊 DIRECT STATUS FILTER
+  // =========================
+  if (status && status !== "all") {
+    fmsQuery.status = status;
+  }
+  // VISIBILITY
+  // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
   const [fmsTasks, fmsTotal] = await Promise.all([
     FmsInstanceTask.find(fmsQuery)
       .populate("assignedTo", "name email department assignShift")
@@ -1299,7 +1388,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     createdAt: task.createdAt,
   }));
   const allTasks = [...tasks, ...mappedFmsTasks];
-const actualTotal = total + fmsTotal + finalVirtualRecurring.length;
+  const actualTotal = total + fmsTotal;
   res.json({
     success: true,
     // data: tasks,

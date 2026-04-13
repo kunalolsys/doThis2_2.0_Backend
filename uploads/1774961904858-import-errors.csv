@@ -1,2 +1,0 @@
-"Task Title","Task Description","Assign To(Email)","Assign To(Name)","Assign To UserDepartment","Check List","Start Date","Task End Days","Error"
-"Sample Delegation Task","Description...","akshit@gmail.com","Akshit","Frontend Department","item1,item2","12-13-2024","1","Row 1: A task with the same title for user akshit@gmail.com on the same start date already exists."

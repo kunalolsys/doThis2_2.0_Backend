@@ -218,6 +218,11 @@ const DelegationTaskSchema = new mongoose.Schema({
     ref: "Task",
     default: null,
   },
+  //to find recurrence task
+  recurringRefId: {
+    type: String,
+    default: null,
+  },
   taskDoneBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -273,6 +278,10 @@ const RecurringTaskSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
+  // refID: {
+  //   type: String,
+  //   default: null,
+  // },
 });
 
 // --- MIDDLEWARE: Ensure dueDate is null for Recurring Tasks ---
@@ -282,7 +291,27 @@ RecurringTaskSchema.pre("validate", function (next) {
   }
   next();
 });
+// RecurringTaskSchema.pre("save", async function (next) {
+//   if (this.isNew && !this.refID) {
+//     const now = new Date();
 
+//     const yy = String(now.getFullYear()).slice(-2);
+//     const mm = String(now.getMonth() + 1).padStart(2, "0");
+
+//     const period = `${yy}${mm}`; // e.g. 2604
+
+//     const counter = await Counter.findByIdAndUpdate(
+//       { _id: `recurringRef-${period}` },
+//       { $inc: { seq: 1 } },
+//       { new: true, upsert: true },
+//     );
+
+//     this.refID = `R-${period}${counter.seq.toString().padStart(4, "0")}`;
+//     // Example: R-26040001
+//   }
+
+//   next();
+// });
 // ---------------------------------------------------------
 // CREATE DISCRIMINATORS & EXPORT
 // ---------------------------------------------------------
