@@ -223,10 +223,6 @@ const DelegationTaskSchema = new mongoose.Schema({
     ref: "User",
     default: null,
   },
-  completeStatus: {
-    type: Boolean,
-    default: false,
-  },
 });
 
 // ---------------------------------------------------------

@@ -40,10 +40,7 @@ async function updateTaskStatuses() {
       if (start) start.setHours(0, 0, 0, 0);
       if (due) due.setHours(0, 0, 0, 0);
 
-      const completed =
-        t.completeStatus === true ||
-        t.status === "Completed" ||
-        isChecklistComplete(t);
+      const completed = t.status === "Completed" || isChecklistComplete(t);
       let newStatus = t.status || "Pending";
 
       if (completed) {

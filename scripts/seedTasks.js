@@ -85,7 +85,7 @@ const seed = async () => {
         assignedTo: userIds[0],
         startDate: daysAgo(3),
         dueDate: daysAgo(1),
-        completeStatus: true
+        status: true
       }
     });
 

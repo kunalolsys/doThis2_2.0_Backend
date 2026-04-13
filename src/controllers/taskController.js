@@ -482,7 +482,6 @@ export const createTask = handleAsync(async (req, res, next) => {
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
           : [],
         taskDoneBy: null,
-        completeStatus: false,
       });
     }
 
@@ -1958,7 +1957,7 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   // =========================================================
 
   const justCompleted =
-    completeStatus === true && oldData.completeStatus !== true;
+    completeStatus === true && oldData.status !== true;
 
   if (justCompleted) {
     const dependentTasks = await Task.find({
