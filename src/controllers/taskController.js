@@ -25,6 +25,7 @@ import {
 } from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
 import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
+import FmsInstanceTask from "../models/FmsInstanceTask.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -1255,19 +1256,58 @@ export const filterTasks = handleAsync(async (req, res) => {
   }
 
   // MERGE
-  const allTasks = [...tasks, ...finalVirtualRecurring];
+  // const allTasks = [...tasks, ...finalVirtualRecurring];
 
   // 🔥 STEP 4: MERGE in response
-  // const allTasks = [...tasks, ...filteredRecurring];
+  //**GETING FMS TASKS */
+  const fmsQuery = { ...query }; // Copy ALL filters
+  fmsQuery.isVisible = query.status !== "Upcoming" ? true : { $exists: true };
 
+  const [fmsTasks, fmsTotal] = await Promise.all([
+    FmsInstanceTask.find(fmsQuery)
+      .populate("assignedTo", "name email department assignShift")
+      .populate("updatedBy", "name email") // use as assignedBy fallback
+      .populate("departmentOfAssignToUser", "name")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    FmsInstanceTask.countDocuments(fmsQuery),
+  ]);
+  const mappedFmsTasks = fmsTasks.map((task) => ({
+    _id: task._id,
+    TaskId: task.taskId,
+
+    title: task.description, // or map from template if needed
+    description: task.description,
+
+    startDate: task.plannedStartDate,
+    dueDate: task.plannedDueDate,
+
+    status: task.status,
+
+    assignedTo: task.assignedTo,
+    assignedBy: task.updatedBy || null, // fallback
+
+    departmentOfAssignToUser: task.departmentOfAssignToUser,
+
+    taskType: "FmsInstanceTask", // 🔥 important for UI पहचान
+
+    isVisible: task.isVisible,
+
+    checklist: task.checklist || [],
+
+    createdAt: task.createdAt,
+  }));
+  const allTasks = [...tasks, ...mappedFmsTasks];
+const actualTotal = total + fmsTotal + finalVirtualRecurring.length;
   res.json({
     success: true,
-    data: tasks,
-    // data: allTasks,
+    // data: tasks,
+    data: allTasks,
     upcomingRecurringTasks: finalVirtualRecurring,
-    totalTasks: total,
+    totalTasks: actualTotal,
     currentPage: page,
-    totalPages: Math.ceil(total / limit),
+    totalPages: Math.ceil(actualTotal / limit),
   });
 });
 //**get my task stats */
@@ -1956,8 +1996,7 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   // ✅ ACTUAL-TO-PLANNED TRIGGER (CORRECT PLACE)
   // =========================================================
 
-  const justCompleted =
-    completeStatus === true && oldData.status !== true;
+  const justCompleted = completeStatus === true && oldData.status !== true;
 
   if (justCompleted) {
     const dependentTasks = await Task.find({
