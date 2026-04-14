@@ -3,7 +3,7 @@ import { isBefore, isAfter, differenceInCalendarDays, addDays } from "date-fns";
 import Task from "../models/Task.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js"; // 👈 ADDED
 
-const SCHEDULE = "*/5 * * * *";
+const SCHEDULE = "*/50 * * * * *";
 
 function resolveDueDate(task) {
   if (task.plannedDueDate) return task.plannedDueDate; // FMS Priority

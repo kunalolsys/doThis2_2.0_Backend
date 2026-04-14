@@ -93,6 +93,12 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
             "richtext", // formatted editor (bold, etc.)
           ],
         },
+        options: [
+          {
+            label: String,
+            value: String,
+          },
+        ],
         isMandatory: { type: Boolean, default: false },
         completed: { type: Boolean, default: false }, // NEW: track if filled
       },

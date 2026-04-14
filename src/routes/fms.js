@@ -31,6 +31,12 @@ router.get('/instances/:id',  fmsInstanceController.getFmsInstanceById);
 router.get('/instances/:id/tasks',  fmsInstanceController.getInstanceTasks);
 router.patch('/instances/:id/tasks/:taskId',  fmsInstanceController.updateFmsInstanceTask);
 router.put('/instances/:id/tasks/:taskId/complete',  fmsInstanceController.completeInstanceTask);
+router.patch(
+  "/instances/:id/tasks/:taskId/formData",
+  fmsInstanceController.updateFormData
+);
+router.patch("/instances/:id/tasks/:taskId/checklist"
+, authenticateJWT, fmsInstanceController.updateChecklistItem);
 
 // router.patch('/instances/:id/tasks/:taskId/checklist/:index',  fmsInstanceController.updateChecklistItem);
 // router.patch('/instances/:id/tasks/:taskId/formData',  fmsInstanceController.updateFormData);

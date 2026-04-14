@@ -15,6 +15,7 @@ import {
   filterTasks,
   getRoleBasedTasks,
   getTaskStats,
+  updateChecklistItem,
 } from '../controllers/taskController.js'; // Ensure this matches your actual controller filename
 import upload from '../middleware/upload.js';
 import { authenticateJWT } from '../middleware/auth.js';
@@ -58,6 +59,8 @@ router.put('/:id', authenticateJWT, upload.array('attachmentFile'), updateTask);
 
 // Toggle Task Completion (Mark as Complete/Incomplete)
 router.patch('/:id/completion', authenticateJWT, toggleTaskCompletion);
+// Toggle single checklist item
+router.patch('/:id/checklist/:index', authenticateJWT, updateChecklistItem);
 
 // Delete Task (hard delete single)
 router.delete('/:id', authenticateJWT, deleteTask);

@@ -787,14 +787,59 @@ export const getAllTasksWithStats = async (req, res) => {
       .populate("dependencyConfig.taskDependent", "title")
       .sort({ createdAt: -1 });
 
+    //**FMS INSTANCE TASK COUNTS */
+    const fmsFilter = {};
+
+    // 👉 Apply SAME ROLE FILTER LOGIC
+    if (andConditions.length > 0) {
+      fmsFilter.$and = andConditions.map((cond) => {
+        // map assignedBy → updatedBy for FMS
+        if (cond.$or) {
+          return {
+            $or: cond.$or.map((c) => ({
+              ...(c.assignedBy && { updatedBy: c.assignedBy }),
+              ...(c.assignedTo && { assignedTo: c.assignedTo }),
+            })),
+          };
+        }
+        return cond;
+      });
+    }
+
+    // 👉 Apply DATE FILTER (use plannedStartDate)
+    if (dateFilter.createdAt) {
+      fmsFilter.plannedStartDate = dateFilter.createdAt;
+    }
+
+    // 👉 FETCH FMS TASKS
+    const fmsTasks = await FmsInstanceTask.find(fmsFilter)
+      .populate("assignedTo", "name email department")
+      .populate("updatedBy", "name email")
+      .populate("departmentOfAssignToUser", "name")
+      .sort({ createdAt: -1 });
+    const mappedFmsTasks = fmsTasks.map((task) => ({
+      _id: task._id,
+      TaskId: task.taskId,
+      title: task.description,
+      description: task.description,
+      startDate: task.plannedStartDate,
+      dueDate: task.plannedDueDate,
+      status: task.status,
+      assignedTo: task.assignedTo,
+      assignedBy: task.updatedBy || null,
+      departmentOfAssignToUser: task.departmentOfAssignToUser,
+      taskType: "FmsInstanceTask",
+      createdAt: task.createdAt,
+    }));
+    const allTasks = [...tasks, ...mappedFmsTasks];
     // 👉 STATUS COUNTS
     // 👉 STATUS COUNTS (PURE JS - SAFE)
     const statusCounts = {
-      Pending: tasks.filter((t) => t.status === "Pending").length,
-      Completed: tasks.filter((t) => t.status === "Completed").length,
-      Delayed: tasks.filter((t) => t.status === "Delayed").length,
-      Upcoming: tasks.filter((t) => t.status === "Upcoming").length,
-      Overdue: tasks.filter((t) => t.status === "Overdue").length,
+      Pending: allTasks.filter((t) => t.status === "Pending").length,
+      Completed: allTasks.filter((t) => t.status === "Completed").length,
+      Delayed: allTasks.filter((t) => t.status === "Delayed").length,
+      Upcoming: allTasks.filter((t) => t.status === "Upcoming").length,
+      Overdue: allTasks.filter((t) => t.status === "Overdue").length,
     };
 
     // console.log("TOTAL TASKS:", tasks.length);
@@ -802,9 +847,9 @@ export const getAllTasksWithStats = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      total: tasks.length,
-      counts: statusCounts,
-      data: tasks,
+      total: allTasks.length, // ✅ now includes FMS
+      counts: statusCounts, // ✅ includes FMS
+      data: allTasks,
     });
   } catch (error) {
     console.error(error);
@@ -976,7 +1021,7 @@ export const getAllTasksWithStats = async (req, res) => {
 //     });
 //   }
 // };
-//**for my task listing */
+//**for my task listing - FIXED taskType filtering */
 export const filterTasks = handleAsync(async (req, res) => {
   const {
     userId,
@@ -995,7 +1040,6 @@ export const filterTasks = handleAsync(async (req, res) => {
   const skip = (page - 1) * limit;
 
   const { stat, taskCategory, status, taskType } = filters;
-
   // Validate dates if provided
   // if (startDate && !startDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {
   //   console.log(startDate)
@@ -1157,10 +1201,10 @@ export const filterTasks = handleAsync(async (req, res) => {
       .populate("assignedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
       .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
+      .sort({ createdAt: -1 }),
 
+    // .skip(skip)
+    // .limit(limit)
     Task.countDocuments(query), // 🔥 Count only visible
   ]);
   //**get recurring task in upcoming section  */
@@ -1290,7 +1334,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (status && status !== "all") fmsQuery.status = status;
 
   // TASK TYPE (ignore for FMS)
-  delete query.taskType;
+  // delete query.taskType;
 
   // DATE RANGE
   if (startDate || endDate) {
@@ -1358,15 +1402,17 @@ export const filterTasks = handleAsync(async (req, res) => {
       .populate("updatedBy", "name email") // use as assignedBy fallback
       .populate("departmentOfAssignToUser", "name")
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
+      .lean(),
+    // .skip(skip)
+    // .limit(limit)
     FmsInstanceTask.countDocuments(fmsQuery),
   ]);
   const mappedFmsTasks = fmsTasks.map((task) => ({
+    ...task,
     _id: task._id,
     TaskId: task.taskId,
 
-    title: task.description, // or map from template if needed
+    title: task.description,
     description: task.description,
 
     startDate: task.plannedStartDate,
@@ -1375,11 +1421,11 @@ export const filterTasks = handleAsync(async (req, res) => {
     status: task.status,
 
     assignedTo: task.assignedTo,
-    assignedBy: task.updatedBy || null, // fallback
+    assignedBy: task.updatedBy || null,
 
     departmentOfAssignToUser: task.departmentOfAssignToUser,
 
-    taskType: "FmsInstanceTask", // 🔥 important for UI पहचान
+    taskType: "FmsInstanceTask",
 
     isVisible: task.isVisible,
 
@@ -1387,16 +1433,32 @@ export const filterTasks = handleAsync(async (req, res) => {
 
     createdAt: task.createdAt,
   }));
-  const allTasks = [...tasks, ...mappedFmsTasks];
-  const actualTotal = total + fmsTotal;
+  let allTasks = [];
+  if (taskType === "FmsInstanceTask") {
+    allTasks = [...mappedFmsTasks];
+  }
+
+  // ✅ CASE 2: Only Normal Tasks (Delegation + Recurring created ones)
+  else if (taskType) {
+    allTasks = [...tasks];
+  }
+
+  // ✅ CASE 3: No filter → show ALL
+  else {
+    allTasks = [...tasks, ...mappedFmsTasks];
+  }
+  // const actualTotal = total + fmsTotal;
+  const totalTasks = allTasks.length;
+
+  const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
   res.json({
     success: true,
     // data: tasks,
-    data: allTasks,
+    data: paginatedTasks,
     upcomingRecurringTasks: finalVirtualRecurring,
-    totalTasks: actualTotal,
+    totalTasks: totalTasks,
     currentPage: page,
-    totalPages: Math.ceil(actualTotal / limit),
+    totalPages: Math.ceil(totalTasks / limit),
   });
 });
 //**get my task stats */
@@ -1501,16 +1563,70 @@ export const getTaskStats = handleAsync(async (req, res) => {
     }),
   ]);
 
+  //**FMS Stats */
+  const fmsQuery = {};
+
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // visibility same as tasks
+  // fmsQuery.isVisible = true;
+  const [fmsTotal, fmsCompleted, fmsPending, fmsOverdue] = await Promise.all([
+    // TOTAL
+    FmsInstanceTask.countDocuments(fmsQuery),
+
+    // COMPLETED
+    FmsInstanceTask.countDocuments({
+      ...fmsQuery,
+      status: "Completed",
+    }),
+
+    // PENDING
+    FmsInstanceTask.countDocuments({
+      ...fmsQuery,
+      status: "Pending",
+    }),
+
+    // OVERDUE
+    FmsInstanceTask.countDocuments({
+      ...fmsQuery,
+      plannedDueDate: { $lt: todayStart },
+      status: { $ne: "Completed" },
+    }),
+  ]);
   // =========================================================
   // 📤 RESPONSE
   // =========================================================
+  // res.json({
+  //   success: true,
+  //   stats: {
+  //     total,
+  //     overdue,
+  //     pending,
+  //     completed,
+  //   },
+  // });
   res.json({
     success: true,
     stats: {
-      total,
-      overdue,
-      pending,
-      completed,
+      total: total + fmsTotal,
+      completed: completed + fmsCompleted,
+      pending: pending + fmsPending,
+      overdue: overdue + fmsOverdue,
     },
   });
 });
@@ -1743,11 +1859,138 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   if (andConditions.length > 0) {
     query.$and = andConditions;
   }
+  // =========================
+  // 🧩 FMS QUERY (NEW)
+  // =========================
+  const fmsQuery = {};
+  const fmsAndConditions = [];
 
+  // 👥 ROLE BASED ACCESS (SAME LOGIC)
+  if (role === "Admin" || role === "Owner") {
+    if (selectedDoer && selectedDoer !== "all") {
+      fmsAndConditions.push({ assignedTo: selectedDoer });
+    }
+
+    if (selectedManager && selectedManager !== "all") {
+      fmsAndConditions.push({
+        $or: [{ updatedBy: selectedManager }, { assignedTo: selectedManager }],
+      });
+    }
+
+    if (selectedSrManager && selectedSrManager !== "all") {
+      fmsAndConditions.push({
+        $or: [
+          { updatedBy: selectedSrManager },
+          { assignedTo: selectedSrManager },
+        ],
+      });
+    }
+  } else if (role === "Sr. Manager") {
+    const managers = await User.find({
+      reportingManager: userId,
+    }).select("_id");
+
+    const managerIds = managers.map((m) => m._id);
+
+    const members = await User.find({
+      reportingManager: { $in: managerIds },
+    }).select("_id");
+
+    const memberIds = members.map((m) => m._id);
+
+    const allIds = [userId, ...managerIds, ...memberIds];
+
+    fmsAndConditions.push({
+      assignedTo: { $in: allIds },
+    });
+  } else if (role === "Manager") {
+    const members = await User.find({
+      reportingManager: userId,
+    }).select("_id");
+
+    const memberIds = members.map((m) => m._id);
+
+    const allIds = [userId, ...memberIds];
+
+    fmsAndConditions.push({
+      assignedTo: { $in: allIds },
+    });
+  } else {
+    fmsAndConditions.push({ assignedTo: userId });
+  }
+
+  // 🔍 SEARCH
+  if (search) {
+    fmsAndConditions.push({
+      $or: [
+        { description: { $regex: search, $options: "i" } },
+        { taskId: search },
+      ],
+    });
+  }
+
+  // 📊 STATUS
+  if (status && status !== "all") {
+    fmsAndConditions.push({ status });
+  }
+
+  // 📊 STAT FILTER
+  if (stat === "overdue") {
+    fmsAndConditions.push({
+      plannedDueDate: { $lt: todayStart },
+    });
+    fmsAndConditions.push({
+      status: { $ne: "Completed" },
+    });
+  }
+
+  if (stat === "dueToday") {
+    fmsAndConditions.push({
+      plannedDueDate: { $gte: todayStart, $lte: todayEnd },
+    });
+  }
+
+  // 📌 TAB FILTER
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      fmsAndConditions.push({
+        status: { $in: ["Pending", "Delayed", "Overdue"] },
+      });
+
+      fmsAndConditions.push({
+        plannedStartDate: { $gte: todayStart, $lte: todayEnd },
+      });
+    }
+
+    if (taskCategory === "upcoming") {
+      fmsAndConditions.push({ status: "Upcoming" });
+    }
+
+    if (taskCategory === "completed") {
+      fmsAndConditions.push({ status: "Completed" });
+    }
+  }
+
+  // FINAL MERGE
+  if (fmsAndConditions.length > 0) {
+    fmsQuery.$and = fmsAndConditions;
+  }
   // =========================
   // 🚀 EXECUTE
   // =========================
-  const [tasks, total] = await Promise.all([
+  // const [tasks, total] = await Promise.all([
+  //   Task.find(query)
+  //     .populate("assignedTo", "name email department")
+  //     .populate("assignedBy", "name email")
+  //     .populate("departmentOfAssignToUser", "name")
+  //     .populate("dependencyConfig.taskDependent", "title")
+  //     .sort({ createdAt: -1 })
+  //     .skip(skip)
+  //     .limit(limit),
+
+  //   Task.countDocuments(query),
+  // ]);
+  const [tasks, total, fmsTasks, fmsTotal] = await Promise.all([
     Task.find(query)
       .populate("assignedTo", "name email department")
       .populate("assignedBy", "name email")
@@ -1758,15 +2001,68 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
       .limit(limit),
 
     Task.countDocuments(query),
+
+    FmsInstanceTask.find(fmsQuery)
+      .populate("assignedTo", "name email department assignShift")
+      .populate("updatedBy", "name email")
+      .populate("departmentOfAssignToUser", "name")
+      .sort({ createdAt: -1 })
+      .lean(),
+
+    FmsInstanceTask.countDocuments(fmsQuery),
   ]);
+  const mappedFmsTasks = fmsTasks.map((task) => ({
+    ...task,
+    _id: task._id,
+    TaskId: task.taskId,
+
+    title: task.description,
+    description: task.description,
+
+    startDate: task.plannedStartDate,
+    dueDate: task.plannedDueDate,
+
+    status: task.status,
+
+    assignedTo: task.assignedTo,
+    assignedBy: task.updatedBy || null,
+
+    departmentOfAssignToUser: task.departmentOfAssignToUser,
+
+    taskType: "FmsInstanceTask",
+
+    isVisible: task.isVisible,
+
+    checklist: task.checklist || [],
+
+    createdAt: task.createdAt,
+  }));
+  let allTasks = [];
+
+  if (taskType === "FmsInstanceTask") {
+    allTasks = [...mappedFmsTasks];
+  } else if (taskType) {
+    allTasks = [...tasks];
+  } else {
+    allTasks = [...tasks, ...mappedFmsTasks];
+  }
+
+  const totalTasks = allTasks.length;
 
   res.json({
     success: true,
-    data: tasks,
-    totalTasks: total,
+    data: allTasks,
+    totalTasks,
     currentPage: page,
-    totalPages: Math.ceil(total / limit),
+    totalPages: Math.ceil(totalTasks / limit),
   });
+  // res.json({
+  //   success: true,
+  //   data: tasks,
+  //   totalTasks: total,
+  //   currentPage: page,
+  //   totalPages: Math.ceil(total / limit),
+  // });
 });
 // ---------------------------------------------------------
 // GET ALL TASKS
@@ -2050,6 +2346,20 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   };
 
   if (completeStatus) {
+    if (existingTask.checklist && existingTask.checklist.length > 0) {
+      const allChecklistDone = existingTask.checklist.every(
+        (item) => item?.isCompleted === true,
+      );
+
+      if (!allChecklistDone) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Please complete all checklist items before marking task complete",
+        });
+      }
+    }
+
     updateData.status = "Completed";
     updateData.taskDoneBy = req.user._id;
     updateData.completedAt = new Date();
@@ -2976,6 +3286,67 @@ export const importTasks = handleAsync(async (req, res, next) => {
 // ---------------------------------------------------------
 // FINAL MERGED UPDATE TASK CONTROLLER
 // ---------------------------------------------------------
+// Simple checklist toggle - only updates single item true/false
+export const updateChecklistItem = handleAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const { index, completed } = req.body;
+
+  const idx = parseInt(index);
+  if (isNaN(idx) || idx < 0) {
+    return next(new AppError("Invalid checklist index", 400));
+  }
+  const isCompleted = completed === true || completed === "true";
+
+  const task = await Task.findById(id);
+  if (!task) {
+    return next(new AppError("Task not found", 404));
+  }
+
+  if (
+    !task.checklist ||
+    !Array.isArray(task.checklist) ||
+    task.checklist.length <= idx
+  ) {
+    return next(new AppError("Invalid checklist index", 400));
+  }
+
+  const oldData = task.toObject();
+
+  task.checklist[idx].isCompleted = isCompleted;
+  task.updatedBy = req.user._id;
+  task.updatedAt = new Date();
+
+  const updatedTask = await task.save();
+
+  await createLog({
+    action: "UPDATE_CHECKLIST",
+    module: "TASK",
+    documentId: task._id,
+    performedBy: req.user._id,
+    oldData,
+    newData: updatedTask,
+    message: `Checklist item ${idx} updated to ${isCompleted ? "completed" : "pending"} | Task: ${task.title}`,
+  });
+
+  const progress =
+    task.checklist.length > 0
+      ? Math.round(
+          (task.checklist.filter((item) => item.isCompleted).length /
+            task.checklist.length) *
+            100,
+        )
+      : 100;
+
+  res.status(200).json({
+    success: true,
+    message: `Checklist item ${idx} updated`,
+    data: {
+      checklist: task.checklist,
+      progress: `${progress}%`,
+      taskId: task.TaskId,
+    },
+  });
+});
 export const updateTask = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   let shouldRecalculateStatus = false;

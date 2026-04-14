@@ -118,11 +118,15 @@ export const generateRecurringFmsTasks = async () => {
           user.assignShift._id,
         );
         const shiftEnd = snapToShiftTime(shiftStart, user.assignShift, false);
-
+        const count = await FmsInstanceTask.countDocuments({
+          fmsInstanceId: instance._id,
+          fmsTaskId: task._id,
+        });
+        const instanceTaskId = `${task.taskId}-R${count + 1}`;
         await new FmsInstanceTask({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
-          taskId: task.taskId,
+          taskId: instanceTaskId,
           description: task.description,
           departmentOfAssignToUser: task.departmentOfAssignToUser,
           assignedTo: task.assignedTo,
@@ -131,8 +135,8 @@ export const generateRecurringFmsTasks = async () => {
           plannedDueDate: shiftEnd,
           status: "Upcoming",
           isVisible: false,
-          checklist:task.checklist||[],
-          createdForm:task.createdForm||[]
+          checklist: task.checklist || [],
+          createdForm: task.createdForm || [],
         }).save();
 
         createdCount++;
@@ -150,8 +154,8 @@ export const generateRecurringFmsTasks = async () => {
 
 const startRecurringFmsTaskJob = () => {
   // // Test every 30s
-  cron.schedule('*/300 * * * * *', generateRecurringFmsTasks, {
-    timezone: "Asia/Kolkata"
+  cron.schedule("*/30 * * * * *", generateRecurringFmsTasks, {
+    timezone: "Asia/Kolkata",
   });
   console.log("🔄 FMS Cron: Every 30s (TEST)");
 

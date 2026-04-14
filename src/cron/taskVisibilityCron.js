@@ -73,9 +73,8 @@ const makeTasksVisible = async () => {
                 $lte: shiftEndToday,
               },
             },
-            // ✅ Upcoming tasks (no date restriction)
             {
-              status: "Upcoming",
+              status: { $in: ["Pending", "Delayed", "Overdue", "Upcoming"] },
             },
           ],
         }).lean();
@@ -170,9 +169,9 @@ const hideCompletedShiftTasks = async () => {
 // Schedule: Every minute during working hours (more efficient than 00:01)
 const startVisibilityCron = () => {
   // Check every 5 minutes during 9AM-6PM IST
-  cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
-  // cron.schedule('*/5 * * * * *', makeTasksVisible, {
-  // cron.schedule("*/3 * * * * *", makeTasksVisible, {
+  // cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
+  cron.schedule("*/5 * * * * *", makeTasksVisible, {
+    // cron.schedule("*/3 * * * * *", makeTasksVisible, {
     timezone: "Asia/Kolkata",
   });
 

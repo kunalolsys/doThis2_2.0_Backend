@@ -14,6 +14,7 @@ import {
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
 import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
+import { createLog } from "./logController.js";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -34,6 +35,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     "srManager",
   ]);
   if (!template) return next(new AppError("Template not found", 404));
+  const taskCount = await FmsTask.countDocuments({ fmsTemplateId: templateId });
+  if (taskCount === 0) {
+    return next(
+      new AppError("Cannot launch FMS: No tasks found in this template", 400),
+    );
+  }
   // 🔒 CHECK BEFORE CREATING INSTANCE
   const existingInstance = await FmsInstance.findOne({
     fmsTemplateId: templateId,
@@ -259,6 +266,7 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
 //**COMPLETE TASK */
 export const completeInstanceTask = handleAsync(async (req, res, next) => {
   const { id: instanceId, taskId: taskIdParam } = req.params;
+  const { status } = req.body;
   const task = await FmsInstanceTask.findOne({
     fmsInstanceId: instanceId,
     taskId: taskIdParam,
@@ -343,7 +351,176 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
   });
 });
+//**UPDATE FORMDATA FOR TASK */
+export const updateFormData = async (req, res, next) => {
+  try {
+    const { id, taskId } = req.params;
+    const userId = req.cookies.userId;
+    const incomingData = req.body; // { fieldName: value }
 
+    const task = await FmsInstanceTask.findOne({
+      fmsInstanceId: id,
+      taskId,
+    });
+
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: "Task not found",
+      });
+    }
+
+    // ✅ Validate fields against createdForm
+    const createdForm = task.createdForm || [];
+
+    const updatedFormData = { ...(task.formData || {}) };
+
+    for (const field of createdForm) {
+      const value = incomingData[field.fieldName];
+
+      if (value !== undefined) {
+        // ✅ Basic type validation
+        switch (field.fieldType) {
+          case "number":
+            if (isNaN(value)) {
+              return res.status(400).json({
+                success: false,
+                message: `${field.fieldName} must be a number`,
+              });
+            }
+            break;
+
+          case "email":
+            if (!/^\S+@\S+\.\S+$/.test(value)) {
+              return res.status(400).json({
+                success: false,
+                message: `Invalid email for ${field.fieldName}`,
+              });
+            }
+            break;
+
+          case "url":
+            try {
+              new URL(value);
+            } catch {
+              return res.status(400).json({
+                success: false,
+                message: `Invalid URL for ${field.fieldName}`,
+              });
+            }
+            break;
+
+          default:
+            break;
+        }
+
+        updatedFormData[field.fieldName] = value;
+
+        // ✅ Mark field as completed
+        field.completed = true;
+      }
+    }
+
+    // ❗ Check mandatory fields
+    for (const field of createdForm) {
+      if (
+        field.isMandatory &&
+        (updatedFormData[field.fieldName] === undefined ||
+          updatedFormData[field.fieldName] === "")
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: `${field.fieldName} is required`,
+        });
+      }
+    }
+
+    // ✅ Save updates
+    task.formData = updatedFormData;
+    task.updatedBy = userId;
+    task.markModified("createdForm"); // important for nested update
+    task.markModified("formData");
+
+    await task.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Form data updated successfully",
+      data: {
+        taskId: task.taskId,
+        formData: task.formData,
+        createdForm: task.createdForm,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+//**UPDATE CHECKLIST FOR TASK */
+export const updateChecklistItem = handleAsync(async (req, res, next) => {
+  const { id, taskId } = req.params;
+  const userId = req.cookies.userId;
+  const { index, completed } = req.body;
+
+  const task = await FmsInstanceTask.findOne({
+    fmsInstanceId: id,
+    taskId,
+  });
+  const idx = parseInt(index);
+  if (isNaN(idx) || idx < 0) {
+    return next(new AppError("Invalid checklist index", 400));
+  }
+  const isCompleted = completed === true || completed === "true";
+
+  if (!task) {
+    return next(new AppError("Task not found", 404));
+  }
+
+  if (
+    !task.checklist ||
+    !Array.isArray(task.checklist) ||
+    task.checklist.length <= idx
+  ) {
+    return next(new AppError("Invalid checklist index", 400));
+  }
+
+  const oldData = task.toObject();
+
+  task.checklist[idx].completed = isCompleted;
+  task.updatedBy = userId;
+  task.updatedAt = new Date();
+
+  const updatedTask = await task.save();
+
+  await createLog({
+    action: "UPDATE_CHECKLIST",
+    module: "TASK",
+    documentId: task._id,
+    performedBy: userId,
+    oldData,
+    newData: updatedTask,
+    message: `Checklist item ${idx} updated to ${isCompleted ? "completed" : "pending"} | Task: ${task.title}`,
+  });
+
+  const progress =
+    task.checklist.length > 0
+      ? Math.round(
+          (task.checklist.filter((item) => item.completed).length /
+            task.checklist.length) *
+            100,
+        )
+      : 100;
+
+  res.status(200).json({
+    success: true,
+    message: `Checklist item ${idx} updated`,
+    data: {
+      checklist: task.checklist,
+      progress: `${progress}%`,
+      taskId: task.taskId,
+    },
+  });
+});
 //**STOP FMS INSTANCE */
 export const stopFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
