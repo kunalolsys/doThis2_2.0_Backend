@@ -38,14 +38,9 @@ router.patch(
 router.patch("/instances/:id/tasks/:taskId/checklist"
 , authenticateJWT, fmsInstanceController.updateChecklistItem);
 
-// router.patch('/instances/:id/tasks/:taskId/checklist/:index',  fmsInstanceController.updateChecklistItem);
-// router.patch('/instances/:id/tasks/:taskId/formData',  fmsInstanceController.updateFormData);
-// router.patch('/instances/:id/tasks/:taskId/status',  fmsInstanceController.updateTaskStatus);
-
-// NEW: Instance Control + History
 router.put('/instances/:id/stop', authenticateJWT, fmsInstanceController.stopFmsInstance);
-// router.get('/instances/:id/history',  fmsInstanceHistoryController.getInstanceHistory);
-// router.get('/instances/:id/tasks/:taskId/history', fmsInstanceHistoryController.getInstanceTaskHistory);
+router.put('/instances/:id/hold', authenticateJWT, fmsInstanceController.holdFmsInstance);
+router.put('/instances/:id/resume', authenticateJWT, fmsInstanceController.resumeFmsInstance);
 
 export default router;
 

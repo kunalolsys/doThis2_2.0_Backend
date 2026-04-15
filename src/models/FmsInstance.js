@@ -14,9 +14,22 @@ const FmsInstanceSchema = new mongoose.Schema(
     instanceName: { type: String, required: true },
     startDate: { type: Date, required: true },
     endDate: Date,
+    fmsDuration: {
+      type: String,
+      enum: ["Timeless", "Fixed Period"],
+      required: true,
+    },
     status: {
       type: String,
-      enum: ["Upcoming", "Ongoing", "Completed", "Cancelled", "Stopped"],
+      enum: [
+        "InProcess",
+        "Upcoming",
+        "Ongoing",
+        "Completed",
+        "Cancelled",
+        "Onhold",
+        "Stopped",
+      ],
       default: "Upcoming",
     },
     // FmsInstanceSchema
@@ -26,15 +39,6 @@ const FmsInstanceSchema = new mongoose.Schema(
       rate: { type: Number, default: 0 },
       lastUpdated: Date,
     },
-    history: [
-      {
-        event: String, // 'launched', 'taskComplete', 'completed', 'cancelled', 'stopped'
-        taskId: String,
-        timestamp: Date,
-        reason: String,
-        byUser: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      },
-    ],
     manager: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

@@ -2,8 +2,9 @@ import cron from "node-cron";
 import { isBefore, isAfter, differenceInCalendarDays, addDays } from "date-fns";
 import Task from "../models/Task.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js"; // 👈 ADDED
+import FmsInstance from "../models/FmsInstance.js";
 
-const SCHEDULE = "*/50 * * * * *";
+const SCHEDULE = "*/5 * * * * *";
 
 function resolveDueDate(task) {
   if (task.plannedDueDate) return task.plannedDueDate; // FMS Priority
@@ -59,12 +60,33 @@ async function updateTaskStatuses() {
         regularUpdates.push({ id: t._id, status: newStatus });
       }
     }
+    const blockedInstances = await FmsInstance.find({
+      status: { $in: ["Onhold", "Stopped"] },
+    });
 
+    const blockedInstanceIds = new Set(
+      blockedInstances.map((i) => i._id.toString()),
+    );
     // 2️⃣ FMS INSTANCE TASKS (NEW!)
     const fmsTasks = await FmsInstanceTask.find({}).lean();
     const fmsUpdates = [];
 
     for (const t of fmsTasks) {
+      const instanceIdStr = t.fmsInstanceId.toString();
+
+      if (blockedInstanceIds.has(instanceIdStr)) {
+        const parentInstance = blockedInstances.find(
+          (i) => i._id.toString() === instanceIdStr,
+        );
+
+        const newStatus =
+          parentInstance.status === "Stopped" ? "Stopped" : "Onhold";
+        if (t.status !== newStatus) {
+          fmsUpdates.push({ id: t._id, status: newStatus });
+        }
+
+        continue; // ⛔ skip normal logic
+      }
       // Skip already completed/cancelled
       if (t.status === "Completed" || t.status === "Cancelled") continue;
 

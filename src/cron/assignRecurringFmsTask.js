@@ -66,11 +66,14 @@ export const generateRecurringFmsTasks = async () => {
   console.log("\n🚀 FMS CRON -", new Date().toLocaleString("en-IN"));
 
   try {
+    // const instances = await FmsInstance.find({
+    //   status: { $in: ["Ongoing", "Upcoming","InProcess"] },
+    //   isStopped: false,
+    // }).populate("fmsTemplateId");
     const instances = await FmsInstance.find({
-      status: { $in: ["Ongoing", "Upcoming"] },
+      status: { $nin: ["Onhold", "Stopped", "Completed", "Cancelled"] },
       isStopped: false,
     }).populate("fmsTemplateId");
-
     if (instances.length === 0) {
       console.log("ℹ️ No active FMS instances");
       return;
@@ -80,6 +83,14 @@ export const generateRecurringFmsTasks = async () => {
     let createdCount = 0;
 
     for (const instance of instances) {
+      if (
+        instance.status === "Onhold" ||
+        instance.status === "Stopped" ||
+        instance.isStopped
+      ) {
+        console.log(`⛔ Skipping ${instance.instanceId} (${instance.status})`);
+        continue;
+      }
       console.log(`\n📂 FMS: ${instance.instanceId}`);
 
       const tasks = await FmsTask.find({
@@ -154,7 +165,7 @@ export const generateRecurringFmsTasks = async () => {
 
 const startRecurringFmsTaskJob = () => {
   // // Test every 30s
-  cron.schedule("*/30 * * * * *", generateRecurringFmsTasks, {
+  cron.schedule("*/3 * * * * *", generateRecurringFmsTasks, {
     timezone: "Asia/Kolkata",
   });
   console.log("🔄 FMS Cron: Every 30s (TEST)");

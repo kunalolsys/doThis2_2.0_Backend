@@ -51,6 +51,16 @@ const FmsTemplateSchema = new mongoose.Schema(
         ref: "FmsTask",
       },
     ], // Bidirectional ref to tasks
+
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    holdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    resumedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    stoppedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    deleteReason: { type: String, default: null },
+    fmsHoldReason: { type: String, default: null },
+    fmsStoppedReason: { type: String, default: null },
   },
   { timestamps: true },
 );

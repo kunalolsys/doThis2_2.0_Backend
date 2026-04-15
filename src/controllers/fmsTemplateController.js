@@ -5,6 +5,7 @@ import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
 import { createLog } from "./logController.js";
 import FmsInstance from "../models/FmsInstance.js";
+import FmsInstanceTask from "../models/FmsInstanceTask.js";
 
 export const createTemplate = handleAsync(async (req, res, next) => {
   const {
@@ -69,7 +70,7 @@ export const getTemplates = handleAsync(async (req, res) => {
   const { page = 1, limit = 10, search, managerId, fmsDuration } = req.body;
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
-  const filter = {};
+  const filter = { isDeleted: false };
   if (search) {
     filter.templateName = { $regex: search, $options: "i" };
   }
@@ -213,9 +214,12 @@ export const updateTemplate = handleAsync(async (req, res, next) => {
 
 export const deleteTemplate = handleAsync(async (req, res, next) => {
   const { force } = req.query;
-  const template = await FmsTemplate.findById(req.params.id);
-  if (!template) return next(new AppError("Template not found", 404));
+  const { reason } = req.body;
 
+  const template = await FmsTemplate.findById(req.params.id);
+  if (!template || template.isDeleted) {
+    return next(new AppError("Template not found", 404));
+  }
   // 1. Check if template was launched
   if (template.isLaunched && force !== "true") {
     return next(
@@ -229,7 +233,7 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
   // 2. Check active instances regardless
   const activeInstances = await FmsInstance.find({
     fmsTemplateId: template._id,
-    status: { $nin: ["Cancelled", "Completed", "Stopped"] },
+    status: { $nin: ["Cancelled", "Completed", "Stopped", "Onhold"] },
   });
 
   if (activeInstances.length > 0 && force !== "true") {
@@ -242,20 +246,47 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
   }
 
   // 3. Existing task check
-  if (force !== "true") {
-    const taskCount = await FmsTask.countDocuments({
-      fmsTemplateId: template._id,
-    });
-    if (taskCount > 0) {
-      return next(
-        new AppError(
-          `Cannot delete: ${taskCount} tasks exist. Use ?force=true`,
-          400,
-        ),
-      );
-    }
-  }
+  // if (force !== "true") {
+  //   const taskCount = await FmsTask.countDocuments({
+  //     fmsTemplateId: template._id,
+  //   });
+  //   if (taskCount > 0) {
+  //     return next(
+  //       new AppError(
+  //         `Cannot delete: ${taskCount} tasks exist. Use ?force=true`,
+  //         400,
+  //       ),
+  //     );
+  //   }
+  // }
+  // 2️⃣ SOFT DELETE TEMPLATE
+  template.isDeleted = true;
+  template.deletedAt = new Date();
+  template.deletedBy = req.cookies.userId;
+  template.deleteReason = reason || "No reason provided";
+  await template.save();
 
+  // 3️⃣ DELETE ALL RELATED DATA (CASCADE)
+  const instances = await FmsInstance.find({
+    fmsTemplateId: template._id,
+  }).select("_id");
+
+  const instanceIds = instances.map((i) => i._id);
+
+  // 🔥 Delete instance tasks
+  await FmsInstanceTask.deleteMany({
+    fmsInstanceId: { $in: instanceIds },
+  });
+
+  // 🔥 Delete instances
+  await FmsInstance.deleteMany({
+    _id: { $in: instanceIds },
+  });
+
+  // 🔥 Delete template tasks
+  await FmsTask.deleteMany({
+    fmsTemplateId: template._id,
+  });
   // Log & delete
   await createLog({
     action: "DELETE_TEMPLATE",
@@ -263,9 +294,10 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
     performedBy: req.cookies.userId,
     documentId: template._id,
     oldData: template,
+    message: `Template deleted. Reason: ${reason || "N/A"}`,
   });
 
-  await FmsTemplate.findByIdAndDelete(req.params.id);
+  // await FmsTemplate.findByIdAndDelete(req.params.id);
   res.json({ success: true, message: "Template deleted successfully" });
 });
 

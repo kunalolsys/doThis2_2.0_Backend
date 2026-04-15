@@ -15,6 +15,8 @@ import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
 import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
 import { createLog } from "./logController.js";
+import { updateTaskStatuses } from "../cron/taskStatusUpdate.js";
+import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -76,6 +78,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     manager: template.manager._id,
     srManager: template.srManager?._id || null,
     createdBy: userId,
+    fmsDuration: template.fmsDuration,
     status,
   });
 
@@ -287,7 +290,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   task.status = "Completed";
   task.updatedBy = req.cookies.userId;
   await task.save();
-
+  await updateInstanceProgress();
   // 🔥 FIND CHILDREN (reverse: who depends ON this parent)
   const children = await FmsInstanceTask.find({
     // fmsInstanceId: instanceId,
@@ -521,28 +524,95 @@ export const updateChecklistItem = handleAsync(async (req, res, next) => {
     },
   });
 });
-//**STOP FMS INSTANCE */
-export const stopFmsInstance = handleAsync(async (req, res) => {
+//**HOLD FMS INSTANCE */
+export const holdFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
-  instance.status = "Stopped";
+  const { reason } = req.body;
+  const currentUser = req.cookies.userId;
+  if (!instance) {
+    return res.status(404).json({ message: "Instance not found" });
+  }
+  console.log(instance);
+  instance.status = "Onhold";
   instance.isStopped = true;
-  instance.history.push({
-    event: "stopped",
-    byUser: req.cookies.userId,
-    reason: req.body.reason,
-  });
 
-  // Optional: cancel pending tasks
+  // Only pause active tasks (not completed)
+  await instance.save();
   await FmsInstanceTask.updateMany(
     {
       fmsInstanceId: instance._id,
-      // status: { $in: ['Upcoming', 'Pending'] }
+      // status: { $nin: ["Completed", "Cancelled"] },
     },
-    { status: "Cancelled", isVisible: false },
+    { status: "Onhold" },
   );
+  await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
+    fmsHoldReason: reason || "Manual stop",
+    holdBy: currentUser,
+  });
+  res.json({ success: true, message: "FMS put on hold" });
+});
+//**RESUME FMS INSTANCE */
+export const resumeFmsInstance = handleAsync(async (req, res) => {
+  const instance = await FmsInstance.findById(req.params.id);
+  const currentUser = req.cookies.userId;
+
+  if (!instance) {
+    return res.status(404).json({ message: "Instance not found" });
+  }
+  const newStatus = calculateInstanceStatus(
+    instance.startDate,
+    instance.endDate,
+  );
+  instance.status = newStatus;
+  instance.isStopped = false;
+
+  // Restore paused tasks
+  await instance.save();
+  await FmsInstanceTask.updateMany(
+    {
+      fmsInstanceId: instance._id,
+      status: "Onhold",
+    },
+    {
+      status: "Pending",
+    },
+  );
+  await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
+    resumedBy: currentUser,
+  });
+  await updateTaskStatuses();
+  await updateInstanceProgress();
+
+  res.json({ success: true, message: "FMS resumed successfully" });
+});
+//**STOP FMS INSTANCE */
+export const stopFmsInstance = handleAsync(async (req, res) => {
+  const instance = await FmsInstance.findById(req.params.id);
+  const { reason } = req.body;
+  const currentUser = req.cookies.userId;
+  if (!instance) {
+    return res.status(404).json({ message: "Instance not found" });
+  }
+
+  instance.status = "Stopped";
+  instance.isStopped = true;
 
   await instance.save();
-  res.json({ success: true });
+  // Stop all non-completed tasks
+  await FmsInstanceTask.updateMany(
+    {
+      fmsInstanceId: instance._id,
+      // status: { $nin: ["Completed", "Cancelled"] },
+    },
+    {
+      status: "Stopped",
+    },
+  );
+  await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
+    fmsStoppedReason: reason || "Manual stop",
+    stoppedBy: currentUser,
+  });
+  res.json({ success: true, message: "FMS stopped permanently" });
 });
 
 //**GET LAUNCHED FMS */
@@ -580,12 +650,16 @@ export const getFmsInstances = handleAsync(async (req, res) => {
   // Status filter (upcoming, ongoing, completed)
   if (
     status &&
-    ["upcoming", "ongoing", "completed"].includes(status.toLowerCase())
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
+      status.toLowerCase(),
+    )
   ) {
     const statusMap = {
       upcoming: "Upcoming",
-      ongoing: "Ongoing",
-      completed: { $in: ["Completed", "Stopped", "Cancelled"] },
+      ongoing: { $in: ["Ongoing", "InProcess"] },
+      completed: { $in: ["Completed", "Cancelled"] },
+      onhold: { $in: ["Onhold"] },
+      stopped: { $in: ["Stopped"] },
     };
     query.status = statusMap[status.toLowerCase()];
   }
