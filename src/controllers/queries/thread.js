@@ -9,7 +9,7 @@ export const sendMessage = async (req, res) => {
 
   const message = await Messages.create({
     conversationId,
-    sender: req.user._id, // ✅ JWT user
+    sender:  req.cookies.userId, // ✅ JWT user
     text,
     parentMessage: parentMessage || null,
     queryId: queryId || null, // Link to query
@@ -27,16 +27,16 @@ export const sendMessage = async (req, res) => {
   // Notify participants except sender
   const conversation = await Conversation.findById(conversationId).populate('participants');
   const receivers = conversation.participants.filter(
-    p => p._id.toString() !== req.user._id.toString()
+    p => p._id.toString() !==  req.cookies.userId.toString()
   );
 
   for (const user of receivers) {
     await Notifications.create({
       user: user._id,
-      fromUser: req.user._id,
+      fromUser:  req.cookies.userId,
       type: "MESSAGE",
       title: "New Message in Thread",
-      description: text.slice(0, 100) + '...',
+      description: text,
       relatedId: message._id,
       taskId: conversation.taskId,
       conversationId,
@@ -44,7 +44,7 @@ export const sendMessage = async (req, res) => {
 
     io.to(user._id.toString()).emit("notification", {
       title: "New Message",
-      description: text.slice(0, 50) + '...',
+      description: text,
       type: "message"
     });
   }
@@ -75,29 +75,7 @@ export const markAsSeen = async (req, res) => {
 
   res.json({ success: true });
 };
-export const raiseQuery = async (req, res) => {
-  const { taskId, message, assignedTo } = req.body;
-
-  const query = await Queries.create({
-    taskId,
-    message,
-    raisedBy: req.cookies.userId,
-    assignedTo,
-  });
-
-  const io = getIO();
-
-  io.to(assignedTo.toString()).emit("new-query", query);
-
-  await Notifications.create({
-    user: assignedTo,
-    type: "QUERY",
-    title: "New Query Raised",
-    description: message,
-  });
-
-  res.json({ success: true, data: query });
-};
+// REMOVED: Duplicate raiseQuery → Use /api/queries/raise only
 
 export const getNotifications = async (req, res) => {
   const data = await Notifications.find({ user: req.cookies.userId })

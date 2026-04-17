@@ -131,6 +131,17 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // 🔌 Socket.IO Threading Integration
+    conversationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Conversation",
+      default: null,
+    },
+    queryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Queries",
+      default: null,
+    },
   },
   baseOptions,
 );

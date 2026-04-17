@@ -22,6 +22,7 @@ const NotificationSchema = new mongoose.Schema(
     relatedId: mongoose.Schema.Types.ObjectId, // message/task/etc
 
     isRead: { type: Boolean, default: false },
+    readAt: Date,
   },
   { timestamps: true },
 );

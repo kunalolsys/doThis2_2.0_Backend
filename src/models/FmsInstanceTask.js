@@ -61,6 +61,17 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     waitingForParent: { type: Boolean, default: false },
     decisionResult: String,
     isVisible: { type: Boolean, default: false }, // Shift-aware visibility
+    // 🔌 Socket.IO Threading Integration
+    conversationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Conversation",
+      default: null,
+    },
+    queryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Queries",
+      default: null,
+    },
     checklist: [
       {
         text: { type: String, required: true },

@@ -16,6 +16,7 @@ import {
   getRoleBasedTasks,
   getTaskStats,
   updateChecklistItem,
+  getConversations,
 } from '../controllers/taskController.js'; // Ensure this matches your actual controller filename
 import upload from '../middleware/upload.js';
 import { authenticateJWT } from '../middleware/auth.js';
@@ -53,6 +54,9 @@ router.get('/download', downloadAttachment);
 
 // Get Single Task by ID
 router.get('/:id', authenticateJWT, getTaskById);
+
+// 🔌 Task Conversation & Messages
+router.get('/:id/conversation', authenticateJWT, getConversations);
 
 // Update Task (General updates, Status, File, Description)
 router.put('/:id', authenticateJWT, upload.array('attachmentFile'), updateTask);
