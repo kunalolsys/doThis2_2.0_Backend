@@ -26,6 +26,11 @@ import {
 import { createLog } from "./logController.js";
 import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
+import Conversation from "../models/queries/Conversation.js";
+import Notifications from "../models/queries/Notification.js";
+import { getIO } from "../socket.js";
+import * as threadController from "./queries/thread.js";
+import Messages from "../models/queries/Message.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -260,7 +265,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       xValue && xValue !== "null" && xValue !== "" ? Number(xValue) : null,
   };
 
-  const userId = req.user?._id || null;
+  const userId =  req.cookies.userId || null;
   const parsedStartDate = cleanField(startDate)
     ? parseDateIST(startDate)
     : isActualToPlanned
@@ -491,6 +496,36 @@ export const createTask = handleAsync(async (req, res, next) => {
 
     // Save
     await newTask.save();
+
+    // // 🔌 Socket.IO Threading: Create Conversation + Notify
+    // const creatorId =  req.cookies.userId;
+    // const participants = [creatorId, assigneeId];
+    // const conversation = await Conversation.create({
+    //   taskId: newTask._id,
+    //   taskType: newTask.taskType || "DelegationTask",
+    //   participants: participants,
+    // });
+    // newTask.conversationId = conversation._id;
+    // await newTask.save();
+
+    // // Notification for assignee (except creator)
+    // if (creatorId.toString() !== assigneeId.toString()) {
+    //   await Notifications.create({
+    //     user: assigneeId,
+    //     type: "TASK_UPDATE",
+    //     title: `New Task Assigned: ${newTask.title}`,
+    //     description: `Task ${newTask.TaskId} created by you`,
+    //     relatedId: newTask._id,
+    //   });
+
+    //   // Emit real-time
+    //   const io = getIO();
+    //   io.to(assigneeId.toString()).emit("new-task-assigned", {
+    //     task: newTask,
+    //     conversationId: conversation._id,
+    //   });
+    // }
+
     await createLog({
       action: "CREATE",
       module: "TASK",
@@ -2328,7 +2363,41 @@ export const getTaskById = handleAsync(async (req, res, next) => {
     data: normalizeTask(task),
   });
 });
+//**get task conversations */
+export const getConversations = handleAsync(async (req, res) => {
+  const { id } = req.params;
 
+  const task = await Task.findById(id).populate({
+    path: "conversationId",
+    populate: {
+      path: "participants",
+      select: "name email",
+    },
+  });
+
+  if (!task || !task.conversationId) {
+    return res.status(404).json({
+      success: false,
+      message: "Task or conversation not found",
+    });
+  }
+
+  // ✅ Fetch messages separately
+  const messages = await Messages.find({
+    conversationId: task.conversationId._id,
+  })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .populate("sender", "name email");
+
+  res.json({
+    success: true,
+    data: {
+      conversation: task.conversationId,
+      messages,
+    },
+  });
+});
 export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   const { completeStatus } = req.body;
@@ -2497,7 +2566,7 @@ export const deleteTask = handleAsync(async (req, res, next) => {
     // Save history
     const historyDoc = await DeleteTaskHistory.create({
       deleteParentTaskId: null,
-      deletedBy: req.user?._id || null,
+      deletedBy:  req.cookies.userId || null,
       remark: "",
       deletedTasksCount: 1,
       deletedTaskIds: [task._id],
@@ -3494,6 +3563,23 @@ export const updateTask = handleAsync(async (req, res, next) => {
   }
   // 6. SAVE THE TASK (Parent/Current Task)
   const updatedTask = await task.save();
+  // 🔌 Socket.IO: Task Update Notification
+  // const io = getIO();
+  // if ( req.cookies.userId.toString() !== task.assignedTo.toString()) {
+  //   await Notifications.create({
+  //     user: task.assignedTo,
+  //     type: "TASK_UPDATE",
+  //     title: `Task Updated: ${task.title}`,
+  //     description: `Task ${task.TaskId} status: ${task.status}`,
+  //     relatedId: task._id,
+  //   });
+  //   io.to(task.assignedTo.toString()).emit("task-updated", {
+  //     taskId: task._id,
+  //     status: task.status,
+  //     conversationId: task.conversationId,
+  //   });
+  // }
+
   await createLog({
     action: "UPDATE",
     module: "TASK",

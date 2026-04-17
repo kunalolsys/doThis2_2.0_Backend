@@ -3,6 +3,7 @@ import {
   sendMessage,
   markAsSeen,
   getNotifications,
+  getMessagesByConversation,
 } from "../controllers/queries/thread.js";
 import {
   markNotificationRead,
@@ -16,6 +17,7 @@ const router = express.Router();
 router.post("/message", sendMessage);
 router.post("/seen", markAsSeen);
 router.get("/notifications", getNotifications);
+router.get("/:conversationId/messages", authenticateJWT, getMessagesByConversation);
 
 // Notification read endpoints
 router.patch("/notifications/:notificationId/read", markNotificationRead);

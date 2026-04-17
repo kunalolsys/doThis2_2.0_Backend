@@ -9,7 +9,7 @@ export const sendMessage = async (req, res) => {
 
   const message = await Messages.create({
     conversationId,
-    sender:  req.cookies.userId, // ✅ JWT user
+    sender: req.cookies.userId, // ✅ JWT user
     text,
     parentMessage: parentMessage || null,
     queryId: queryId || null, // Link to query
@@ -21,19 +21,20 @@ export const sendMessage = async (req, res) => {
   const io = getIO();
   io.to(conversationId).emit("new-message", {
     message,
-    sender: message.sender
+    sender: message.sender,
   });
 
   // Notify participants except sender
-  const conversation = await Conversation.findById(conversationId).populate('participants');
+  const conversation =
+    await Conversation.findById(conversationId).populate("participants");
   const receivers = conversation.participants.filter(
-    p => p._id.toString() !==  req.cookies.userId.toString()
+    (p) => p._id.toString() !== req.cookies.userId.toString(),
   );
 
   for (const user of receivers) {
     await Notifications.create({
       user: user._id,
-      fromUser:  req.cookies.userId,
+      fromUser: req.cookies.userId,
       type: "MESSAGE",
       title: "New Message in Thread",
       description: text,
@@ -45,7 +46,7 @@ export const sendMessage = async (req, res) => {
     io.to(user._id.toString()).emit("notification", {
       title: "New Message",
       description: text,
-      type: "message"
+      type: "message",
     });
   }
 
@@ -79,8 +80,46 @@ export const markAsSeen = async (req, res) => {
 
 export const getNotifications = async (req, res) => {
   const data = await Notifications.find({ user: req.cookies.userId })
+    .populate("fromUser", "name email") // 👈 sender info
+    .populate("user", "name email")
     .sort({ createdAt: -1 })
     .limit(20);
 
   res.json({ success: true, data });
 };
+
+// Get all messages for a conversation (for frontend chat UI)
+export const getMessagesByConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const messages = await Messages.find({ conversationId })
+      .populate("sender", "name email avatar department")
+      .populate("parentMessage", "text createdAt sender")
+      .populate("conversationId", "taskId participants")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Messages.countDocuments({ conversationId });
+
+    res.json({
+      success: true,
+      data: {
+        messages,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
