@@ -19,10 +19,12 @@ export const sendMessage = async (req, res) => {
 
   // Emit to conversation + task room
   const io = getIO();
-  io.to(conversationId).emit("new-message", {
-    message,
-    sender: message.sender,
-  });
+    io.to(conversationId).emit("chat-message", message);
+
+  // io.to(conversationId).emit("new-message", {
+  //   message,
+  //   sender: message.sender,
+  // });
 
   // Notify participants except sender
   const conversation =
@@ -101,7 +103,30 @@ export const getMessagesByConversation = async (req, res) => {
 
     const messages = await Messages.find({ conversationId })
       .populate("sender", "name email avatar department")
-      .populate("parentMessage", "text createdAt sender")
+      .populate({
+        path: "parentMessage",
+        populate: {
+          path: "sender",
+          select: "name email avatar department",
+        },
+      })
+      .populate({
+        path: "queryId",
+        populate: [
+          {
+            path: "raisedBy",
+            select: "name email",
+          },
+          {
+            path: "repliedBy",
+            select: "name email",
+          },
+          {
+            path: "assignedTo",
+            select: "name email",
+          },
+        ],
+      })
       .populate("conversationId", "taskId participants")
       .sort({ createdAt: -1 })
       .skip(skip)

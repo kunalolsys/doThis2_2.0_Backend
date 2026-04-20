@@ -64,14 +64,41 @@ export const replyToQuery = async (req, res) => {
   const { queryId, conversationId, text } = req.body;
 
   // 1. Create reply message
-  const message = await Messages.create({
+  let message = await Messages.create({
     conversationId,
     sender: req.cookies.userId,
     text,
     queryId, // Link to original query
   });
-
-  await message.populate("sender", "name email");
+  // await message.populate("sender", "name email");
+  message = await Messages.findById(message._id)
+    .populate("sender", "name email avatar department")
+    .populate({
+      path: "parentMessage",
+      populate: {
+        path: "sender",
+        select: "name email avatar department",
+      },
+    })
+    .populate({
+      path: "queryId",
+      populate: [
+        {
+          path: "raisedBy",
+          select: "name email",
+        },
+        {
+          path: "repliedBy",
+          select: "name email",
+        },
+        {
+          path: "assignedTo",
+          select: "name email",
+        },
+      ],
+    })
+    .populate("conversationId", "taskId participants")
+    .sort({ createdAt: -1 });
 
   // 2. Mark query as "Responded"
   const query = await Queries.findByIdAndUpdate(
@@ -86,10 +113,11 @@ export const replyToQuery = async (req, res) => {
 
   // 3. Emit to conversation
   const io = getIO();
-  io.to(conversationId).emit("query-reply", {
-    message,
-    query,
-  });
+  io.to(conversationId).emit("chat-message", message);
+  // io.to(conversationId).emit("query-reply", {
+  //   message,
+  //   query,
+  // });
 
   // 4. Notify query raiser (if not self-reply)
   if (query.raisedBy.toString() !== req.cookies.userId.toString()) {

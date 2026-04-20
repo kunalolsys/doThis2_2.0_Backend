@@ -24,6 +24,11 @@ const MessageSchema = new mongoose.Schema(
       ref: "Messages",
       default: null,
     },
+    queryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Queries",
+      default: null,
+    },
 
     seenBy: [
       {
