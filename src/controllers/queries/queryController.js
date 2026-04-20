@@ -64,41 +64,14 @@ export const replyToQuery = async (req, res) => {
   const { queryId, conversationId, text } = req.body;
 
   // 1. Create reply message
-  let message = await Messages.create({
+  const message = await Messages.create({
     conversationId,
     sender: req.cookies.userId,
     text,
     queryId, // Link to original query
   });
-  // await message.populate("sender", "name email");
-  message = await Messages.findById(message._id)
-    .populate("sender", "name email avatar department")
-    .populate({
-      path: "parentMessage",
-      populate: {
-        path: "sender",
-        select: "name email avatar department",
-      },
-    })
-    .populate({
-      path: "queryId",
-      populate: [
-        {
-          path: "raisedBy",
-          select: "name email",
-        },
-        {
-          path: "repliedBy",
-          select: "name email",
-        },
-        {
-          path: "assignedTo",
-          select: "name email",
-        },
-      ],
-    })
-    .populate("conversationId", "taskId participants")
-    .sort({ createdAt: -1 });
+
+  await message.populate("sender", "name email");
 
   // 2. Mark query as "Responded"
   const query = await Queries.findByIdAndUpdate(
