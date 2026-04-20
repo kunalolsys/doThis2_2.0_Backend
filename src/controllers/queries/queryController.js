@@ -129,15 +129,15 @@ export const getTaskQueries = async (req, res) => {
 export const getRaisedQueries = async (req, res) => {
   try {
     const queries = await Queries.find({ raisedBy: req.cookies.userId })
-      .populate("taskId", "TaskId title status dueDate")  // Task details
-      .populate("assignedTo repliedBy", "name email department") 
+      .populate("taskId", "TaskId title status dueDate") // Task details
+      .populate("assignedTo repliedBy", "name email department")
       .populate("conversationId", "taskId")
       .sort({ createdAt: -1 });
 
     res.json({
-      success: true, 
+      success: true,
       data: queries,
-      count: queries.length
+      count: queries.length,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -148,19 +148,17 @@ export const getRaisedQueries = async (req, res) => {
 export const getAssignedQueries = async (req, res) => {
   try {
     const queries = await Queries.find({ assignedTo: req.cookies.userId })
-      .populate("taskId", "TaskId title status dueDate") 
+      .populate("taskId", "TaskId title status dueDate")
       .populate("raisedBy repliedBy", "name email department")
       .populate("conversationId", "taskId")
-      .sort({ createdAt: -1, status: 1 });  // Pending first
+      .sort({ createdAt: -1, status: 1 }); // Pending first
 
     res.json({
-      success: true, 
+      success: true,
       data: queries,
-      count: queries.length
+      count: queries.length,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-

@@ -21,7 +21,7 @@ const MessageSchema = new mongoose.Schema(
     // 🧵 Thread support
     parentMessage: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Message",
+      ref: "Messages",
       default: null,
     },
 

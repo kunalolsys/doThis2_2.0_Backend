@@ -82,6 +82,9 @@ export const getNotifications = async (req, res) => {
   const data = await Notifications.find({ user: req.cookies.userId })
     .populate("fromUser", "name email") // 👈 sender info
     .populate("user", "name email")
+    .populate({
+      path: "conversationId",
+    })
     .sort({ createdAt: -1 })
     .limit(20);
 
@@ -122,4 +125,3 @@ export const getMessagesByConversation = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-

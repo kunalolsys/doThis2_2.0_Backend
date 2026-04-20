@@ -18,7 +18,11 @@ const NotificationSchema = new mongoose.Schema(
 
     title: String,
     description: String,
-
+    conversationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Conversation",
+      default: null,
+    },
     relatedId: mongoose.Schema.Types.ObjectId, // message/task/etc
 
     isRead: { type: Boolean, default: false },
