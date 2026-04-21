@@ -19,7 +19,7 @@ export const sendMessage = async (req, res) => {
 
   // Emit to conversation + task room
   const io = getIO();
-    io.to(conversationId).emit("chat-message", message);
+  io.to(conversationId).emit("chat-message", message);
 
   // io.to(conversationId).emit("new-message", {
   //   message,
@@ -44,11 +44,21 @@ export const sendMessage = async (req, res) => {
       taskId: conversation.taskId,
       conversationId,
     });
+    // ✅ Count unread messages for THIS user
+    const unreadCount = await Messages.countDocuments({
+      conversationId,
+      sender: { $ne: user._id }, // not sent by them
+      "seenBy.user": { $ne: user._id }, // not seen by them
+    });
 
     io.to(user._id.toString()).emit("notification", {
       title: "New Message",
       description: text,
       type: "message",
+    });
+    io.to(user._id.toString()).emit("unread-count", {
+      conversationId,
+      count: unreadCount,
     });
   }
 
