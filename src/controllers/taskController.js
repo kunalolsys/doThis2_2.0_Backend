@@ -265,7 +265,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       xValue && xValue !== "null" && xValue !== "" ? Number(xValue) : null,
   };
 
-  const userId =  req.cookies.userId || null;
+  const userId = req.cookies.userId || null;
   const parsedStartDate = cleanField(startDate)
     ? parseDateIST(startDate)
     : isActualToPlanned
@@ -1434,6 +1434,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   const [fmsTasks, fmsTotal] = await Promise.all([
     FmsInstanceTask.find(fmsQuery)
       .populate("assignedTo", "name email department assignShift")
+      .populate("assignedBy", "name email")
       .populate("updatedBy", "name email") // use as assignedBy fallback
       .populate("departmentOfAssignToUser", "name")
       .sort({ createdAt: -1 })
@@ -1456,7 +1457,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     status: task.status,
 
     assignedTo: task.assignedTo,
-    assignedBy: task.updatedBy || null,
+    assignedBy: task.assignedBy || null,
 
     departmentOfAssignToUser: task.departmentOfAssignToUser,
 
@@ -2566,7 +2567,7 @@ export const deleteTask = handleAsync(async (req, res, next) => {
     // Save history
     const historyDoc = await DeleteTaskHistory.create({
       deleteParentTaskId: null,
-      deletedBy:  req.cookies.userId || null,
+      deletedBy: req.cookies.userId || null,
       remark: "",
       deletedTasksCount: 1,
       deletedTaskIds: [task._id],

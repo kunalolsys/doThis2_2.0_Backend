@@ -25,6 +25,11 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    assignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
     frequency: { type: String, required: true },
     xValue: Number,
     isDependent: { type: Boolean, default: false },
@@ -61,7 +66,6 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     waitingForParent: { type: Boolean, default: false },
     decisionResult: String,
     isVisible: { type: Boolean, default: false }, // Shift-aware visibility
-    // 🔌 Socket.IO Threading Integration
     conversationId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Conversation",

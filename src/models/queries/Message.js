@@ -29,7 +29,12 @@ const MessageSchema = new mongoose.Schema(
       ref: "Queries",
       default: null,
     },
-
+    // status: {
+    //   type: String,
+    //   enum: ["sent", "delivered", "seen"],
+    //   default: "sent",
+    // },
+    // seen: { type: Boolean, default: false },
     seenBy: [
       {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

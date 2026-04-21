@@ -28,6 +28,7 @@ router.delete('/templates/:id/tasks/:taskId',  fmsTaskController.deleteFmsTask);
 router.post('/instances/:templateId/launch',  fmsInstanceController.launchFmsInstance);
 router.post('/instances',  fmsInstanceController.getFmsInstances);
 router.get('/instances/:id',  fmsInstanceController.getFmsInstanceById);
+router.get('/fmsInstanceTask/:id',  fmsInstanceController.getFMSInstanceTaskById);
 router.get('/instances/:id/tasks',  fmsInstanceController.getInstanceTasks);
 router.patch('/instances/:id/tasks/:taskId',  fmsInstanceController.updateFmsInstanceTask);
 router.put('/instances/:id/tasks/:taskId/complete',  fmsInstanceController.completeInstanceTask);

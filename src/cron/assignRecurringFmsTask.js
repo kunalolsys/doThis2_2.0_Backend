@@ -141,6 +141,7 @@ export const generateRecurringFmsTasks = async () => {
           description: task.description,
           departmentOfAssignToUser: task.departmentOfAssignToUser,
           assignedTo: task.assignedTo,
+          assignedBy: task.assignedBy,
           frequency: task.frequency,
           plannedStartDate: shiftStart,
           plannedDueDate: shiftEnd,

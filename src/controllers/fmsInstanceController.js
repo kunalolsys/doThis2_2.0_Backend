@@ -128,6 +128,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       description: tmplTask.description,
       departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
       assignedTo: tmplTask.assignedTo,
+      assignedBy: tmplTask.assignedBy,
       frequency: tmplTask.frequency,
       xValue: tmplTask.xValue,
       isDependent: tmplTask.isDependent,
@@ -696,6 +697,23 @@ export const getFmsInstanceById = handleAsync(async (req, res, next) => {
     .populate("manager", "name email");
   if (!instance) return next(new AppError("Instance not found", 404));
   res.json({ success: true, data: instance });
+});
+
+//**GET FMS INSTANCE TASK BY ID */
+export const getFMSInstanceTaskById = handleAsync(async (req, res, next) => {
+  const { id } = req.params;
+
+  const task = await FmsInstanceTask.findById(id)
+    .populate("assignedTo", "name email department assignShift")
+    .populate("assignedBy", "name email")
+    .populate("updatedBy", "name email") // use as assignedBy fallback
+    .populate("departmentOfAssignToUser", "name");
+  if (!task) return next(new AppError("Task not found", 404));
+
+  res.status(200).json({
+    success: true,
+    data: task,
+  });
 });
 
 //**GET TASKS OF LAUNCHED FMS */
