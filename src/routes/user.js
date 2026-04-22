@@ -8,15 +8,16 @@ import {
   exportUsers,
   getAllUserForDrops,
 } from "../controllers/userController.js";
+import { authenticateJWT } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post("/", createUser);
-router.post("/list", getAllUsers);
-router.get("/allUsers", getAllUserForDrops);
-router.get("/:id", getSingleUser);
-router.put("/:id", updateUser);
-router.delete("/:id", deleteUser);
-router.post("/export", exportUsers);
+router.post("/", authenticateJWT, createUser);
+router.post("/list", authenticateJWT, getAllUsers);
+router.get("/allUsers", authenticateJWT, getAllUserForDrops);
+router.get("/:id", authenticateJWT, getSingleUser);
+router.put("/:id", authenticateJWT, updateUser);
+router.delete("/:id", authenticateJWT, deleteUser);
+router.post("/export", authenticateJWT, exportUsers);
 
 export default router;

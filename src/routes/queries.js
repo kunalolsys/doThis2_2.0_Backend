@@ -6,7 +6,7 @@ import {
   getRaisedQueries,
   getAssignedQueries,
 } from "../controllers/queries/queryController.js";
-import { authenticateJWT } from "../middleware/auth.js";
+import { authenticateJWT } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 

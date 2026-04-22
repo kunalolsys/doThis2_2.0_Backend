@@ -10,18 +10,26 @@ import {
   markAllRead,
   getUnreadCount,
 } from "../controllers/queries/notificationController.js";
-import { authenticateJWT } from "../middleware/auth.js";
+import { authenticateJWT } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post("/message", sendMessage);
-router.post("/seen", markAsSeen);
-router.get("/notifications", getNotifications);
-router.get("/:conversationId/messages", authenticateJWT, getMessagesByConversation);
+router.post("/message", authenticateJWT, sendMessage);
+router.post("/seen", authenticateJWT, markAsSeen);
+router.get("/notifications", authenticateJWT, getNotifications);
+router.get(
+  "/:conversationId/messages",
+  authenticateJWT,
+  getMessagesByConversation,
+);
 
 // Notification read endpoints
-router.patch("/notifications/:notificationId/read", markNotificationRead);
-router.post("/notifications/read-all", markAllRead);
-router.get("/notifications/unread-count", getUnreadCount);
+router.patch(
+  "/notifications/:notificationId/read",
+  authenticateJWT,
+  markNotificationRead,
+);
+router.post("/notifications/read-all", authenticateJWT, markAllRead);
+router.get("/notifications/unread-count", authenticateJWT, getUnreadCount);
 
 export default router;

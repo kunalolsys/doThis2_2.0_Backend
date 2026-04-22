@@ -19,7 +19,8 @@ import {
   getConversations,
 } from '../controllers/taskController.js'; // Ensure this matches your actual controller filename
 import upload from '../middleware/upload.js';
-import { authenticateJWT } from '../middleware/auth.js';
+// import { authenticateJWT } from '../middleware/auth.js';
+import { authenticateJWT } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -53,10 +54,10 @@ router.post('/export', authenticateJWT, exportTasks);
 router.get('/download', downloadAttachment);
 
 // Get Single Task by ID
-router.get('/:id', authenticateJWT, getTaskById);
+router.get('/:id', getTaskById);
 
 // 🔌 Task Conversation & Messages
-router.get('/:id/conversation', authenticateJWT, getConversations);
+router.get('/:id/conversation', getConversations);
 
 // Update Task (General updates, Status, File, Description)
 router.put('/:id', authenticateJWT, upload.array('attachmentFile'), updateTask);

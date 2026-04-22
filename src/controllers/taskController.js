@@ -2291,6 +2291,7 @@ export const getTaskById = handleAsync(async (req, res, next) => {
 
   const task = await Task.findById(id)
     .populate("assignedTo", "name email")
+    .populate("assignedBy", "name email")
     .populate("createdBy", "name email")
     .populate("updatedBy", "name email")
     .populate("dependencyConfig.taskDependent", "title TaskId");

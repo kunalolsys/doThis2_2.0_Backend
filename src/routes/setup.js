@@ -17,30 +17,30 @@ import {
   exportHolidays,
   getAllHolidaysForDrops,
 } from "../controllers/holidayController.js";
-
+import { authenticateJWT } from "../middleware/authMiddleware.js";
+import userRoutes from "./user.js";
 import workingWeekRoutes from "./workingWeek.js";
 
-router.post("/departments/list", departmentController.getAllDepartment);
-router.post("/departments/export", departmentController.exportDepartment);
-router.get("/departments/allDepartments", departmentController.getAllDeptsForDrops);
-router.post("/departments", departmentController.createDepartment);
-router.put("/departments/:id", departmentController.updateDepartment);
-router.delete("/departments/:id", departmentController.deleteDepartment);
+router.post("/departments/list",authenticateJWT, departmentController.getAllDepartment);
+router.post("/departments/export",authenticateJWT, departmentController.exportDepartment);
+router.get("/departments/allDepartments",authenticateJWT, departmentController.getAllDeptsForDrops);
+router.post("/departments",authenticateJWT, departmentController.createDepartment);
+router.put("/departments/:id", authenticateJWT,departmentController.updateDepartment);
+router.delete("/departments/:id", authenticateJWT,departmentController.deleteDepartment);
 
 // router.get("/work-shifts", workShiftController.getAllWorkShifts);
 // router.post("/work-shifts", workShiftController.createWorkShift);
 // router.put("/work-shifts/:id", workShiftController.updateWorkShift);
 // router.delete("/work-shifts/:id", workShiftController.deleteWorkShift);
 
-import userRoutes from "./user.js";
 router.use("/users", userRoutes);
 
 // Get current logged-in user
 // router.get('/currentUser', authenticateJWT, userController.getSingleUser);
-router.post('/holiday/list', getAllHolidays);
-router.post('/holiday/export', exportHolidays);
-router.get('/holiday/allHolidays', getAllHolidaysForDrops);
-router.post('/holiday', createHoliday);
+router.post('/holiday/list',authenticateJWT, getAllHolidays);
+router.post('/holiday/export', authenticateJWT,exportHolidays);
+router.get('/holiday/allHolidays',authenticateJWT, getAllHolidaysForDrops);
+router.post('/holiday',authenticateJWT, createHoliday);
 // router.route('/holiday').get(getAllHolidays).post(createHoliday);
 router.route('/holiday/:id').get(getHoliday).patch(updateHoliday).delete(deleteHoliday);
 

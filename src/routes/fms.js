@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateJWT } from '../middleware/auth.js';
+import { authenticateJWT } from '../middleware/authMiddleware.js';
 import upload from '../middleware/upload.js';
 import * as fmsTemplateController from '../controllers/fmsTemplateController.js';
 import * as fmsTaskController from '../controllers/fmsTaskController.js';
@@ -9,31 +9,31 @@ import * as fmsInstanceController from '../controllers/fmsInstanceController.js'
 const router = express.Router();
 
 // BRD 5.1 Template Management (PERFECTED)
-router.post('/templates',  fmsTemplateController.createTemplate);
-router.post('/templates-list',  fmsTemplateController.getTemplates);
-router.get('/templates-list-drop',  fmsTemplateController.getTemplatesForDropdown);
-router.get('/templates-details/:id',  fmsTemplateController.getTemplateById);
-router.put('/templates/:id',  fmsTemplateController.updateTemplate);
-router.delete('/templates/:id',  fmsTemplateController.deleteTemplate);
-router.post('/templates/:id/tasks-list',  fmsTemplateController.getTemplateTasks);
+router.post('/templates', authenticateJWT, fmsTemplateController.createTemplate);
+router.post('/templates-list', authenticateJWT, fmsTemplateController.getTemplates);
+router.get('/templates-list-drop',authenticateJWT,  fmsTemplateController.getTemplatesForDropdown);
+router.get('/templates-details/:id',authenticateJWT,  fmsTemplateController.getTemplateById);
+router.put('/templates/:id',authenticateJWT,  fmsTemplateController.updateTemplate);
+router.delete('/templates/:id',authenticateJWT,  fmsTemplateController.deleteTemplate);
+router.post('/templates/:id/tasks-list',authenticateJWT,  fmsTemplateController.getTemplateTasks);
 
 // BRD 5.2 Template Tasks (Bulk + Single) - FIXED ROUTES
-router.post('/templates/:id/tasks',  upload.array('files'), fmsTaskController.createFmsTasks);
-router.get('/fms-templates/:id/tasks',  fmsTaskController.getFmsTasksByTemplate);
-router.put('/templates/:id/tasks/:taskId',  fmsTaskController.updateFmsTask);
-router.post('/templates/:id/tasks/import', upload.single('file'), fmsTaskController.importFmsTasksUniversal);
-router.delete('/templates/:id/tasks/:taskId',  fmsTaskController.deleteFmsTask);
+router.post('/templates/:id/tasks', authenticateJWT, upload.array('files'), fmsTaskController.createFmsTasks);
+router.get('/fms-templates/:id/tasks',authenticateJWT,  fmsTaskController.getFmsTasksByTemplate);
+router.put('/templates/:id/tasks/:taskId',authenticateJWT,  fmsTaskController.updateFmsTask);
+router.post('/templates/:id/tasks/import',authenticateJWT, upload.single('file'), fmsTaskController.importFmsTasksUniversal);
+router.delete('/templates/:id/tasks/:taskId', authenticateJWT, fmsTaskController.deleteFmsTask);
 
 // BRD 002.2 Launch & Runtime
-router.post('/instances/:templateId/launch',  fmsInstanceController.launchFmsInstance);
-router.post('/instances',  fmsInstanceController.getFmsInstances);
-router.get('/instances/:id',  fmsInstanceController.getFmsInstanceById);
+router.post('/instances/:templateId/launch', authenticateJWT, fmsInstanceController.launchFmsInstance);
+router.post('/instances', authenticateJWT, fmsInstanceController.getFmsInstances);
+router.get('/instances/:id',authenticateJWT,  fmsInstanceController.getFmsInstanceById);
 router.get('/fmsInstanceTask/:id',  fmsInstanceController.getFMSInstanceTaskById);
-router.get('/instances/:id/tasks',  fmsInstanceController.getInstanceTasks);
-router.patch('/instances/:id/tasks/:taskId',  fmsInstanceController.updateFmsInstanceTask);
-router.put('/instances/:id/tasks/:taskId/complete',  fmsInstanceController.completeInstanceTask);
+router.get('/instances/:id/tasks',authenticateJWT,  fmsInstanceController.getInstanceTasks);
+router.patch('/instances/:id/tasks/:taskId',authenticateJWT,  fmsInstanceController.updateFmsInstanceTask);
+router.put('/instances/:id/tasks/:taskId/complete',authenticateJWT,  fmsInstanceController.completeInstanceTask);
 router.patch(
-  "/instances/:id/tasks/:taskId/formData",
+  "/instances/:id/tasks/:taskId/formData",authenticateJWT,
   fmsInstanceController.updateFormData
 );
 router.patch("/instances/:id/tasks/:taskId/checklist"
