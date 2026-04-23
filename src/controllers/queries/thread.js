@@ -27,12 +27,18 @@ export const sendMessage = async (req, res) => {
   // });
 
   // Notify participants except sender
-  const conversation =
-    await Conversation.findById(conversationId).populate("participants");
+  // const conversation =
+  //   await Conversation.findById(conversationId).populate("participants");
+  const conversation = await Conversation.findByIdAndUpdate(
+    conversationId,
+    {
+      $addToSet: { participants: req.cookies.userId }, // ✅ adds only if not exists
+    },
+    { new: true },
+  ).populate("participants");
   const receivers = conversation.participants.filter(
     (p) => p._id.toString() !== req.cookies.userId.toString(),
   );
-
   for (const user of receivers) {
     await Notifications.create({
       user: user._id,
