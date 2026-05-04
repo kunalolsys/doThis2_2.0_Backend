@@ -7,7 +7,7 @@ import {
   addWorkingDays,
   isWorkingDay,
   snapToShiftTime,
-  isHoliday
+  isHoliday,
 } from "../utils/dateCalculator.js";
 import { format } from "date-fns";
 
@@ -74,14 +74,16 @@ const generateRecurringTasks = async () => {
       if (!isTaskDueToday(task)) continue;
 
       // 🔥 CHECK USER WORKSHIFT FOR TODAY
-      const assignedUser = await User.findById(task.assignedTo).populate('assignShift');
+      const assignedUser = await User.findById(task.assignedTo).populate(
+        "assignShift",
+      );
       if (!assignedUser?.assignShift) {
         console.log(`⚠️ Skipping ${task.TaskId}: No workshift`);
         continue;
       }
 
       const workShift = assignedUser.assignShift;
-      
+
       // 🔥 1. Prevent duplicate (today's instance)
       const startOfDay = moment().utc().startOf("day").toDate();
       const endOfDay = moment().utc().endOf("day").toDate();
@@ -98,14 +100,24 @@ const generateRecurringTasks = async () => {
 
       // 🔥 VALIDATE: Working day + not holiday (BEFORE create)
       const todayShiftStart = await nextWorkingShiftDate(now, workShift._id);
+      if (task.endDate) {
+        const endDate = moment(task.endDate).utc().endOf("day").toDate();
+
+        if (todayShiftStart > endDate) {
+          console.log(`⏭️ Skip ${task.TaskId}: shifted beyond endDate`);
+          continue;
+        }
+      }
       const isTodayHoliday = await isHoliday(todayShiftStart);
       if (isTodayHoliday || !isWorkingDay(todayShiftStart, workShift)) {
-        console.log(`⏭️ Skip ${task.TaskId}: Non-working day/holiday (${format(todayShiftStart, 'dd-MM-yyyy')})`);
+        console.log(
+          `⏭️ Skip ${task.TaskId}: Non-working day/holiday (${format(todayShiftStart, "dd-MM-yyyy")})`,
+        );
         continue;
       }
-      
+
       // Today + taskEndDays working days
-      const shiftDueEnd = task.taskEndDays 
+      const shiftDueEnd = task.taskEndDays
         ? await addWorkingDays(todayShiftStart, task.taskEndDays, workShift._id)
         : snapToShiftTime(todayShiftStart, workShift, false); // End of shift
 
@@ -119,20 +131,26 @@ const generateRecurringTasks = async () => {
         startDate: todayShiftStart,
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
-        recurringRefId:task.TaskId,
-        checklist: task.checklist?.map(item => ({ ...item, isCompleted: false })) || [],
-        status: 'Pending',
+        recurringRefId: task.TaskId,
+        checklist:
+          task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
+          [],
+        status: "Pending",
         isVisible: false, // 🔥 Cron visibility system
         attachmentFile: task.attachmentFile || [],
       });
 
       await newDelegation.save();
       createdCount++;
-      
-      console.log(`✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, 'HH:mm')} to ${format(shiftDueEnd, 'HH:mm')}`);
+
+      console.log(
+        `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "HH:mm")} to ${format(shiftDueEnd, "HH:mm")}`,
+      );
     }
 
-    console.log(`✅ Cron Complete: ${createdCount} workshift-aware tasks generated`);
+    console.log(
+      `✅ Cron Complete: ${createdCount} workshift-aware tasks generated`,
+    );
   } catch (error) {
     console.error("❌ Cron Error:", error);
   }
@@ -141,11 +159,10 @@ const generateRecurringTasks = async () => {
 // Schedule: Daily at shift start time? Or keep 00:01 for batching
 const startCronJobs = () => {
   cron.schedule("*/5 * * * * *", generateRecurringTasks, {
-  // cron.schedule("*/50 * * * * *", generateRecurringTasks, {
+    // cron.schedule("*/50 * * * * *", generateRecurringTasks, {
     timezone: "Asia/Kolkata",
   });
   console.log("🔄 Recurring Cron scheduled: Daily 00:01 IST (WorkShift Aware)");
 };
 
 export default startCronJobs;
-

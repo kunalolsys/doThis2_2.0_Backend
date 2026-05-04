@@ -160,7 +160,7 @@ export const forgotPassword = handleAsync(async (req, res, next) => {
   } catch (err) {
     console.error("Error sending reset email:", err);
     // For development, log the reset link in console
-    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    const resetLink = `${process.env.RESET_URL}/reset-password?token=${resetToken}`;
     console.log("Password reset link (for development):", resetLink);
 
     // Clear the token on error
@@ -193,7 +193,7 @@ export const resetPassword = handleAsync(async (req, res, next) => {
     return next(new AppError("Token is invalid or has expired.", 400));
   }
 
-  user.password = await bcrypt.hash(newPassword, 12);
+  user.password = newPassword;
   user.passwordResetToken = undefined;
   user.passwordResetExpires = undefined;
   await user.save();

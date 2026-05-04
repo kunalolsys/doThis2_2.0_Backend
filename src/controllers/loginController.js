@@ -2,7 +2,10 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import AppError from "../utils/AppError.js";
-import { generateAccessToken, generateRefreshToken } from "../utils/tokenUtil.js";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+} from "../utils/tokenUtil.js";
 import { handleAsync } from "../utils/handleAsync.js";
 
 export const login = handleAsync(async (req, res, next) => {
@@ -52,12 +55,15 @@ export const login = handleAsync(async (req, res, next) => {
   const rolePermissions = user.role?.permissions || [];
 
   const permissions = rolePermissions.reduce((acc, p) => {
-    const key = p.toLowerCase().replace(/ /g, "_");
+    const key = p
+      .replace(/([a-z])([A-Z])/g, "$1_$2") // camelCase → snake_case
+      .replace(/\s+/g, "_") // spaces → underscore
+      .toLowerCase();
+
     acc[`${key}_view`] = true;
-    acc[`${key}_edit`] = true; // optional expansion
+
     return acc;
   }, {});
-
   // 🧹 Clean user object (VERY IMPORTANT)
   const safeUser = {
     _id: user._id,

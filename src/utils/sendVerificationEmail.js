@@ -6,11 +6,11 @@ export const sendVerificationEmail = async (email, token, type = 'verify', subje
   let message;
 
   if (type === 'reset-password') {
-    link = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+    link = `${process.env.RESET_URL}/reset-password?token=${token}`;
     title = 'Password Reset';
     message = 'Click the link below to reset your password:';
   } else {
-    link = `${process.env.FRONTEND_URL}/verify/${token}`;
+    link = `${process.env.RESET_URL}/verify/${token}`;
     title = 'Email Verification';
     message = 'Click the link below to verify your account:';
   }
