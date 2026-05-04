@@ -7,7 +7,7 @@ export const markNotificationRead = async (req, res) => {
   const notification = await Notifications.findOneAndUpdate(
     { 
       _id: notificationId,
-      user:  req.cookies.userId 
+      user: req.cookies.userId || req.user._id || null
     },
     { 
       isRead: true,
@@ -25,9 +25,10 @@ export const markNotificationRead = async (req, res) => {
 
   // Emit read status (optional)
   const io = getIO();
-  io.to( req.cookies.userId.toString()).emit("notification-read", {
+  const userId = req.cookies.userId || req.user._id || null
+  io.to( userId.toString()).emit("notification-read", {
     notificationId,
-    userId:  req.cookies.userId
+    userId:  req.cookies.userId || req.user._id || null
   });
 
   res.json({ 
@@ -40,7 +41,7 @@ export const markNotificationRead = async (req, res) => {
 export const markAllRead = async (req, res) => {
   const notifications = await Notifications.updateMany(
     {
-      user:  req.cookies.userId,
+      user:  req.cookies.userId || req.user._id || null,
       isRead: false
     },
     {
@@ -50,8 +51,9 @@ export const markAllRead = async (req, res) => {
   );
 
   const io = getIO();
-  io.to( req.cookies.userId.toString()).emit("notifications-all-read", {
-    userId:  req.cookies.userId,
+  const userId = req.cookies.userId || req.user._id || null
+  io.to( userId.toString()).emit("notifications-all-read", {
+    userId:  req.cookies.userId || req.user._id || null,
     count: notifications.modifiedCount
   });
 
@@ -63,7 +65,7 @@ export const markAllRead = async (req, res) => {
 
 export const getUnreadCount = async (req, res) => {
   const count = await Notifications.countDocuments({
-    user:  req.cookies.userId,
+    user: req.cookies.userId || req.user._id || null,
     isRead: false
   });
 

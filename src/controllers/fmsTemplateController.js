@@ -16,7 +16,7 @@ export const createTemplate = handleAsync(async (req, res, next) => {
     manager,
     srManager,
   } = req.body;
-  const userId = req.cookies.userId;
+  const userId = req.cookies.userId || req.user._id || null;
 
   // Check duplicate templateName (Mongo unique will catch but custom msg better)
   const existing = await FmsTemplate.findOne({ templateName });
@@ -148,7 +148,7 @@ export const getTemplateById = handleAsync(async (req, res, next) => {
 export const updateTemplate = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   const updateData = req.body;
-  const userId = req.cookies.userId;
+  const userId = req.cookies.userId || req.user._id || null;
 
   const template = await FmsTemplate.findById(id);
   if (!template) return next(new AppError("Template not found", 404));
@@ -262,7 +262,7 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
   // 2️⃣ SOFT DELETE TEMPLATE
   template.isDeleted = true;
   template.deletedAt = new Date();
-  template.deletedBy = req.cookies.userId;
+  template.deletedBy = req.cookies.userId || req.user._id || null;
   template.deleteReason = reason || "No reason provided";
   await template.save();
 
@@ -291,7 +291,7 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
   await createLog({
     action: "DELETE_TEMPLATE",
     module: "FMS_TEMPLATE",
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     documentId: template._id,
     oldData: template,
     message: `Template deleted. Reason: ${reason || "N/A"}`,

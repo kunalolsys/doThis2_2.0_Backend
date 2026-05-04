@@ -215,7 +215,7 @@ export const createUser = handleAsync(async (req, res, next) => {
     action: "CREATE",
     module: "USER",
     documentId: newUser._id,
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     newData: newUser,
     message: "User created",
   });
@@ -324,7 +324,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
     action: "UPDATE",
     module: "USER",
     documentId: user._id,
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     oldData,
     newData: user,
     message: "User updated",
@@ -348,7 +348,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
 // Delete user
 export const deleteUser = handleAsync(async (req, res, next) => {
   const { id } = req.params;
-  const currentUserId = req.cookies.userId;
+  const currentUserId = req.cookies.userId || req.user._id || null;
   const user = await User.findById(id);
   if (!user) {
     return next(new AppError("User not found", 404));
@@ -363,7 +363,7 @@ export const deleteUser = handleAsync(async (req, res, next) => {
     action: "DELETE",
     module: "USER",
     documentId: user._id,
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     oldData: user,
     message: "User deleted",
   });

@@ -19,3 +19,19 @@ export const generateRefreshToken = (user) => {
     { expiresIn: "7d" },
   );
 };
+export const getUserFromToken = (req) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    return decoded.userId; // depends on your payload
+  } catch (err) {
+    return null;
+  }
+};

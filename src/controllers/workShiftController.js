@@ -142,7 +142,7 @@ export const updateWorkShift = handleAsync(async (req, res, next) => {
 // Delete WorkShift
 export const deleteWorkShift = handleAsync(async (req, res, next) => {
   const { id } = req.params;
-  const currentUserId = req.cookies.userId;
+  const currentUserId = req.cookies.userId || req.user._id || null;
 
   const workShift = await WorkShift.findById(id);
   if (!workShift) {

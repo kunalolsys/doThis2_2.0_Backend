@@ -31,7 +31,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const { templateId } = req.params;
   const { launchDate: launchDateStr, endDate } = req.body;
 
-  const userId = req.cookies.userId;
+  const userId = req.cookies.userId || req.user._id || null;
   const template = await FmsTemplate.findById(templateId).populate([
     "manager",
     "srManager",
@@ -289,7 +289,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   }
   task.actualCompleteDate = new Date();
   task.status = "Completed";
-  task.updatedBy = req.cookies.userId;
+  task.updatedBy = req.cookies.userId || req.user._id || null;
   await task.save();
   await updateInstanceProgress();
   // 🔥 FIND CHILDREN (reverse: who depends ON this parent)
@@ -359,7 +359,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 export const updateFormData = async (req, res, next) => {
   try {
     const { id, taskId } = req.params;
-    const userId = req.cookies.userId;
+    const userId = req.cookies.userId || req.user._id || null;
     const incomingData = req.body; // { fieldName: value }
 
     const task = await FmsInstanceTask.findOne({
@@ -463,7 +463,7 @@ export const updateFormData = async (req, res, next) => {
 //**UPDATE CHECKLIST FOR TASK */
 export const updateChecklistItem = handleAsync(async (req, res, next) => {
   const { id, taskId } = req.params;
-  const userId = req.cookies.userId;
+  const userId = req.cookies.userId || req.user._id || null;
   const { index, completed } = req.body;
 
   const task = await FmsInstanceTask.findOne({
@@ -529,7 +529,7 @@ export const updateChecklistItem = handleAsync(async (req, res, next) => {
 export const holdFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
   const { reason } = req.body;
-  const currentUser = req.cookies.userId;
+  const currentUser = req.cookies.userId || req.user._id || null;
   if (!instance) {
     return res.status(404).json({ message: "Instance not found" });
   }
@@ -555,7 +555,7 @@ export const holdFmsInstance = handleAsync(async (req, res) => {
 //**RESUME FMS INSTANCE */
 export const resumeFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
-  const currentUser = req.cookies.userId;
+  const currentUser = req.cookies.userId || req.user._id || null;
 
   if (!instance) {
     return res.status(404).json({ message: "Instance not found" });
@@ -590,7 +590,7 @@ export const resumeFmsInstance = handleAsync(async (req, res) => {
 export const stopFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
   const { reason } = req.body;
-  const currentUser = req.cookies.userId;
+  const currentUser = req.cookies.userId || req.user._id || null;
   if (!instance) {
     return res.status(404).json({ message: "Instance not found" });
   }

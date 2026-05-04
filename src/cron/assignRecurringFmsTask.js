@@ -172,7 +172,7 @@ const startRecurringFmsTaskJob = () => {
   console.log("🔄 FMS Cron: Every 30s (TEST)");
 
   // Production: Daily 01:00
-  cron.schedule("0 1 * * *", generateRecurringFmsTasks, {
+  cron.schedule("*/5 * * * * *", generateRecurringFmsTasks, {
     timezone: "Asia/Kolkata",
   });
 };

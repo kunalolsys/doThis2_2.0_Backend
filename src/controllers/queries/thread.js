@@ -6,10 +6,11 @@ import { getIO } from "../../socket.js";
 
 export const sendMessage = async (req, res) => {
   const { conversationId, text, parentMessage, queryId } = req.body;
+  const userId = req.cookies.userId || req.user._id || null;
 
   const message = await Messages.create({
     conversationId,
-    sender: req.cookies.userId, // ✅ JWT user
+    sender: userId, // ✅ JWT user
     text,
     parentMessage: parentMessage || null,
     queryId: queryId || null, // Link to query
@@ -32,17 +33,17 @@ export const sendMessage = async (req, res) => {
   const conversation = await Conversation.findByIdAndUpdate(
     conversationId,
     {
-      $addToSet: { participants: req.cookies.userId }, // ✅ adds only if not exists
+      $addToSet: { participants: userId }, // ✅ adds only if not exists
     },
     { new: true },
   ).populate("participants");
   const receivers = conversation.participants.filter(
-    (p) => p._id.toString() !== req.cookies.userId.toString(),
+    (p) => p._id.toString() !== userId.toString(),
   );
   for (const user of receivers) {
     await Notifications.create({
       user: user._id,
-      fromUser: req.cookies.userId,
+      fromUser: userId,
       type: "MESSAGE",
       title: "New Message in Thread",
       description: text,
@@ -72,6 +73,8 @@ export const sendMessage = async (req, res) => {
 };
 
 export const markAsSeen = async (req, res) => {
+  const userId = req.cookies.userId || req.user._id || null;
+
   const { messageId } = req.body;
 
   await Messages.updateOne(
@@ -79,7 +82,7 @@ export const markAsSeen = async (req, res) => {
     {
       $addToSet: {
         seenBy: {
-          user: req.cookies.userId,
+          user: userId,
           seenAt: new Date(),
         },
       },
@@ -89,7 +92,7 @@ export const markAsSeen = async (req, res) => {
   const io = getIO();
   io.emit("message-seen", {
     messageId,
-    userId: req.cookies.userId,
+    userId: userId,
   });
 
   res.json({ success: true });
@@ -97,7 +100,9 @@ export const markAsSeen = async (req, res) => {
 // REMOVED: Duplicate raiseQuery → Use /api/queries/raise only
 
 export const getNotifications = async (req, res) => {
-  const data = await Notifications.find({ user: req.cookies.userId })
+  const userId = req.cookies.userId || req.user._id || null;
+
+  const data = await Notifications.find({ user: userId })
     .populate("fromUser", "name email") // 👈 sender info
     .populate("user", "name email")
     .populate({

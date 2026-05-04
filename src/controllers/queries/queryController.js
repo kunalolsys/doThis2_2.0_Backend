@@ -13,7 +13,7 @@ export const raiseQuery = async (req, res) => {
   const query = await Queries.create({
     taskId,
     message,
-    raisedBy: req.cookies.userId, // ✅ Use JWT user, not cookies
+    raisedBy: req.cookies.userId || req.user._id || null, // ✅ Use JWT user, not cookies
     assignedTo,
     status: "Pending",
   });
@@ -49,10 +49,12 @@ export const raiseQuery = async (req, res) => {
   //   await task.save();
   // }
   if (!conversation) {
+    const userId = req.cookies.userId || req.user._id || null;
+
     conversation = await Conversations.create({
       taskId: activeTask._id,
       taskType: task ? task.taskType : "FmsInstanceTask", // 🔥 important
-      participants: [req.cookies.userId, assignedTo],
+      participants: [userId, assignedTo],
     });
 
     activeTask.conversationId = conversation._id;
@@ -72,9 +74,9 @@ export const raiseQuery = async (req, res) => {
   // 5. Notification
   await Notifications.create({
     user: assignedTo,
-    fromUser: req.cookies.userId,
+    fromUser: req.cookies.userId || req.user._id || null,
     type: "QUERY_RAISED",
-    title: `New Query on Task ${activeTask.TaskId||activeTask.taskId}`,
+    title: `New Query on Task ${activeTask.TaskId || activeTask.taskId}`,
     description: message,
     relatedId: query._id,
     taskId,
@@ -89,7 +91,7 @@ export const replyToQuery = async (req, res) => {
   // 1. Create reply message
   const message = await Messages.create({
     conversationId,
-    sender: req.cookies.userId,
+    sender: req.cookies.userId || req.user._id || null,
     text,
     queryId, // Link to original query
   });
@@ -101,7 +103,7 @@ export const replyToQuery = async (req, res) => {
     queryId,
     {
       status: "Responded",
-      repliedBy: req.cookies.userId,
+      repliedBy: req.cookies.userId || req.user._id || null,
       repliedAt: new Date(),
     },
     { new: true },
@@ -116,10 +118,11 @@ export const replyToQuery = async (req, res) => {
   // });
 
   // 4. Notify query raiser (if not self-reply)
-  if (query.raisedBy.toString() !== req.cookies.userId.toString()) {
+  const userId = req.cookies.userId || req.user._id || null;
+  if (query.raisedBy.toString() !== userId.toString()) {
     await Notifications.create({
       user: query.raisedBy,
-      fromUser: req.cookies.userId,
+      fromUser: userId,
       type: "QUERY_REPLIED",
       title: `Query Replied - ${query.message.slice(0, 50)}`,
       description: text,
@@ -152,7 +155,8 @@ export const getTaskQueries = async (req, res) => {
 // Get user's raised queries (across all tasks)
 export const getRaisedQueries = async (req, res) => {
   try {
-    const queries = await Queries.find({ raisedBy: req.cookies.userId })
+    const userId = req.cookies.userId || req.user._id || null;
+    const queries = await Queries.find({ raisedBy: userId })
       .populate("taskId", "TaskId title status dueDate") // Task details
       .populate("assignedTo repliedBy", "name email department")
       .populate("conversationId", "taskId")
@@ -171,7 +175,9 @@ export const getRaisedQueries = async (req, res) => {
 // Get user's assigned queries (to handle)
 export const getAssignedQueries = async (req, res) => {
   try {
-    const queries = await Queries.find({ assignedTo: req.cookies.userId })
+    const userId = req.cookies.userId || req.user._id || null;
+
+    const queries = await Queries.find({ assignedTo: userId })
       .populate("taskId", "TaskId title status dueDate")
       .populate("raisedBy repliedBy", "name email department")
       .populate("conversationId", "taskId")

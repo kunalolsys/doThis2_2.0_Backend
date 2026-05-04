@@ -111,7 +111,7 @@ export const updateDepartment = handleAsync(async (req, res, next) => {
 // Delete Department
 export const deleteDepartment = handleAsync(async (req, res, next) => {
   const { id } = req.params;
-  const currentUserId = req.cookies.userId;
+  const currentUserId = req.cookies.userId || req.user._id || null;
   const department = await Department.findById(id);
 
   if (!department) {

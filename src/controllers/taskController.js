@@ -264,8 +264,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     xValue:
       xValue && xValue !== "null" && xValue !== "" ? Number(xValue) : null,
   };
-
-  const userId = req.cookies.userId || null;
+  const userId = req.cookies.userId || req.user._id || null;
   const parsedStartDate = cleanField(startDate)
     ? parseDateIST(startDate)
     : isActualToPlanned
@@ -530,7 +529,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       action: "CREATE",
       module: "TASK",
       documentId: newTask._id,
-      performedBy: req.cookies.userId,
+      performedBy: req.cookies.userId || req.user._id || null,
       newData: newTask,
       message: `Task Created | Title: ${newTask.title} | ID: ${newTask.TaskId} | WorkShift: ${workShift.name} | Visible: ${newTask.isVisible}`,
     });
@@ -2040,6 +2039,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
 
     FmsInstanceTask.find(fmsQuery)
       .populate("assignedTo", "name email department assignShift")
+      .populate("assignedBy", "name email")
       .populate("updatedBy", "name email")
       .populate("departmentOfAssignToUser", "name")
       .sort({ createdAt: -1 })
@@ -2061,7 +2061,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     status: task.status,
 
     assignedTo: task.assignedTo,
-    assignedBy: task.updatedBy || null,
+    assignedBy: task.assignedBy || null,
 
     departmentOfAssignToUser: task.departmentOfAssignToUser,
 
@@ -2568,7 +2568,7 @@ export const deleteTask = handleAsync(async (req, res, next) => {
     // Save history
     const historyDoc = await DeleteTaskHistory.create({
       deleteParentTaskId: null,
-      deletedBy: req.cookies.userId || null,
+      deletedBy: req.cookies.userId || req.user._id || null,
       remark: "",
       deletedTasksCount: 1,
       deletedTaskIds: [task._id],
@@ -3586,7 +3586,7 @@ export const updateTask = handleAsync(async (req, res, next) => {
     action: "UPDATE",
     module: "TASK",
     documentId: task._id,
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     oldData,
     newData: task,
     message: `Task Updated | Title: ${task.title} | ID: ${task.TaskId}`,

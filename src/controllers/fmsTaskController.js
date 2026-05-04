@@ -41,8 +41,8 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         ifTrueStep: row.ifTrueStep,
         elseStep: row.elseStep,
         taskEndDays: parseFloat(row.taskEndDays || 0),
-        assignedBy: req.cookies.userId,
-        createdBy: req.cookies.userId,
+        assignedBy: req.cookies.userId || req.user._id || null,
+        createdBy: req.cookies.userId || req.user._id || null,
         isRecurringTask: isRecurrent,
         checklist: row.checklist || [],
         createdForm: row.createdForm || [],
@@ -161,7 +161,7 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
   // Log deletion
   await createLog({
     action: 'DELETE_FMS_TASK',
-    performedBy: req.cookies.userId,
+    performedBy: req.cookies.userId || req.user._id || null,
     targetId: task._id,
     targetType: 'FmsTask',
     details: `Template task ${task.taskId} deleted from template ${templateId}`,
@@ -311,7 +311,7 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
         elseStep: row.elseStep,
         taskEndDays: Number(row.taskEndDays) || 0,
 
-        createdBy: req.cookies.userId,
+        createdBy: req.cookies.userId || req.user._id || null,
       };
 
       const task = await FmsTask.create(taskData);
