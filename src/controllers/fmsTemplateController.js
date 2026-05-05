@@ -85,26 +85,49 @@ export const importFmsTemplates = handleAsync(async (req, res, next) => {
         description = "",
         fmsDuration,
         endDate,
-        manager,
-        srManager,
+        manager: managerName,
+        srManager: srManagerName,
       } = data;
 
       // Validate required
-      if (!templateName || !fmsDuration || !manager) {
+      if (!templateName || !fmsDuration || !managerName) {
         errors.push({ templateName, error: "Missing required fields" });
         continue;
       }
 
       // Check Manager role
-      const managerUser = await User.findById(manager).populate("role");
-      if (!managerUser || managerUser.role.name !== "Manager") {
+      // 🔥 Find manager by name
+      const managerUser = await User.findOne({
+        name: managerName,
+        isDeleted: false,
+      }).populate("role");
+
+      if (!managerUser) {
+        errors.push({ templateName, error: "Manager not found" });
+        continue;
+      }
+
+      // 🔥 Validate role
+      if (managerUser.role?.name !== "Manager") {
         errors.push({ templateName, error: "Manager must have Manager role" });
         continue;
       }
 
-      if (srManager) {
-        const srUser = await User.findById(srManager).populate("role");
-        if (!srUser || srUser.role.name !== "Sr. Manager") {
+      // 🔥 Find srManager if provided
+      let srUser = null;
+
+      if (srManagerName) {
+        srUser = await User.findOne({
+          name: srManagerName,
+          isDeleted: false,
+        }).populate("role");
+
+        if (!srUser) {
+          errors.push({ templateName, error: "Sr Manager not found" });
+          continue;
+        }
+
+        if (srUser.role?.name !== "Sr. Manager") {
           errors.push({
             templateName,
             error: "Sr Manager must have Sr Manager role",
@@ -150,8 +173,8 @@ export const importFmsTemplates = handleAsync(async (req, res, next) => {
         description,
         fmsDuration,
         endDate: fmsDuration === "Fixed Period" ? parsedEndDate : undefined,
-        manager,
-        srManager: srManager || undefined,
+        manager: managerUser._id,
+        srManager: srUser?._id,
         user: userId,
       });
 
