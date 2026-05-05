@@ -16,7 +16,7 @@ const FmsTemplateSchema = new mongoose.Schema(
       required: [true, "Template name required"],
       trim: true,
       maxLength: 100,
-      unique: true, // Prevent duplicates as per user request
+      // unique: true, // Prevent duplicates as per user request
       index: true,
     },
     description: {

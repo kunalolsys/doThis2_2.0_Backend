@@ -1,44 +1,50 @@
-import FmsInstanceTask from "../../models/FmsInstanceTask.js";
 import Conversation from "../../models/queries/Conversation.js";
 import Messages from "../../models/queries/Message.js";
 import Notifications from "../../models/queries/Notification.js";
 import Queries from "../../models/queries/Queries.js";
 import Task from "../../models/Task.js";
+import FmsInstanceTask from "../../models/FmsInstanceTask.js";
 import { getIO } from "../../socket.js";
 
 export const sendMessage = async (req, res) => {
-  const { conversationId, text, parentMessage, queryId, taskId } = req.body;
+  const { text, parentMessage, queryId, taskId } = req.body;
+  let { conversationId } = req.body;
+  if (!text) {
+    return res.status(400).json({ message: "text required" });
+  }
   const userId = req.cookies.userId || req.user._id || null;
-  let task = await Task.findById(taskId);
-  let fmsTask = null;
-  let isFms = false;
-
-  if (!task) {
-    fmsTask = await FmsInstanceTask.findById(taskId);
-    isFms = true;
+  let conversation;
+  let activeTask = null;
+  if (taskId) {
+    let task = await Task.findById(taskId);
+    let fmsTask = null;
+    if (!task) {
+      fmsTask = await FmsInstanceTask.findById(taskId);
+    }
+    activeTask = task || fmsTask;
+    if (!activeTask) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    // Get or create conversation for task
+    conversation = await Conversation.findOne({ taskId: activeTask._id });
+    if (!conversation) {
+      conversation = await Conversation.create({
+        taskId: activeTask._id,
+        taskType: task ? task.taskType : "FmsInstanceTask",
+        participants: [userId, activeTask.assignedTo, activeTask.assignedBy],
+      });
+      activeTask.conversationId = conversation._id;
+      await activeTask.save();
+    }
+    conversationId = conversation._id.toString();
+  } else if (!conversationId) {
+    return res
+      .status(400)
+      .json({ message: "taskId or conversationId required" });
   }
-  const activeTask = task || fmsTask;
-  if (!activeTask) {
-    return res.status(404).json({ message: "Task not found" });
-  }
-  let conversation = await Conversation.findOne({
-    taskId: activeTask._id,
-  });
-  if (!conversation) {
-    const userId = req.cookies.userId || req.user._id || null;
 
-    conversation = await Conversation.create({
-      taskId: activeTask._id,
-      taskType: task ? task.taskType : "FmsInstanceTask", // 🔥 important
-      participants: [userId, activeTask.assignedTo, activeTask.assignedBy],
-    });
-
-    activeTask.conversationId = conversation._id;
-    await activeTask.save();
-  }
-  const currentConversationId = conversationId || activeTask.conversationId;
   const message = await Messages.create({
-    conversationId: currentConversationId,
+    conversationId,
     sender: userId, // ✅ JWT user
     text,
     parentMessage: parentMessage || null,
@@ -49,20 +55,19 @@ export const sendMessage = async (req, res) => {
 
   // Emit to conversation + task room
   const io = getIO();
-  io.to(currentConversationId.toString()).emit("chat-message", message);
+  const convIdStr = conversationId.toString();
 
-  // io.to(conversationId).emit("new-message", {
-  //   message,
-  //   sender: message.sender,
-  // });
+  // Emit to conversation room + ALL participants personal rooms (live for sender/receivers)
+  io.to(convIdStr).emit("chat-message", message);
+  conversation.participants.forEach((p) => {
+    io.to(p._id.toString()).emit("chat-message", message);
+  });
 
-  // Notify participants except sender
-  // const conversation =
-  //   await Conversation.findById(conversationId).populate("participants");
+  // Update participants
   conversation = await Conversation.findByIdAndUpdate(
-    currentConversationId,
+    conversationId,
     {
-      $addToSet: { participants: userId }, // ✅ adds only if not exists
+      $addToSet: { participants: userId },
     },
     { new: true },
   ).populate("participants");
@@ -78,22 +83,20 @@ export const sendMessage = async (req, res) => {
       description: text,
       relatedId: message._id,
       taskId: conversation.taskId,
-      conversationId: currentConversationId,
+      conversationId: convIdStr,
     });
-    // ✅ Count unread messages for THIS user
     const unreadCount = await Messages.countDocuments({
-      currentConversationId,
-      sender: { $ne: user._id }, // not sent by them
-      "seenBy.user": { $ne: user._id }, // not seen by them
+      conversationId: convIdStr,
+      sender: { $ne: user._id },
+      "seenBy.user": { $ne: user._id },
     });
-
     io.to(user._id.toString()).emit("notification", {
       title: "New Message",
       description: text,
       type: "message",
     });
     io.to(user._id.toString()).emit("unread-count", {
-      conversationId: currentConversationId,
+      conversationId: convIdStr,
       count: unreadCount,
     });
   }

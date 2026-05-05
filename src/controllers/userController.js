@@ -105,6 +105,24 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
     },
   });
 });
+export const getAllUsersForDrop = handleAsync(async (req, res, next) => {
+  const filter = { isDeleted: { $ne: true } };
+
+  // ✅ Total count (for frontend pagination)
+  const total = await User.countDocuments(filter);
+
+  // ✅ Fetch users
+  const users = await User.find(filter, "-password")
+    .populate("department", "name")
+    .populate("role", "name")
+    .populate("assignShift")
+    .sort({ createdAt: -1 });
+
+  return res.status(200).json({
+    success: true,
+    data: users,
+  });
+});
 export const exportUsers = handleAsync(async (req, res) => {
   const { role, department, assignShift, search } = req.body;
 
@@ -189,7 +207,7 @@ export const createUser = handleAsync(async (req, res, next) => {
       new AppError("Secondary email required when selected as main", 400),
     );
   }
-  const hashedPassword = await bcrypt.hash(password, 12);
+  // const hashedPassword = await bcrypt.hash(password, 12);
 
   const newUser = await User.create({
     name,
@@ -207,7 +225,7 @@ export const createUser = handleAsync(async (req, res, next) => {
         ? reportingManager
         : undefined,
     assignShift,
-    password: hashedPassword,
+    password: password,
     isEmailNotificationEnabled: isEmailNotificationEnabled,
     mainEmailType: mainEmailType || "email",
   });
@@ -289,7 +307,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
 
   if (password) {
     const hashedPassword = await bcrypt.hash(password, 10);
-    user.password = hashedPassword;
+    user.password = password;
   }
 
   if (department) user.department = department;

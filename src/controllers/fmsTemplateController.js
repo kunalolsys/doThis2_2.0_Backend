@@ -206,7 +206,7 @@ export const getTemplates = handleAsync(async (req, res) => {
   });
 });
 export const getTemplatesForDropdown = handleAsync(async (req, res) => {
-  const templates = await FmsTemplate.find()
+  const templates = await FmsTemplate.find({ isDeleted: false })
     .select("_id templateName fmsId description fmsDuration endDate isLaunched")
     .populate("manager", "name email")
     .populate("srManager", "name email")

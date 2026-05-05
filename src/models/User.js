@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema(
     employeeCode: {
       type: String,
       default: "",
-      unique: true,
+      // unique: true,
     },
     companyCode: {
       type: String,
@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: true,
-      unique: true,
+      // unique: true,
       trim: true,
       lowercase: true,
     },
@@ -147,7 +147,15 @@ userSchema.pre("save", async function (next) {
   }
   next();
 });
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } },
+);
 
+userSchema.index(
+  { employeeCode: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } },
+);
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
