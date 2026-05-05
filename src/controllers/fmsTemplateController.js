@@ -43,6 +43,7 @@ export const createTemplate = handleAsync(async (req, res, next) => {
     endDate: fmsDuration === "Fixed Period" ? endDate : undefined,
     manager: managerUser._id,
     srManager: srManager || undefined,
+    user: userId,
   });
 
   await template.populate([
@@ -63,6 +64,109 @@ export const createTemplate = handleAsync(async (req, res, next) => {
   res.status(201).json({
     success: true,
     data: template,
+  });
+});
+//**Import Templates */
+export const importFmsTemplates = handleAsync(async (req, res, next) => {
+  const { templates } = req.body; // Expect array: [{templateName, description, fmsDuration, endDate?, manager, srManager?}]
+  const userId = req.cookies.userId || req.user._id || null;
+
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return next(new AppError("Provide templates array in request body", 400));
+  }
+
+  const createdTemplates = [];
+  const errors = [];
+
+  for (const data of templates) {
+    try {
+      const {
+        templateName,
+        description = "",
+        fmsDuration,
+        endDate,
+        manager,
+        srManager,
+      } = data;
+
+      // Validate required
+      if (!templateName || !fmsDuration || !manager) {
+        errors.push({ templateName, error: "Missing required fields" });
+        continue;
+      }
+
+      // Check Manager role
+      const managerUser = await User.findById(manager).populate("role");
+      if (!managerUser || managerUser.role.name !== "Manager") {
+        errors.push({ templateName, error: "Manager must have Manager role" });
+        continue;
+      }
+
+      if (srManager) {
+        const srUser = await User.findById(srManager).populate("role");
+        if (!srUser || srUser.role.name !== "Sr. Manager") {
+          errors.push({
+            templateName,
+            error: "Sr Manager must have Sr Manager role",
+          });
+          continue;
+        }
+      }
+
+      // Check duplicate
+      const existing = await FmsTemplate.findOne({
+        templateName,
+        isDeleted: false,
+      });
+
+      if (existing) {
+        errors.push({ templateName, error: "Template already exists" });
+        continue;
+      }
+      // Validate & parse Fixed Period endDate (DD-MM-YYYY -> ISO)
+      let parsedEndDate;
+      if (fmsDuration === "Fixed Period") {
+        if (!endDate) {
+          errors.push({
+            templateName,
+            error: "endDate required for Fixed Period",
+          });
+          continue;
+        }
+        // Parse DD-MM-YYYY to Date
+        const [day, month, year] = endDate.split("-").map(Number);
+        parsedEndDate = new Date(year, month - 1, day); // month 0-indexed
+        if (isNaN(parsedEndDate.getTime())) {
+          errors.push({
+            templateName,
+            error: `Invalid endDate format "${endDate}". Use DD-MM-YYYY`,
+          });
+          continue;
+        }
+      }
+
+      const template = await FmsTemplate.create({
+        templateName,
+        description,
+        fmsDuration,
+        endDate: fmsDuration === "Fixed Period" ? parsedEndDate : undefined,
+        manager,
+        srManager: srManager || undefined,
+        user: userId,
+      });
+
+      await template.populate(["manager", "srManager"]);
+      createdTemplates.push(template);
+    } catch (err) {
+      errors.push({ templateName: data.templateName, error: err.message });
+    }
+  }
+
+  res.status(201).json({
+    success: true,
+    message: `${createdTemplates.length} templates created, ${errors.length} errors`,
+    created: createdTemplates,
+    errors,
   });
 });
 

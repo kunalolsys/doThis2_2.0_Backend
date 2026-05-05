@@ -10,6 +10,7 @@ const router = express.Router();
 
 // BRD 5.1 Template Management (PERFECTED)
 router.post('/templates', authenticateJWT, fmsTemplateController.createTemplate);
+router.post('/templates-import', authenticateJWT, fmsTemplateController.importFmsTemplates);
 router.post('/templates-list', authenticateJWT, fmsTemplateController.getTemplates);
 router.get('/templates-list-drop',authenticateJWT,  fmsTemplateController.getTemplatesForDropdown);
 router.get('/templates-details/:id',authenticateJWT,  fmsTemplateController.getTemplateById);

@@ -1,15 +1,44 @@
+import FmsInstanceTask from "../../models/FmsInstanceTask.js";
 import Conversation from "../../models/queries/Conversation.js";
 import Messages from "../../models/queries/Message.js";
 import Notifications from "../../models/queries/Notification.js";
 import Queries from "../../models/queries/Queries.js";
+import Task from "../../models/Task.js";
 import { getIO } from "../../socket.js";
 
 export const sendMessage = async (req, res) => {
-  const { conversationId, text, parentMessage, queryId } = req.body;
+  const { conversationId, text, parentMessage, queryId, taskId } = req.body;
   const userId = req.cookies.userId || req.user._id || null;
+  let task = await Task.findById(taskId);
+  let fmsTask = null;
+  let isFms = false;
 
+  if (!task) {
+    fmsTask = await FmsInstanceTask.findById(taskId);
+    isFms = true;
+  }
+  const activeTask = task || fmsTask;
+  if (!activeTask) {
+    return res.status(404).json({ message: "Task not found" });
+  }
+  let conversation = await Conversation.findOne({
+    taskId: activeTask._id,
+  });
+  if (!conversation) {
+    const userId = req.cookies.userId || req.user._id || null;
+
+    conversation = await Conversation.create({
+      taskId: activeTask._id,
+      taskType: task ? task.taskType : "FmsInstanceTask", // 🔥 important
+      participants: [userId, activeTask.assignedTo, activeTask.assignedBy],
+    });
+
+    activeTask.conversationId = conversation._id;
+    await activeTask.save();
+  }
+  const currentConversationId = conversationId || activeTask.conversationId;
   const message = await Messages.create({
-    conversationId,
+    conversationId: currentConversationId,
     sender: userId, // ✅ JWT user
     text,
     parentMessage: parentMessage || null,
@@ -20,7 +49,7 @@ export const sendMessage = async (req, res) => {
 
   // Emit to conversation + task room
   const io = getIO();
-  io.to(conversationId).emit("chat-message", message);
+  io.to(currentConversationId.toString()).emit("chat-message", message);
 
   // io.to(conversationId).emit("new-message", {
   //   message,
@@ -30,8 +59,8 @@ export const sendMessage = async (req, res) => {
   // Notify participants except sender
   // const conversation =
   //   await Conversation.findById(conversationId).populate("participants");
-  const conversation = await Conversation.findByIdAndUpdate(
-    conversationId,
+  conversation = await Conversation.findByIdAndUpdate(
+    currentConversationId,
     {
       $addToSet: { participants: userId }, // ✅ adds only if not exists
     },
@@ -49,11 +78,11 @@ export const sendMessage = async (req, res) => {
       description: text,
       relatedId: message._id,
       taskId: conversation.taskId,
-      conversationId,
+      conversationId: currentConversationId,
     });
     // ✅ Count unread messages for THIS user
     const unreadCount = await Messages.countDocuments({
-      conversationId,
+      currentConversationId,
       sender: { $ne: user._id }, // not sent by them
       "seenBy.user": { $ne: user._id }, // not seen by them
     });
@@ -64,7 +93,7 @@ export const sendMessage = async (req, res) => {
       type: "message",
     });
     io.to(user._id.toString()).emit("unread-count", {
-      conversationId,
+      conversationId: currentConversationId,
       count: unreadCount,
     });
   }

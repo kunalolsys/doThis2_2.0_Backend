@@ -36,6 +36,10 @@ const FmsTemplateSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     srManager: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -68,8 +72,11 @@ const FmsTemplateSchema = new mongoose.Schema(
 // Indexes for performance
 FmsTemplateSchema.index({ fmsId: 1 });
 FmsTemplateSchema.index({ manager: 1 });
-FmsTemplateSchema.index({ templateName: 1 }); // Explicit for queries
-
+// FmsTemplateSchema.index({ templateName: 1 }); // Explicit for queries
+FmsTemplateSchema.index(
+  { templateName: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
 // BRD: Fixed Period → endDate required
 FmsTemplateSchema.pre("validate", function (next) {
   if (this.fmsDuration === "Fixed Period" && !this.endDate) {
