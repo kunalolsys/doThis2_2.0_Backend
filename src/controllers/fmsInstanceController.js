@@ -689,7 +689,53 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     },
   });
 });
+//**GET FMS COUNTS FOR DASHBOARD */
+export const getFmsInstancesCount = handleAsync(async (req, res) => {
+  const matchStage = {};
 
+  const result = await FmsInstance.aggregate([
+    { $match: matchStage },
+
+    {
+      $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  // Normalize response
+  const counts = {
+    upcoming: 0,
+    ongoing: 0,
+    completed: 0,
+    onhold: 0,
+    stopped: 0,
+    total: 0,
+  };
+
+  result.forEach((item) => {
+    const status = item._id;
+
+    if (status === "Upcoming") counts.upcoming += item.count;
+
+    if (["Ongoing", "InProcess"].includes(status)) counts.ongoing += item.count;
+
+    if (["Completed", "Cancelled"].includes(status))
+      counts.completed += item.count;
+
+    if (status === "Onhold") counts.onhold += item.count;
+
+    if (status === "Stopped") counts.stopped += item.count;
+
+    counts.total += item.count;
+  });
+
+  res.json({
+    success: true,
+    data: counts,
+  });
+});
 //**GET LAUNCHED FMS BY ID */
 export const getFmsInstanceById = handleAsync(async (req, res, next) => {
   const instance = await FmsInstance.findById(req.params.id)

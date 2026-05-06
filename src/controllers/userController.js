@@ -106,21 +106,26 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
   });
 });
 export const getAllUsersForDrop = handleAsync(async (req, res, next) => {
-  const filter = { isDeleted: { $ne: true } };
-
-  // ✅ Total count (for frontend pagination)
-  const total = await User.countDocuments(filter);
-
+  const filter = { isDeleted: { $ne: true }, isActive: true };
   // ✅ Fetch users
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("role", "name")
     .populate("assignShift")
     .sort({ createdAt: -1 });
-
+  const totalUser = await User.countDocuments(filter);
   return res.status(200).json({
     success: true,
     data: users,
+    totalUser,
+  });
+});
+export const dashboardUserCount = handleAsync(async (req, res, next) => {
+  const filter = { isDeleted: { $ne: true }, isActive: true };
+  const totalUser = await User.countDocuments(filter);
+  return res.status(200).json({
+    success: true,
+    totalUser,
   });
 });
 export const exportUsers = handleAsync(async (req, res) => {
