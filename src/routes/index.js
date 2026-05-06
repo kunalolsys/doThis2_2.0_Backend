@@ -10,6 +10,7 @@ import misReportRoutes from "./misReport.js";
 import fmsRoutes from "./fms.js";
 import queriesRoutes from "./queries.js";
 import threadRoutes from "./thread.js";
+import fmsReportRoutes from "./fmsReport.js";
 const router = express.Router();
 
 router.use("/setup", setupRoutes);
@@ -32,8 +33,10 @@ router.use("/mis", misReportRoutes);
 
 router.use("/schedule-holiday-task", scheduleHolidayTaskRoutes);
 router.use("/fms", fmsRoutes);
+router.use("/fms-report", fmsReportRoutes);
 router.use("/queries", queriesRoutes);
 router.use("/thread", threadRoutes);
 
 
 export default router;
+
