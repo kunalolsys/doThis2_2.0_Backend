@@ -99,6 +99,13 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
   const pipeline = [
     { $match: baseMatch },
 
+    // Only completed tasks should contribute to on-time/late scoring.
+    // This fixes cases where a task marked "Overdue/Pending" but not completed
+    // was counted as notDoneOnTime.
+    {
+      $match: { status: "Completed", actualCompleteDate: { $ne: null } },
+    },
+
     // join instance for status filtering and metadata
     {
       $lookup: {
@@ -258,6 +265,160 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
 
   const topPerformers = await FmsInstanceTask.aggregate(pipeline);
 
+  // Template-wise summary for cleaner UI: group by FMS template (via FmsInstance -> fmsTemplateId)
+  // Assumption (scope): tasks where user is the assignee (FmsInstanceTask.assignedTo)
+  const templatePipeline = [
+    { $match: baseMatch },
+    {
+      $lookup: {
+        from: "fmsinstances",
+        localField: "fmsInstanceId",
+        foreignField: "_id",
+        as: "instance",
+      },
+    },
+    { $unwind: { path: "$instance", preserveNullAndEmptyArrays: false } },
+    ...(instanceStatus &&
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(String(instanceStatus).toLowerCase())
+      ? [
+          {
+            $match: {
+              "instance.status": (() => {
+                const s = String(instanceStatus).toLowerCase();
+                const map = {
+                  upcoming: "Upcoming",
+                  ongoing: { $in: ["Ongoing", "InProcess"] },
+                  completed: { $in: ["Completed", "Cancelled"] },
+                  onhold: { $in: ["Onhold"] },
+                  stopped: { $in: ["Stopped"] },
+                };
+                return map[s];
+              })(),
+            },
+          },
+        ]
+      : []),
+    ...(templateObjectId
+      ? [{ $match: { "instance.fmsTemplateId": templateObjectId } }]
+      : []),
+
+    {
+      $group: {
+        _id: "$instance.fmsTemplateId",
+        assigned: { $sum: 1 },
+        completed: {
+          $sum: {
+            $cond: [
+              { $and: [{ $ne: ["$actualCompleteDate", null] }, { $eq: ["$status", "Completed"] }] },
+              1,
+              0,
+            ],
+          },
+        },
+        onTime: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: ["$actualCompleteDate", null] },
+                  { $eq: ["$status", "Completed"] },
+                  { $lte: ["$actualCompleteDate", "$plannedDueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        late: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: ["$actualCompleteDate", null] },
+                  { $eq: ["$status", "Completed"] },
+                  { $gt: ["$actualCompleteDate", "$plannedDueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        completionRate: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: ["$completed", { $cond: [{ $eq: ["$assigned", 0] }, 1, "$assigned"] }],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+        onTimeRate: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: ["$onTime", { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] }],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+        lateRate: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: ["$late", { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] }],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "fmstemplates",
+        localField: "_id",
+        foreignField: "_id",
+        as: "template",
+      },
+    },
+    { $unwind: { path: "$template", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        _id: 0,
+        fmsTemplateId: "$_id",
+        templateName: "$template.templateName",
+        fmsId: "$template.fmsId",
+        assigned: 1,
+        completed: 1,
+        onTime: 1,
+        late: 1,
+        completionRate: 1,
+        onTimeRate: 1,
+        lateRate: 1,
+      },
+    },
+    { $sort: { completionRate: -1, completed: -1 } },
+  ];
+
+  const templateStats = await FmsInstanceTask.aggregate(templatePipeline);
+
   // Detailed tasks list (non-aggregated, with pagination)
   const skip = (Number(page) - 1) * Number(limit);
 
@@ -284,8 +445,10 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
   };
 
   if (templateObjectId) {
-    // No field in schema, so use instance join would be needed.
-    // For now: ignore template filter (to avoid wrong results).
+    // Apply template filter using join to instances IDs
+    const instances = await FmsInstance.find({ fmsTemplateId: templateObjectId }).select("_id").lean();
+    const ids = instances.map((i) => i._id);
+    detailMatch.fmsInstanceId = ids.length ? { $in: ids } : { $in: [null] };
   }
 
   const tasks = await FmsInstanceTask.find(detailMatch)
@@ -318,6 +481,7 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     count: tasks.length,
     total,
     topPerformers,
+    templateStats,
     tasks,
     filters: {
       period,
