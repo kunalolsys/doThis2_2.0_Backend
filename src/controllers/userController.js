@@ -83,25 +83,32 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
   const skip = (page - 1) * limit;
 
   // ✅ Total count (for frontend pagination)
-  const total = await User.countDocuments(filter);
+  // const total = await User.countDocuments(filter);
 
   // ✅ Fetch users
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("role", "name")
     .populate("assignShift")
-    .skip(skip)
-    .limit(Number(limit))
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // ✅ remove Super users
+  const filteredUsers = users.filter((user) => user.role?.name !== "Super");
+
+  // ✅ pagination after filtering
+  const total = filteredUsers.length;
+
+  const paginatedUsers = filteredUsers.slice(skip, skip + Number(limit));
 
   return res.status(200).json({
     success: true,
-    data: users,
+    data: paginatedUsers,
     pagination: {
       total,
       page: Number(page),
       limit: Number(limit),
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / Number(limit)),
     },
   });
 });
