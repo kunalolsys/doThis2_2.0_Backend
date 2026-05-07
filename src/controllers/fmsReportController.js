@@ -8,10 +8,11 @@ import FmsInstance from "../models/FmsInstance.js";
 
 // Keep controller focused: remove unused helper imports/vars when not used.
 
-
 const safeObjectId = (id) => {
   if (!id) return null;
-  return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+  return mongoose.Types.ObjectId.isValid(id)
+    ? new mongoose.Types.ObjectId(id)
+    : null;
 };
 
 // Define "on time" for FMS as: completed on/before plannedDueDate.
@@ -30,7 +31,10 @@ const buildTaskMatch = ({ start, end, instanceId, templateId, status }) => {
   if (instanceId) match.fmsInstanceId = instanceId;
   if (templateId) match.fmsTemplateId = templateId; // may be null/not present
 
-  if (status && ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(status)) {
+  if (
+    status &&
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(status)
+  ) {
     // In instance model statuses.
     // We don't have instance.status in this collection, so we will filter later via lookup.
     // Keeping here as a marker.
@@ -74,7 +78,9 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
   if (managerObjectId) userIdSet.add(managerObjectId.toString());
   if (srManagerObjectId) userIdSet.add(srManagerObjectId.toString());
 
-  const userIdArray = [...userIdSet].map((id) => new mongoose.Types.ObjectId(id));
+  const userIdArray = [...userIdSet].map(
+    (id) => new mongoose.Types.ObjectId(id),
+  );
 
   const { start, end } = getDateRange(period, startDate, endDate);
 
@@ -85,7 +91,7 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     isVisible: true,
     $or: [
       { plannedDueDate: { $ne: null, $gte: start, $lte: end } },
-      { actualCompleteDate: { $ne: null, $gte: start, $lte: end } },
+      // { actualCompleteDate: { $ne: null, $gte: start, $lte: end } },
     ],
   };
 
@@ -118,7 +124,10 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     { $unwind: { path: "$instance", preserveNullAndEmptyArrays: false } },
 
     // optional instance status filter
-    ...(instanceStatus && ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(String(instanceStatus).toLowerCase())
+    ...(instanceStatus &&
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
+      String(instanceStatus).toLowerCase(),
+    )
       ? [
           {
             $match: {
@@ -279,7 +288,9 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     },
     { $unwind: { path: "$instance", preserveNullAndEmptyArrays: false } },
     ...(instanceStatus &&
-    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(String(instanceStatus).toLowerCase())
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
+      String(instanceStatus).toLowerCase(),
+    )
       ? [
           {
             $match: {
@@ -309,7 +320,12 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
         completed: {
           $sum: {
             $cond: [
-              { $and: [{ $ne: ["$actualCompleteDate", null] }, { $eq: ["$status", "Completed"] }] },
+              {
+                $and: [
+                  { $ne: ["$actualCompleteDate", null] },
+                  { $eq: ["$status", "Completed"] },
+                ],
+              },
               1,
               0,
             ],
@@ -354,7 +370,10 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             {
               $multiply: [
                 {
-                  $divide: ["$completed", { $cond: [{ $eq: ["$assigned", 0] }, 1, "$assigned"] }],
+                  $divide: [
+                    "$completed",
+                    { $cond: [{ $eq: ["$assigned", 0] }, 1, "$assigned"] },
+                  ],
                 },
                 100,
               ],
@@ -367,7 +386,10 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             {
               $multiply: [
                 {
-                  $divide: ["$onTime", { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] }],
+                  $divide: [
+                    "$onTime",
+                    { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] },
+                  ],
                 },
                 100,
               ],
@@ -380,7 +402,10 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             {
               $multiply: [
                 {
-                  $divide: ["$late", { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] }],
+                  $divide: [
+                    "$late",
+                    { $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"] },
+                  ],
                 },
                 100,
               ],
@@ -424,7 +449,12 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
 
   // instance status filter for detailed list: derive from FmsInstance
   let instanceFilter = {};
-  if (instanceStatus && ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(String(instanceStatus).toLowerCase())) {
+  if (
+    instanceStatus &&
+    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
+      String(instanceStatus).toLowerCase(),
+    )
+  ) {
     const s = String(instanceStatus).toLowerCase();
     const instanceMap = {
       upcoming: ["Upcoming"],
@@ -434,9 +464,15 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       stopped: ["Stopped"],
     };
     const statuses = instanceMap[s];
-    const instances = await FmsInstance.find({ status: { $in: statuses } }).select("_id").lean();
+    const instances = await FmsInstance.find({ status: { $in: statuses } })
+      .select("_id")
+      .lean();
     const ids = instances.map((i) => i._id);
-    instanceFilter = { ...(ids.length ? { fmsInstanceId: { $in: ids } } : { fmsInstanceId: null }) };
+    instanceFilter = {
+      ...(ids.length
+        ? { fmsInstanceId: { $in: ids } }
+        : { fmsInstanceId: null }),
+    };
   }
 
   const detailMatch = {
@@ -446,7 +482,11 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
 
   if (templateObjectId) {
     // Apply template filter using join to instances IDs
-    const instances = await FmsInstance.find({ fmsTemplateId: templateObjectId }).select("_id").lean();
+    const instances = await FmsInstance.find({
+      fmsTemplateId: templateObjectId,
+    })
+      .select("_id")
+      .lean();
     const ids = instances.map((i) => i._id);
     detailMatch.fmsInstanceId = ids.length ? { $in: ids } : { $in: [null] };
   }
@@ -508,4 +548,3 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     },
   });
 });
-
