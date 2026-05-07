@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 
 const PERMISSIONS = [
-   'Setup','Reports','Delegation Task', 'FmsEngine'
+   'Setup','Reports','Delegation Task', 'FmsEngine','Module Management'
 ];
 
 const FIXED_ROLES = [

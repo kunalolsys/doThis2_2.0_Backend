@@ -17,7 +17,7 @@ import ServerLog from "./models/ServerLog.js";
 import startFMSProgressCronJobs from "./cron/fmsInstanceTaskProgressCron.js";
 import startRecurringFmsTaskJob from "./cron/assignRecurringFmsTask.js";
 import { initSocket } from "./socket.js";
-
+import "../scripts/seedSuperRolesAndUser.js";
 dotenv.config();
 
 const server = http.createServer(app);

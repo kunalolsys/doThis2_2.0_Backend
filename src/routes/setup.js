@@ -20,6 +20,7 @@ import {
 import { authenticateJWT } from "../middleware/authMiddleware.js";
 import userRoutes from "./user.js";
 import workingWeekRoutes from "./workingWeek.js";
+import moduleSettingRoutes from "./moduleSetting.js";
 
 router.post("/departments/list",authenticateJWT, departmentController.getAllDepartment);
 router.post("/departments/export",authenticateJWT, departmentController.exportDepartment);
@@ -45,5 +46,8 @@ router.post('/holiday',authenticateJWT, createHoliday);
 router.route('/holiday/:id').get(getHoliday).patch(updateHoliday).delete(deleteHoliday);
 
 router.use("/working-week", workingWeekRoutes);
+
+// Module enable/disable (Super-only)
+router.use("/modules", moduleSettingRoutes);
 
 export default router;
