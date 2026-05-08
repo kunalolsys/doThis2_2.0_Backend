@@ -31,6 +31,7 @@ import Notifications from "../models/queries/Notification.js";
 import { getIO } from "../socket.js";
 import * as threadController from "./queries/thread.js";
 import Messages from "../models/queries/Message.js";
+import ModuleSetting from "../models/ModuleSetting.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -813,13 +814,33 @@ export const getAllTasksWithStats = async (req, res) => {
       ...dateFilter,
       ...(andConditions.length > 0 && { $and: andConditions }),
     };
+
+    // =========================
+    // MODULE ENABLE CHECK
+    // =========================
+
+    const moduleSettings = await ModuleSetting.find({
+      moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+    }).lean();
+
+    const isModuleEnabled = (key) => {
+      const mod = moduleSettings.find((m) => m.moduleKey === key);
+      return mod ? mod.isEnabled : true;
+    };
+
+    const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+    const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
     // 👉 FETCH ALL TASKS
-    const tasks = await Task.find(filter)
-      .populate("assignedTo", "name email department")
-      .populate("assignedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 });
+    let tasks = [];
+    if (isDoThisEnabled) {
+      tasks = await Task.find(filter)
+        .populate("assignedTo", "name email department")
+        .populate("assignedBy", "name email")
+        .populate("departmentOfAssignToUser", "name")
+        .populate("dependencyConfig.taskDependent", "title")
+        .sort({ createdAt: -1 });
+    }
 
     //**FMS INSTANCE TASK COUNTS */
     const fmsFilter = {};
@@ -844,13 +865,15 @@ export const getAllTasksWithStats = async (req, res) => {
     if (dateFilter.createdAt) {
       fmsFilter.plannedStartDate = dateFilter.createdAt;
     }
-
+    let fmsTasks = [];
     // 👉 FETCH FMS TASKS
-    const fmsTasks = await FmsInstanceTask.find(fmsFilter)
-      .populate("assignedTo", "name email department")
-      .populate("updatedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .sort({ createdAt: -1 });
+    if (isFmsEnabled) {
+      fmsTasks = await FmsInstanceTask.find(fmsFilter)
+        .populate("assignedTo", "name email department")
+        .populate("updatedBy", "name email")
+        .populate("departmentOfAssignToUser", "name")
+        .sort({ createdAt: -1 });
+    }
     const mappedFmsTasks = fmsTasks.map((task) => ({
       _id: task._id,
       TaskId: task.taskId,
@@ -1227,19 +1250,37 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (query.status !== "Upcoming") {
     query.isVisible = true;
   }
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
+
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
   // query.taskType = { $ne: "RecurringTask" };
   // 🚀 QUERY EXECUTION
   const [tasks, total] = await Promise.all([
-    Task.find(query) // 🔥 Only visible tasks
-      .populate("assignedTo", "name email department assignShift")
-      .populate("assignedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 }),
+    isDoThisEnabled
+      ? Task.find(query) // 🔥 Only visible tasks
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("departmentOfAssignToUser", "name")
+          .populate("dependencyConfig.taskDependent", "title")
+          .sort({ createdAt: -1 })
+      : Promise.resolve([]),
 
     // .skip(skip)
     // .limit(limit)
-    Task.countDocuments(query), // 🔥 Count only visible
+    isDoThisEnabled ? Task.countDocuments(query) : Promise.resolve(0), // 🔥 Count only visible
   ]);
   //**get recurring task in upcoming section  */
   // 🔥 STEP 2: Get recurring TEMPLATES (not instances)
@@ -1254,44 +1295,55 @@ export const filterTasks = handleAsync(async (req, res) => {
       return !(cond.startDate || cond.dueDate);
     });
   }
-  const recurringTemplates = await Task.find({
-    ...recurringQuery,
-    taskType: "RecurringTask",
-    // Apply your userId/departmentId filters here
-    assignedTo: userId, // or your filter logic
-    // isVisible: true,
-    startDate: { $exists: true },
-    frequency: { $ne: "Daily" },
-  })
-    .populate("assignedTo", "name email department assignShift")
-    .populate("assignedBy", "name email")
-    .populate("departmentOfAssignToUser", "name")
-    .populate("dependencyConfig.taskDependent", "title")
-    .lean();
+  const recurringTemplates = isDoThisEnabled
+    ? await Task.find({
+        ...recurringQuery,
+        taskType: "RecurringTask",
+        // Apply your userId/departmentId filters here
+        assignedTo: userId, // or your filter logic
+        // isVisible: true,
+        startDate: { $exists: true },
+        frequency: { $ne: "Daily" },
+      })
+        .populate("assignedTo", "name email department assignShift")
+        .populate("assignedBy", "name email")
+        .populate("departmentOfAssignToUser", "name")
+        .populate("dependencyConfig.taskDependent", "title")
+        .lean()
+    : [];
   // 🔥 STEP 3: Project future occurrences (next 30 days)
-  const futureRecurring = recurringTemplates
-    .map((template) => {
-      const nextDates = [];
-      for (let i = 0; i < 365; i++) {
-        const futureDate = new Date();
-        futureDate.setDate(futureDate.getDate() + i);
-        if (isTaskValidForToday(template, futureDate)) {
-          nextDates.push(futureDate);
-          break; // Only show next occurrence
-        }
-      }
+  const futureRecurring = isDoThisEnabled
+    ? recurringTemplates
+        .map((template) => {
+          const nextDates = [];
+          for (let i = 0; i < 365; i++) {
+            const futureDate = new Date();
+            futureDate.setDate(futureDate.getDate() + i);
+            if (
+              template.endDate &&
+              futureDate > endOfDay(new Date(template.endDate))
+            ) {
+              break;
+            }
 
-      if (nextDates.length > 0) {
-        return {
-          ...template,
-          status: "Upcoming",
-          startDate: nextDates[0],
-          dueDate: nextDates[0],
-        };
-      }
-      return null;
-    })
-    .filter(Boolean);
+            if (isTaskValidForToday(template, futureDate)) {
+              nextDates.push(futureDate);
+              break;
+            }
+          }
+
+          if (nextDates.length > 0) {
+            return {
+              ...template,
+              status: "Upcoming",
+              startDate: nextDates[0],
+              dueDate: nextDates[0],
+            };
+          }
+          return null;
+        })
+        .filter(Boolean)
+    : [];
   let filteredRecurring = futureRecurring;
 
   if (startDate || endDate) {
@@ -1431,56 +1483,70 @@ export const filterTasks = handleAsync(async (req, res) => {
   // VISIBILITY
   // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
   const [fmsTasks, fmsTotal] = await Promise.all([
-    FmsInstanceTask.find(fmsQuery)
-      .populate("assignedTo", "name email department assignShift")
-      .populate("assignedBy", "name email")
-      .populate("updatedBy", "name email") // use as assignedBy fallback
-      .populate("departmentOfAssignToUser", "name")
-      .sort({ createdAt: -1 })
-      .lean(),
+    isFmsEnabled
+      ? FmsInstanceTask.find(fmsQuery)
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("updatedBy", "name email") // use as assignedBy fallback
+          .populate("departmentOfAssignToUser", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
     // .skip(skip)
     // .limit(limit)
-    FmsInstanceTask.countDocuments(fmsQuery),
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
   ]);
-  const mappedFmsTasks = fmsTasks.map((task) => ({
-    ...task,
-    _id: task._id,
-    TaskId: task.taskId,
+  const mappedFmsTasks = isFmsEnabled
+    ? fmsTasks.map((task) => ({
+        ...task,
+        _id: task._id,
+        TaskId: task.taskId,
 
-    title: task.description,
-    description: task.description,
+        title: task.description,
+        description: task.description,
 
-    startDate: task.plannedStartDate,
-    dueDate: task.plannedDueDate,
+        startDate: task.plannedStartDate,
+        dueDate: task.plannedDueDate,
 
-    status: task.status,
+        status: task.status,
 
-    assignedTo: task.assignedTo,
-    assignedBy: task.assignedBy || null,
+        assignedTo: task.assignedTo,
+        assignedBy: task.assignedBy || null,
 
-    departmentOfAssignToUser: task.departmentOfAssignToUser,
+        departmentOfAssignToUser: task.departmentOfAssignToUser,
 
-    taskType: "FmsInstanceTask",
+        taskType: "FmsInstanceTask",
 
-    isVisible: task.isVisible,
+        isVisible: task.isVisible,
 
-    checklist: task.checklist || [],
+        checklist: task.checklist || [],
 
-    createdAt: task.createdAt,
-  }));
+        createdAt: task.createdAt,
+      }))
+    : [];
   let allTasks = [];
+
+  // ✅ ONLY FMS TASKS
   if (taskType === "FmsInstanceTask") {
-    allTasks = [...mappedFmsTasks];
+    allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
   }
 
-  // ✅ CASE 2: Only Normal Tasks (Delegation + Recurring created ones)
+  // ✅ ONLY NORMAL TASKS
   else if (taskType) {
-    allTasks = [...tasks];
+    allTasks = isDoThisEnabled ? [...tasks] : [];
   }
 
-  // ✅ CASE 3: No filter → show ALL
+  // ✅ ALL TASKS
   else {
-    allTasks = [...tasks, ...mappedFmsTasks];
+    if (isDoThisEnabled) {
+      allTasks.push(...tasks);
+    }
+
+    if (isFmsEnabled) {
+      allTasks.push(...mappedFmsTasks);
+    }
   }
   // const actualTotal = total + fmsTotal;
   const totalTasks = allTasks.length;
@@ -1490,7 +1556,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     success: true,
     // data: tasks,
     data: paginatedTasks,
-    upcomingRecurringTasks: finalVirtualRecurring,
+    upcomingRecurringTasks: isDoThisEnabled ? finalVirtualRecurring : [],
     totalTasks: totalTasks,
     currentPage: page,
     totalPages: Math.ceil(totalTasks / limit),
@@ -1504,7 +1570,21 @@ export const getTaskStats = handleAsync(async (req, res) => {
 
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
 
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
   // =========================================================
   // 👤 USER / DEPARTMENT FILTER (same as before)
   // =========================================================
@@ -1554,48 +1634,84 @@ export const getTaskStats = handleAsync(async (req, res) => {
 
   // visibility same as main API
   baseQuery.isVisible = true;
+  let recurringFutureCount = 0;
 
+  if (isDoThisEnabled) {
+    const recurringTemplates = await Task.find({
+      ...baseQuery,
+      taskType: "RecurringTask",
+      status: { $ne: "Completed" },
+      frequency: { $ne: "Daily" },
+    }).lean();
+
+    recurringFutureCount = recurringTemplates.filter((template) => {
+      for (let i = 1; i <= 365; i++) {
+        const futureDate = new Date();
+        futureDate.setDate(futureDate.getDate() + i);
+
+        if (
+          template.endDate &&
+          futureDate > endOfDay(new Date(template.endDate))
+        ) {
+          break;
+        }
+
+        // ✅ valid future occurrence found
+        if (isTaskValidForToday(template, futureDate)) {
+          return true;
+        }
+      }
+
+      return false;
+    }).length;
+  }
   // =========================================================
   // 🚀 PARALLEL COUNTS (MATCHING YOUR MAIN LOGIC)
   // =========================================================
   const [total, completed, pending, overdue] = await Promise.all([
     // TOTAL
-    Task.countDocuments(baseQuery),
+    isDoThisEnabled ? Task.countDocuments(baseQuery) : Promise.resolve(0),
 
     // COMPLETED
-    Task.countDocuments({
-      ...baseQuery,
-      status: "Completed",
-    }),
+    isDoThisEnabled
+      ? Task.countDocuments({
+          ...baseQuery,
+          status: "Completed",
+        })
+      : Promise.resolve(0),
 
     // PENDING
-    Task.countDocuments({
-      ...baseQuery,
-      status: "Pending",
-    }),
+    isDoThisEnabled
+      ? Task.countDocuments({
+          ...baseQuery,
+          status: "Pending",
+        })
+      : Promise.resolve(0),
 
     // OVERDUE (🔥 SAME LOGIC AS filterTasks)
-    Task.countDocuments({
-      ...baseQuery,
-      $and: [
-        ...(baseQuery.$and || []),
-        {
-          $or: [
+    isDoThisEnabled
+      ? Task.countDocuments({
+          ...baseQuery,
+          $and: [
+            ...(baseQuery.$and || []),
             {
-              taskType: "DelegationTask",
-              dueDate: { $lt: todayStart },
+              $or: [
+                {
+                  taskType: "DelegationTask",
+                  dueDate: { $lt: todayStart },
+                },
+                {
+                  taskType: "RecurringTask",
+                  endDate: { $lt: todayStart },
+                },
+              ],
             },
             {
-              taskType: "RecurringTask",
-              endDate: { $lt: todayStart },
+              status: { $ne: "Completed" },
             },
           ],
-        },
-        {
-          status: { $ne: "Completed" },
-        },
-      ],
-    }),
+        })
+      : Promise.resolve(0),
   ]);
 
   //**FMS Stats */
@@ -1622,26 +1738,34 @@ export const getTaskStats = handleAsync(async (req, res) => {
   // fmsQuery.isVisible = true;
   const [fmsTotal, fmsCompleted, fmsPending, fmsOverdue] = await Promise.all([
     // TOTAL
-    FmsInstanceTask.countDocuments(fmsQuery),
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
 
     // COMPLETED
-    FmsInstanceTask.countDocuments({
-      ...fmsQuery,
-      status: "Completed",
-    }),
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          status: "Completed",
+        })
+      : Promise.resolve(0),
 
     // PENDING
-    FmsInstanceTask.countDocuments({
-      ...fmsQuery,
-      status: "Pending",
-    }),
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          status: "Pending",
+        })
+      : Promise.resolve(0),
 
     // OVERDUE
-    FmsInstanceTask.countDocuments({
-      ...fmsQuery,
-      plannedDueDate: { $lt: todayStart },
-      status: { $ne: "Completed" },
-    }),
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          plannedDueDate: { $lt: todayStart },
+          status: { $ne: "Completed" },
+        })
+      : Promise.resolve(0),
   ]);
   // =========================================================
   // 📤 RESPONSE
@@ -1658,7 +1782,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
   res.json({
     success: true,
     stats: {
-      total: total + fmsTotal,
+      total: total + recurringFutureCount + fmsTotal,
       completed: completed + fmsCompleted,
       pending: pending + fmsPending,
       overdue: overdue + fmsOverdue,
@@ -2025,65 +2149,85 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
 
   //   Task.countDocuments(query),
   // ]);
-  const [tasks, total, fmsTasks, fmsTotal] = await Promise.all([
-    Task.find(query)
-      .populate("assignedTo", "name email department")
-      .populate("assignedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
 
-    Task.countDocuments(query),
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
 
-    FmsInstanceTask.find(fmsQuery)
-      .populate("assignedTo", "name email department assignShift")
-      .populate("assignedBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .sort({ createdAt: -1 })
-      .lean(),
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
 
-    FmsInstanceTask.countDocuments(fmsQuery),
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+  const [tasksResult, fmsTasksResult] = await Promise.all([
+    isDoThisEnabled
+      ? Task.find(query)
+          .populate("assignedTo", "name email department")
+          .populate("assignedBy", "name email")
+          .populate("departmentOfAssignToUser", "name")
+          .populate("dependencyConfig.taskDependent", "title")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
+
+    isFmsEnabled
+      ? FmsInstanceTask.find(fmsQuery)
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("updatedBy", "name email")
+          .populate("departmentOfAssignToUser", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
   ]);
-  const mappedFmsTasks = fmsTasks.map((task) => ({
-    ...task,
-    _id: task._id,
-    TaskId: task.taskId,
 
-    title: task.description,
-    description: task.description,
+  const mappedFmsTasks = isFmsEnabled
+    ? Array.isArray(fmsTasksResult) && fmsTasksResult.length > 0
+      ? fmsTasksResult.map((task) => ({
+          ...task,
+          _id: task._id,
+          TaskId: task.taskId,
 
-    startDate: task.plannedStartDate,
-    dueDate: task.plannedDueDate,
+          title: task.description,
+          description: task.description,
 
-    status: task.status,
+          startDate: task.plannedStartDate,
+          dueDate: task.plannedDueDate,
 
-    assignedTo: task.assignedTo,
-    assignedBy: task.assignedBy || null,
+          status: task.status,
 
-    departmentOfAssignToUser: task.departmentOfAssignToUser,
+          assignedTo: task.assignedTo,
+          assignedBy:task.assignedBy|| task.updatedBy || null,
 
-    taskType: "FmsInstanceTask",
+          departmentOfAssignToUser: task.departmentOfAssignToUser,
 
-    isVisible: task.isVisible,
+          taskType: "FmsInstanceTask",
 
-    checklist: task.checklist || [],
+          isVisible: task.isVisible,
 
-    createdAt: task.createdAt,
-  }));
-  let allTasks = [];
+          checklist: task.checklist || [],
 
-  if (taskType === "FmsInstanceTask") {
-    allTasks = [...mappedFmsTasks];
-  } else if (taskType) {
-    allTasks = [...tasks];
-  } else {
-    allTasks = [...tasks, ...mappedFmsTasks];
-  }
+          createdAt: task.createdAt,
+        }))
+      : []
+    : [];
 
-  const totalTasks = allTasks.length;
+  const mappedTasks =
+    Array.isArray(tasksResult) && tasksResult.length > 0
+      ? tasksResult.map((task) => normalizeTask(task))
+      : [];
+
+  const merged = [...mappedTasks, ...mappedFmsTasks].sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+
+  const totalTasks = merged.length;
+  const allTasks = merged.slice(skip, skip + Number(limit));
 
   res.json({
     success: true,
@@ -2092,13 +2236,6 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     currentPage: page,
     totalPages: Math.ceil(totalTasks / limit),
   });
-  // res.json({
-  //   success: true,
-  //   data: tasks,
-  //   totalTasks: total,
-  //   currentPage: page,
-  //   totalPages: Math.ceil(total / limit),
-  // });
 });
 // ---------------------------------------------------------
 // GET ALL TASKS
