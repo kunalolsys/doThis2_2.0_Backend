@@ -1,5 +1,14 @@
 import { Task, DelegationTask, RecurringTask } from "../models/Task.js";
-import { isSameDay, isAfter, startOfDay, endOfDay, parseISO } from "date-fns";
+import {
+  isSameDay,
+  isAfter,
+  startOfDay,
+  endOfDay,
+  parseISO,
+  format,
+  addDays,
+  addWeeks,
+} from "date-fns";
 import mongoose from "mongoose";
 import AppError from "../utils/AppError.js";
 import { handleAsync } from "../utils/handleAsync.js";
@@ -1217,8 +1226,14 @@ export const filterTasks = handleAsync(async (req, res) => {
   }
 
   // 🔁 TASK TYPE
-  if (taskType) {
+  // 🔁 TASK TYPE
+  if (taskType === "FutureRecurringTask") {
+    // don't query DB tasks
+  } else if (taskType) {
     query.taskType = taskType;
+  } else {
+    // default hide recurring templates
+    query.taskType = { $ne: "RecurringTask" };
   }
 
   // 📅 DATE RANGE FILTER (startDate OR dueDate)
@@ -1311,39 +1326,92 @@ export const filterTasks = handleAsync(async (req, res) => {
         .populate("dependencyConfig.taskDependent", "title")
         .lean()
     : [];
-  // 🔥 STEP 3: Project future occurrences (next 30 days)
-  const futureRecurring = isDoThisEnabled
-    ? recurringTemplates
-        .map((template) => {
-          const nextDates = [];
-          for (let i = 0; i < 365; i++) {
-            const futureDate = new Date();
-            futureDate.setDate(futureDate.getDate() + i);
-            if (
-              template.endDate &&
-              futureDate > endOfDay(new Date(template.endDate))
-            ) {
-              break;
-            }
+  const recurringIds = recurringTemplates.map((t) => t._id);
 
-            if (isTaskValidForToday(template, futureDate)) {
-              nextDates.push(futureDate);
-              break;
-            }
-          }
+  const existingInstances = await Task.find({
+    recurrenceTaskId: { $in: recurringIds },
+    taskType: "DelegationTask",
+  }).select("recurrenceTaskId startDate");
+  const existingMap = new Map();
 
-          if (nextDates.length > 0) {
-            return {
-              ...template,
-              status: "Upcoming",
-              startDate: nextDates[0],
-              dueDate: nextDates[0],
-            };
-          }
-          return null;
-        })
-        .filter(Boolean)
-    : [];
+  existingInstances.forEach((task) => {
+    const key = `${task.recurrenceTaskId}_${format(
+      startOfDay(task.startDate),
+      "yyyy-MM-dd",
+    )}`;
+
+    existingMap.set(key, true);
+  });
+  const getNextOccurrence = (template, existingMap) => {
+    const today = startOfDay(new Date());
+
+    // WEEKLY
+    if (template.frequency === "Weekly") {
+      const currentWeekDates = [];
+
+      for (let i = 0; i < 7; i++) {
+        const date = addDays(today, i);
+
+        if (isTaskValidForToday(template, date)) {
+          currentWeekDates.push(date);
+        }
+      }
+
+      // if ANY occurrence already created this week
+      const hasCurrentWeekInstance = currentWeekDates.some((date) => {
+        const key = `${template._id}_${format(date, "yyyy-MM-dd")}`;
+        return existingMap.has(key);
+      });
+
+      // if already created -> move to NEXT WEEK
+      const startSearch = hasCurrentWeekInstance ? addWeeks(today, 1) : today;
+
+      for (let i = 0; i < 7; i++) {
+        const date = addDays(startSearch, i);
+
+        if (isTaskValidForToday(template, date)) {
+          return date;
+        }
+      }
+    }
+
+    // DAILY
+    // if (template.frequency === "Daily") {
+    //   const todayKey = `${template._id}_${format(today, "yyyy-MM-dd")}`;
+
+    //   if (existingMap.has(todayKey)) {
+    //     return addDays(today, 1);
+    //   }
+
+    //   return today;
+    // }
+
+    return null;
+  };
+  const futureRecurring = recurringTemplates
+    .map((template) => {
+      const nextOccurrence = getNextOccurrence(template, existingMap);
+
+      if (!nextOccurrence) return null;
+
+      return {
+        ...template,
+
+        originalTaskType: template.taskType,
+
+        taskType: "FutureRecurringTask",
+
+        displayTaskType: "DelegationTask",
+
+        startDate: nextOccurrence,
+        dueDate: nextOccurrence,
+
+        status: "Upcoming",
+
+        isVirtualRecurring: true,
+      };
+    })
+    .filter(Boolean);
   let filteredRecurring = futureRecurring;
 
   if (startDate || endDate) {
@@ -1552,11 +1620,20 @@ export const filterTasks = handleAsync(async (req, res) => {
   const totalTasks = allTasks.length;
 
   const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
+
+  let recurringResponse = [];
+
+  const shouldShowFutureRecurring =
+    taskCategory === "upcoming" || taskType === "FutureRecurringTask";
+
+  if (shouldShowFutureRecurring) {
+    recurringResponse = finalVirtualRecurring;
+  }
   res.json({
     success: true,
     // data: tasks,
     data: paginatedTasks,
-    upcomingRecurringTasks: isDoThisEnabled ? finalVirtualRecurring : [],
+    upcomingRecurringTasks: isDoThisEnabled ? recurringResponse : [],
     totalTasks: totalTasks,
     currentPage: page,
     totalPages: Math.ceil(totalTasks / limit),
@@ -1634,48 +1711,53 @@ export const getTaskStats = handleAsync(async (req, res) => {
 
   // visibility same as main API
   baseQuery.isVisible = true;
-  let recurringFutureCount = 0;
+  // let recurringFutureCount = 0;
 
-  if (isDoThisEnabled) {
-    const recurringTemplates = await Task.find({
-      ...baseQuery,
-      taskType: "RecurringTask",
-      status: { $ne: "Completed" },
-      frequency: { $ne: "Daily" },
-    }).lean();
+  // if (isDoThisEnabled) {
+  //   const recurringTemplates = await Task.find({
+  //     ...baseQuery,
+  //     taskType: "RecurringTask",
+  //     status: { $ne: "Completed" },
+  //     frequency: { $ne: "Daily" },
+  //   }).lean();
 
-    recurringFutureCount = recurringTemplates.filter((template) => {
-      for (let i = 1; i <= 365; i++) {
-        const futureDate = new Date();
-        futureDate.setDate(futureDate.getDate() + i);
+  //   recurringFutureCount = recurringTemplates.filter((template) => {
+  //     for (let i = 1; i <= 365; i++) {
+  //       const futureDate = new Date();
+  //       futureDate.setDate(futureDate.getDate() + i);
 
-        if (
-          template.endDate &&
-          futureDate > endOfDay(new Date(template.endDate))
-        ) {
-          break;
-        }
+  //       if (
+  //         template.endDate &&
+  //         futureDate > endOfDay(new Date(template.endDate))
+  //       ) {
+  //         break;
+  //       }
 
-        // ✅ valid future occurrence found
-        if (isTaskValidForToday(template, futureDate)) {
-          return true;
-        }
-      }
+  //       // ✅ valid future occurrence found
+  //       if (isTaskValidForToday(template, futureDate)) {
+  //         return true;
+  //       }
+  //     }
 
-      return false;
-    }).length;
-  }
+  //     return false;
+  //   }).length;
+  // }
   // =========================================================
   // 🚀 PARALLEL COUNTS (MATCHING YOUR MAIN LOGIC)
   // =========================================================
   const [total, completed, pending, overdue] = await Promise.all([
     // TOTAL
-    isDoThisEnabled ? Task.countDocuments(baseQuery) : Promise.resolve(0),
-
+    isDoThisEnabled
+      ? Task.countDocuments({
+          ...baseQuery,
+          taskType: { $ne: "RecurringTask" },
+        })
+      : Promise.resolve(0),
     // COMPLETED
     isDoThisEnabled
       ? Task.countDocuments({
           ...baseQuery,
+          taskType: { $ne: "RecurringTask" },
           status: "Completed",
         })
       : Promise.resolve(0),
@@ -1684,27 +1766,21 @@ export const getTaskStats = handleAsync(async (req, res) => {
     isDoThisEnabled
       ? Task.countDocuments({
           ...baseQuery,
+          taskType: { $ne: "RecurringTask" },
           status: "Pending",
         })
       : Promise.resolve(0),
 
-    // OVERDUE (🔥 SAME LOGIC AS filterTasks)
+    // OVERDUE
     isDoThisEnabled
       ? Task.countDocuments({
           ...baseQuery,
+          taskType: { $ne: "RecurringTask" },
           $and: [
             ...(baseQuery.$and || []),
             {
-              $or: [
-                {
-                  taskType: "DelegationTask",
-                  dueDate: { $lt: todayStart },
-                },
-                {
-                  taskType: "RecurringTask",
-                  endDate: { $lt: todayStart },
-                },
-              ],
+              taskType: "DelegationTask",
+              dueDate: { $lt: todayStart },
             },
             {
               status: { $ne: "Completed" },
@@ -1782,7 +1858,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
   res.json({
     success: true,
     stats: {
-      total: total + recurringFutureCount + fmsTotal,
+      total: total  + fmsTotal,
       completed: completed + fmsCompleted,
       pending: pending + fmsPending,
       overdue: overdue + fmsOverdue,
@@ -2202,7 +2278,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
           status: task.status,
 
           assignedTo: task.assignedTo,
-          assignedBy:task.assignedBy|| task.updatedBy || null,
+          assignedBy: task.assignedBy || task.updatedBy || null,
 
           departmentOfAssignToUser: task.departmentOfAssignToUser,
 
