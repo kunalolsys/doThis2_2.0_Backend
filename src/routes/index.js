@@ -11,32 +11,30 @@ import fmsRoutes from "./fms.js";
 import queriesRoutes from "./queries.js";
 import threadRoutes from "./thread.js";
 import fmsReportRoutes from "./fmsReport.js";
+import { moduleGate } from "../middleware/moduleGate.js";
+
 const router = express.Router();
 
-router.use("/setup", setupRoutes);
+// NOTE: moduleGate blocks disabled modules for non-super users.
+router.use("/setup", moduleGate, setupRoutes);
 
 router.use("/auth", authRoutes);
 
-router.use("/work-shifts", workShiftRoutes);
-
-// import workingWeekRoutes from "./workingWeek.js";
-// router.use("/working-weeks", workingWeekRoutes);
+router.use("/work-shifts", moduleGate, workShiftRoutes);
 
 // task routes
-router.use("/tasks", taskRoutes);
+router.use("/tasks", moduleGate, taskRoutes);
 
-// user routes
+// user routes (usually not gated, but leaving ungated is fine)
 router.use("/users", userRoutes);
 router.use("/logs", logsRoutes);
 
-router.use("/mis", misReportRoutes);
+router.use("/mis", moduleGate, misReportRoutes);
 
-router.use("/schedule-holiday-task", scheduleHolidayTaskRoutes);
-router.use("/fms", fmsRoutes);
-router.use("/fms-report", fmsReportRoutes);
-router.use("/queries", queriesRoutes);
+router.use("/schedule-holiday-task", moduleGate, scheduleHolidayTaskRoutes);
+router.use("/fms", moduleGate, fmsRoutes);
+router.use("/fms-report", moduleGate, fmsReportRoutes);
+router.use("/queries", moduleGate, queriesRoutes);
 router.use("/thread", threadRoutes);
 
-
 export default router;
-

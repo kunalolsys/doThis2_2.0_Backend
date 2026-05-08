@@ -18,6 +18,7 @@ import startFMSProgressCronJobs from "./cron/fmsInstanceTaskProgressCron.js";
 import startRecurringFmsTaskJob from "./cron/assignRecurringFmsTask.js";
 import { initSocket } from "./socket.js";
 import "../scripts/seedSuperRolesAndUser.js";
+import ModuleSetting from "./models/ModuleSetting.js";
 dotenv.config();
 
 const server = http.createServer(app);
@@ -46,7 +47,6 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       "http://192.168.1.4:4000",
     ]; // Default allowed origins
 
-
 //**Initialize Socket IO */
 initSocket(server);
 
@@ -74,23 +74,39 @@ mongoose.connection.on("disconnected", () => {
 // --- MAIN CONNECTION ---
 mongoose
   .connect(MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     // Console log already event listener 'connected' se handle ho jayega,
     // par server start ka message hum yaha dalenge.
 
-    server.listen(PORT, () => {
+    server.listen(PORT, async () => {
       const msg = `Server is running on port ${PORT}`;
       // Console aur DB dono jagah jayega
       logToDb("INFO", msg);
       // Start background cron jobs after server is up
       try {
+        const moduleSettings = await ModuleSetting.find({
+          moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+        }).lean();
+
+        const isModuleEnabled = (key) => {
+          const mod = moduleSettings.find((m) => m.moduleKey === key);
+          return mod ? mod.isEnabled : true;
+        };
+
+        const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+        const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
         startTaskStatusCron();
-        startCronJobs();
-        runDependencyCron(); // Initial run
-        startVisibilityCron();
-        startFmsVisibilityCron();
-        startFMSProgressCronJobs();
-        startRecurringFmsTaskJob();
+        runDependencyCron();
+        if (isDoThisEnabled) {
+          startCronJobs();
+          startVisibilityCron();
+        }
+        if (isFmsEnabled) {
+          startFMSProgressCronJobs();
+          startFmsVisibilityCron();
+          startRecurringFmsTaskJob();
+        }
       } catch (err) {
         console.error("Failed to start crons", err);
       }
