@@ -17,6 +17,7 @@ import {
   getTaskStats,
   updateChecklistItem,
   getConversations,
+  exportMYTasks,
 } from '../controllers/taskController.js'; // Ensure this matches your actual controller filename
 import upload from '../middleware/upload.js';
 // import { authenticateJWT } from '../middleware/auth.js';
@@ -46,6 +47,7 @@ router.post('/filter', authenticateJWT, filterTasks);
 router.post('/myTask-stats', authenticateJWT, getTaskStats);
 router.post('/role-based-tasks', authenticateJWT, getRoleBasedTasks);
 router.post('/tasks-with-stats', authenticateJWT, getAllTasksWithStats);
+router.post('/my-task/export', authenticateJWT, exportMYTasks);
 
 // Export Tasks
 router.post('/export', authenticateJWT, exportTasks);

@@ -31,6 +31,7 @@ import {
   isWorkingDay,
   addWorkingDays,
   addWorkingDaysHoliday,
+  isHoliday,
 } from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
 import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
@@ -41,6 +42,7 @@ import { getIO } from "../socket.js";
 import * as threadController from "./queries/thread.js";
 import Messages from "../models/queries/Message.js";
 import ModuleSetting from "../models/ModuleSetting.js";
+import WorkShift from "../models/WorkShift.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -821,6 +823,7 @@ export const getAllTasksWithStats = async (req, res) => {
     // =========================
     const filter = {
       ...dateFilter,
+      taskType: { $ne: "RecurringTask" },
       ...(andConditions.length > 0 && { $and: andConditions }),
     };
 
@@ -1088,6 +1091,21 @@ export const getAllTasksWithStats = async (req, res) => {
 //   }
 // };
 //**for my task listing - FIXED taskType filtering */
+const getNextWorkingDate = async (date, workShift) => {
+  let adjustedDate = startOfDay(date);
+
+  while (true) {
+    const holiday = await isHoliday(adjustedDate);
+
+    const working = workShift && isWorkingDay(adjustedDate, workShift);
+
+    if (!holiday && working) {
+      return adjustedDate;
+    }
+
+    adjustedDate = addDays(adjustedDate, 1);
+  }
+};
 export const filterTasks = handleAsync(async (req, res) => {
   const {
     userId,
@@ -1226,17 +1244,15 @@ export const filterTasks = handleAsync(async (req, res) => {
   }
 
   // 🔁 TASK TYPE
-  // 🔁 TASK TYPE
   if (taskType === "RecurringTask") {
-    // don't query DB tasks
-    query.taskType = { $ne: "RecurringTask" };
+    // User only wants virtual upcoming recurring tasks
+    query.taskType = "__NO_TASKS__"; // impossible value
   } else if (taskType) {
     query.taskType = taskType;
   } else {
     // default hide recurring templates
     query.taskType = { $ne: "RecurringTask" };
   }
-
   // 📅 DATE RANGE FILTER (startDate OR dueDate)
   // 📅 DATE RANGE FILTER (FIXED)
   if (startDate || endDate) {
@@ -1343,8 +1359,9 @@ export const filterTasks = handleAsync(async (req, res) => {
 
     existingMap.set(key, true);
   });
-  const getNextOccurrence = (template, existingMap) => {
+  const getNextOccurrence = async (template, existingMap) => {
     const today = startOfDay(new Date());
+
     const searchDays =
       template.frequency === "Yearly"
         ? 366 * 5
@@ -1354,22 +1371,22 @@ export const filterTasks = handleAsync(async (req, res) => {
             ? 366
             : 120;
 
-    // startDate is ONLY activation date
     const activationDate = startOfDay(new Date(template.startDate));
 
-    // search starts from max(today, activationDate)
     let searchDate = today > activationDate ? today : activationDate;
 
-    // endDate safety
     const templateEndDate = template.endDate
       ? endOfDay(new Date(template.endDate))
       : null;
 
-    // search next 365 days
-    for (let i = 0; i < searchDays; i++) {
-      const date = addDays(searchDate, i);
+    // user shift
+    const workShift = await WorkShift.findById(
+      template.assignedTo?.assignShift,
+    );
 
-      // stop if crossed end date
+    for (let i = 0; i < searchDays; i++) {
+      let date = addDays(searchDate, i);
+
       if (templateEndDate && date > templateEndDate) {
         break;
       }
@@ -1453,8 +1470,28 @@ export const filterTasks = handleAsync(async (req, res) => {
       if (!isValid) continue;
 
       // ==================================================
+      // CHECK HOLIDAY / WORKING DAY
+      // ==================================================
+
+      const isHolidayDate = await isHoliday(date);
+
+      const isWorking = workShift && isWorkingDay(date, workShift);
+
+      if (isHolidayDate || !isWorking) {
+        // Weekly/Fortnightly:
+        // skip this weekday and continue searching
+        if (template.frequency === "Weekly") {
+          continue;
+        }
+
+        // Monthly/Quarterly/HalfYearly/Yearly:
+        // push to next working day
+        date = await getNextWorkingDate(date, workShift);
+      }
+      // ==================================================
       // SKIP already created occurrence
       // ==================================================
+
       const key = `${template._id}_${format(startOfDay(date), "yyyy-MM-dd")}`;
 
       if (existingMap.has(key)) {
@@ -1466,9 +1503,9 @@ export const filterTasks = handleAsync(async (req, res) => {
 
     return null;
   };
-  const futureRecurring = recurringTemplates
-    .map((template) => {
-      const nextOccurrence = getNextOccurrence(template, existingMap);
+  const futureRecurring = await Promise.all(
+    recurringTemplates.map(async (template) => {
+      const nextOccurrence = await getNextOccurrence(template, existingMap);
 
       if (!nextOccurrence) return null;
 
@@ -1482,16 +1519,18 @@ export const filterTasks = handleAsync(async (req, res) => {
         displayTaskType: "DelegationTask",
 
         startDate: nextOccurrence,
+
         dueDate: nextOccurrence,
 
         status: "Upcoming",
 
         isVirtualRecurring: true,
       };
-    })
-    .filter(Boolean);
-  let filteredRecurring = futureRecurring;
+    }),
+  );
 
+  const filteredRecurring = futureRecurring.filter(Boolean);
+  // let filteredRecurring = futureRecurring;
   if (startDate || endDate) {
     const startBoundary = startDate ? startOfDay(parseISO(startDate)) : null;
     const endBoundary = endDate ? endOfDay(parseISO(endDate)) : null;
@@ -1584,7 +1623,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   // =========================
   if (stat === "overdue") {
     fmsQuery.plannedDueDate = { $lt: todayStart };
-    fmsQuery.status = { $ne: "Completed" };
+    fmsQuery.status = { $nin: ["Completed", "Stopped"] };
   }
 
   if (stat === "dueToday") {
@@ -1623,7 +1662,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   // =========================
   // 📊 DIRECT STATUS FILTER
   // =========================
-  if (status && status !== "all") {
+  if (taskCategory !== "upcoming" && status && status !== "all") {
     fmsQuery.status = status;
   }
   // VISIBILITY
@@ -1700,9 +1739,10 @@ export const filterTasks = handleAsync(async (req, res) => {
   const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
 
   let recurringResponse = [];
+  // const shouldShowFutureRecurring = taskType != "DelegationTask";
 
   const shouldShowFutureRecurring =
-    taskCategory === "upcoming" || taskType === "FutureRecurringTask";
+    taskCategory === "upcoming" && taskType != "DelegationTask";
 
   if (shouldShowFutureRecurring) {
     recurringResponse = finalVirtualRecurring;
@@ -1717,6 +1757,647 @@ export const filterTasks = handleAsync(async (req, res) => {
     totalPages: Math.ceil(totalTasks / limit),
   });
 });
+
+//**export my task */
+export const exportMYTasks = handleAsync(async (req, res) => {
+  const {
+    userId,
+    search,
+    filters = {},
+    creatorOrAssignorId,
+    departmentId,
+    createdBy,
+    assignedBy,
+    startDate,
+    endDate,
+  } = req.body;
+
+  const { stat, taskCategory, status, taskType } = filters;
+
+  const query = {};
+  const andConditions = [];
+
+  const todayStart = startOfDay(new Date());
+  const todayEnd = endOfDay(new Date());
+  if (creatorOrAssignorId) {
+    andConditions.push({
+      $or: [
+        { createdBy: creatorOrAssignorId },
+        { assignedBy: creatorOrAssignorId },
+      ],
+    });
+  } else {
+    if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
+      const usersInDept = await User.find({ department: departmentId }).select(
+        "_id",
+      );
+      const userIds = usersInDept.map((u) => u._id);
+
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        if (userIds.some((id) => id.equals(userId))) {
+          andConditions.push({ assignedTo: userId });
+        } else {
+          return res.status(200).json({
+            success: true,
+            data: [],
+            totalTasks: 0,
+          });
+        }
+      } else {
+        andConditions.push({ assignedTo: { $in: userIds } });
+      }
+    } else if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      andConditions.push({ assignedTo: userId });
+    }
+
+    if (createdBy) {
+      andConditions.push({ createdBy });
+    }
+  }
+
+  // 🔍 SEARCH
+  if (search) {
+    andConditions.push({
+      $or: [{ title: { $regex: search, $options: "i" } }, { TaskId: search }],
+    });
+  }
+
+  // 📊 STAT FILTER
+  if (stat === "overdue") {
+    andConditions.push({
+      $or: [
+        {
+          taskType: "DelegationTask",
+          dueDate: { $lt: todayStart },
+        },
+        {
+          taskType: "RecurringTask",
+          endDate: { $lt: todayStart },
+        },
+      ],
+    });
+
+    andConditions.push({
+      status: { $ne: "Completed" },
+    });
+  }
+  if (stat === "dueToday") {
+    andConditions.push({
+      dueDate: { $gte: todayStart, $lte: todayEnd },
+    });
+  }
+
+  if (stat === "completed") {
+    query.status = "Completed";
+  }
+  if (stat === "pending") {
+    query.status = "Pending";
+  }
+
+  // 📌 TAB CATEGORY
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      const start = startOfDay(new Date());
+      const end = endOfDay(new Date());
+      andConditions.push({
+        status: { $in: ["Pending", "Delayed", "Overdue"] },
+      });
+      andConditions.push({
+        taskType: "DelegationTask",
+      });
+      andConditions.push({
+        startDate: { $gte: start, $lte: end },
+      });
+    }
+
+    if (taskCategory === "upcoming") {
+      query.status = "Upcoming";
+    }
+
+    if (taskCategory === "completed") {
+      query.status = "Completed";
+    }
+  }
+
+  // 📊 STATUS FILTER
+  if (status && status !== "all") {
+    query.status = status;
+  }
+
+  // 🔁 TASK TYPE
+  if (taskType === "RecurringTask") {
+    // User only wants virtual upcoming recurring tasks
+    query.taskType = "__NO_TASKS__"; // impossible value
+  } else if (taskType) {
+    query.taskType = taskType;
+  } else {
+    // default hide recurring templates
+    query.taskType = { $ne: "RecurringTask" };
+  }
+  // 📅 DATE RANGE FILTER (startDate OR dueDate)
+  // 📅 DATE RANGE FILTER (FIXED)
+  if (startDate || endDate) {
+    const filter = {};
+
+    if (startDate) {
+      filter.$gte = startOfDay(parseISO(startDate));
+    }
+
+    if (endDate) {
+      filter.$lte = endOfDay(parseISO(endDate));
+    }
+
+    andConditions.push({
+      startDate: filter, // ✅ start must be inside
+    });
+
+    andConditions.push({
+      dueDate: filter, // ✅ due must be inside
+    });
+  }
+
+  // ✅ MERGE CONDITIONS
+  if (andConditions.length > 0) {
+    query.$and = andConditions;
+  }
+  if (query.status !== "Upcoming") {
+    query.isVisible = true;
+  }
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
+
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
+  // query.taskType = { $ne: "RecurringTask" };
+  // 🚀 QUERY EXECUTION
+  const [tasks, total] = await Promise.all([
+    isDoThisEnabled
+      ? Task.find(query) // 🔥 Only visible tasks
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("departmentOfAssignToUser", "name")
+          .populate("dependencyConfig.taskDependent", "title")
+          .sort({ createdAt: -1 })
+      : Promise.resolve([]),
+
+    // .skip(skip)
+    // .limit(limit)
+    isDoThisEnabled ? Task.countDocuments(query) : Promise.resolve(0), // 🔥 Count only visible
+  ]);
+  //**get recurring task in upcoming section  */
+  // 🔥 STEP 2: Get recurring TEMPLATES (not instances)
+  const recurringQuery = {
+    taskType: "RecurringTask",
+  };
+
+  // reuse same AND conditions except date + taskType
+  if (andConditions.length > 0) {
+    recurringQuery.$and = andConditions.filter((cond) => {
+      // ❌ remove date filters
+      return !(cond.startDate || cond.dueDate);
+    });
+  }
+  const recurringTemplates = isDoThisEnabled
+    ? await Task.find({
+        ...recurringQuery,
+        taskType: "RecurringTask",
+        // Apply your userId/departmentId filters here
+        assignedTo: userId, // or your filter logic
+        // isVisible: true,
+        startDate: { $exists: true },
+        frequency: { $ne: "Daily" },
+      })
+        .populate("assignedTo", "name email department assignShift")
+        .populate("assignedBy", "name email")
+        .populate("departmentOfAssignToUser", "name")
+        .populate("dependencyConfig.taskDependent", "title")
+        .lean()
+    : [];
+  const recurringIds = recurringTemplates.map((t) => t._id);
+
+  const existingInstances = await Task.find({
+    recurrenceTaskId: { $in: recurringIds },
+    taskType: "DelegationTask",
+  }).select("recurrenceTaskId startDate");
+  const existingMap = new Map();
+
+  existingInstances.forEach((task) => {
+    const key = `${task.recurrenceTaskId}_${format(
+      startOfDay(task.startDate),
+      "yyyy-MM-dd",
+    )}`;
+
+    existingMap.set(key, true);
+  });
+  const getNextOccurrence = async (template, existingMap) => {
+    const today = startOfDay(new Date());
+
+    const searchDays =
+      template.frequency === "Yearly"
+        ? 366 * 5
+        : template.frequency === "Half Yearly"
+          ? 366 * 2
+          : template.frequency === "Quarterly"
+            ? 366
+            : 120;
+
+    const activationDate = startOfDay(new Date(template.startDate));
+
+    let searchDate = today > activationDate ? today : activationDate;
+
+    const templateEndDate = template.endDate
+      ? endOfDay(new Date(template.endDate))
+      : null;
+
+    // user shift
+    const workShift = await WorkShift.findById(
+      template.assignedTo?.assignShift,
+    );
+
+    for (let i = 0; i < searchDays; i++) {
+      let date = addDays(searchDate, i);
+
+      if (templateEndDate && date > templateEndDate) {
+        break;
+      }
+
+      let isValid = false;
+
+      // ==================================================
+      // DAILY
+      // ==================================================
+      if (template.frequency === "Daily") {
+        isValid = true;
+      }
+
+      // ==================================================
+      // WEEKLY
+      // ==================================================
+      else if (template.frequency === "Weekly") {
+        const currentDay = format(date, "EEEE").toLowerCase();
+
+        isValid = template.weekDays?.includes(currentDay);
+      }
+
+      // ==================================================
+      // FORTNIGHTLY
+      // ==================================================
+      else if (template.frequency === "Fortnightly") {
+        const currentDay = format(date, "EEEE").toLowerCase();
+
+        const daysDiff = differenceInCalendarDays(date, activationDate);
+
+        isValid =
+          daysDiff >= 0 &&
+          daysDiff % 14 === 0 &&
+          template.weekDays?.includes(currentDay);
+      }
+
+      // ==================================================
+      // MONTHLY
+      // ==================================================
+      else if (template.frequency === "Monthly") {
+        isValid = date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // QUARTERLY
+      // ==================================================
+      else if (template.frequency === "Quarterly") {
+        const monthsDiff =
+          (date.getFullYear() - activationDate.getFullYear()) * 12 +
+          (date.getMonth() - activationDate.getMonth());
+
+        isValid =
+          monthsDiff >= 0 &&
+          monthsDiff % 3 === 0 &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // HALF YEARLY
+      // ==================================================
+      else if (template.frequency === "Half Yearly") {
+        const monthsDiff =
+          (date.getFullYear() - activationDate.getFullYear()) * 12 +
+          (date.getMonth() - activationDate.getMonth());
+
+        isValid =
+          monthsDiff >= 0 &&
+          monthsDiff % 6 === 0 &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // YEARLY
+      // ==================================================
+      else if (template.frequency === "Yearly") {
+        isValid =
+          date.getMonth() === activationDate.getMonth() &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      if (!isValid) continue;
+
+      // ==================================================
+      // CHECK HOLIDAY / WORKING DAY
+      // ==================================================
+
+      const isHolidayDate = await isHoliday(date);
+
+      const isWorking = workShift && isWorkingDay(date, workShift);
+
+      if (isHolidayDate || !isWorking) {
+        // Weekly/Fortnightly:
+        // skip this weekday and continue searching
+        if (template.frequency === "Weekly") {
+          continue;
+        }
+
+        // Monthly/Quarterly/HalfYearly/Yearly:
+        // push to next working day
+        date = await getNextWorkingDate(date, workShift);
+      }
+      // ==================================================
+      // SKIP already created occurrence
+      // ==================================================
+
+      const key = `${template._id}_${format(startOfDay(date), "yyyy-MM-dd")}`;
+
+      if (existingMap.has(key)) {
+        continue;
+      }
+
+      return date;
+    }
+
+    return null;
+  };
+  const futureRecurring = await Promise.all(
+    recurringTemplates.map(async (template) => {
+      const nextOccurrence = await getNextOccurrence(template, existingMap);
+
+      if (!nextOccurrence) return null;
+
+      return {
+        ...template,
+
+        originalTaskType: template.taskType,
+
+        taskType: "FutureRecurringTask",
+
+        displayTaskType: "DelegationTask",
+
+        startDate: nextOccurrence,
+
+        dueDate: nextOccurrence,
+
+        status: "Upcoming",
+
+        isVirtualRecurring: true,
+      };
+    }),
+  );
+
+  const filteredRecurring = futureRecurring.filter(Boolean);
+  // let filteredRecurring = futureRecurring;
+  if (startDate || endDate) {
+    const startBoundary = startDate ? startOfDay(parseISO(startDate)) : null;
+    const endBoundary = endDate ? endOfDay(parseISO(endDate)) : null;
+
+    filteredRecurring = futureRecurring.filter((task) => {
+      const taskDate = new Date(task.virtualNextOccurrence || task.startDate);
+
+      if (startBoundary && taskDate < startBoundary) return false;
+      if (endBoundary && taskDate > endBoundary) return false;
+
+      return true;
+    });
+  }
+  // After calculating futureRecurring & filteredRecurring...
+
+  // 🔥 APPLY SAME FILTERS as main query
+  let finalVirtualRecurring = filteredRecurring;
+
+  // 1. STATUS FILTER
+  if (status && status !== "all") {
+    finalVirtualRecurring = finalVirtualRecurring.filter(
+      (task) => task.status === status,
+    );
+  }
+
+  // 2. TASK TYPE FILTER
+  if (taskType) {
+    finalVirtualRecurring = finalVirtualRecurring.filter(
+      (task) => task.taskType === taskType || task.isVirtualRecurring,
+    );
+  }
+
+  // 3. OTHER FILTERS (search, stat, etc.)
+  if (search) {
+    finalVirtualRecurring = finalVirtualRecurring.filter((task) =>
+      task.title.toLowerCase().includes(search.toLowerCase()),
+    );
+  }
+
+  // MERGE
+  // const allTasks = [...tasks, ...finalVirtualRecurring];
+
+  // 🔥 STEP 4: MERGE in response
+  //**GETING FMS TASKS */
+  const fmsQuery = {};
+
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // SEARCH
+  if (search) {
+    fmsQuery.$or = [
+      { description: { $regex: search, $options: "i" } },
+      { taskId: search },
+    ];
+  }
+
+  // STATUS
+  if (status && status !== "all") fmsQuery.status = status;
+
+  // TASK TYPE (ignore for FMS)
+  // delete query.taskType;
+
+  // DATE RANGE
+  if (startDate || endDate) {
+    const dateFilter = {};
+    if (startDate) dateFilter.$gte = startOfDay(parseISO(startDate));
+    if (endDate) dateFilter.$lte = endOfDay(parseISO(endDate));
+    fmsQuery.$or = [
+      { plannedStartDate: dateFilter },
+      { plannedDueDate: dateFilter },
+    ];
+  }
+
+  // =========================
+  // 📊 STATUS / STAT FILTER
+  // =========================
+  if (stat === "overdue") {
+    fmsQuery.plannedDueDate = { $lt: todayStart };
+    fmsQuery.status = { $nin: ["Completed", "Stopped"] };
+  }
+
+  if (stat === "dueToday") {
+    fmsQuery.plannedDueDate = { $gte: todayStart, $lte: todayEnd };
+  }
+
+  if (stat === "completed") {
+    fmsQuery.status = "Completed";
+  }
+
+  if (stat === "pending") {
+    fmsQuery.status = "Pending";
+  }
+
+  // =========================
+  // 📌 TAB CATEGORY
+  // =========================
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      const start = startOfDay(new Date());
+      const end = endOfDay(new Date());
+
+      fmsQuery.status = { $in: ["Pending", "Delayed", "Overdue"] };
+      fmsQuery.plannedStartDate = { $gte: start, $lte: end };
+    }
+
+    if (taskCategory === "upcoming") {
+      fmsQuery.status = "Upcoming";
+    }
+
+    if (taskCategory === "completed") {
+      fmsQuery.status = "Completed";
+    }
+  }
+
+  // =========================
+  // 📊 DIRECT STATUS FILTER
+  // =========================
+  if (taskCategory !== "upcoming" && status && status !== "all") {
+    fmsQuery.status = status;
+  }
+  // VISIBILITY
+  // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
+  const [fmsTasks, fmsTotal] = await Promise.all([
+    isFmsEnabled
+      ? FmsInstanceTask.find(fmsQuery)
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("updatedBy", "name email") // use as assignedBy fallback
+          .populate("departmentOfAssignToUser", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
+    // .skip(skip)
+    // .limit(limit)
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
+  ]);
+  const mappedFmsTasks = isFmsEnabled
+    ? fmsTasks.map((task) => ({
+        ...task,
+        _id: task._id,
+        TaskId: task.taskId,
+
+        title: task.description,
+        description: task.description,
+
+        startDate: task.plannedStartDate,
+        dueDate: task.plannedDueDate,
+
+        status: task.status,
+
+        assignedTo: task.assignedTo,
+        assignedBy: task.assignedBy || null,
+
+        departmentOfAssignToUser: task.departmentOfAssignToUser,
+
+        taskType: "FmsInstanceTask",
+
+        isVisible: task.isVisible,
+
+        checklist: task.checklist || [],
+
+        createdAt: task.createdAt,
+      }))
+    : [];
+  let allTasks = [];
+
+  // ✅ ONLY FMS TASKS
+  if (taskType === "FmsInstanceTask") {
+    allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
+  }
+
+  // ✅ ONLY NORMAL TASKS
+  else if (taskType) {
+    allTasks = isDoThisEnabled ? [...tasks] : [];
+  }
+
+  // ✅ ALL TASKS
+  else {
+    if (isDoThisEnabled) {
+      allTasks.push(...tasks);
+    }
+
+    if (isFmsEnabled) {
+      allTasks.push(...mappedFmsTasks);
+    }
+  }
+  // const actualTotal = total + fmsTotal;
+  const totalTasks = allTasks.length;
+
+  let recurringResponse = [];
+  // const shouldShowFutureRecurring = taskType != "DelegationTask";
+
+  const shouldShowFutureRecurring =
+    taskCategory === "upcoming" && taskType != "DelegationTask";
+
+  if (shouldShowFutureRecurring) {
+    recurringResponse = finalVirtualRecurring;
+  }
+  const finalData = [
+    ...allTasks,
+    ...(isDoThisEnabled ? recurringResponse : []),
+  ];
+
+  res.json({
+    success: true,
+    total: finalData.length,
+    data: finalData,
+  });
+});
+
 //**get my task stats */
 export const getTaskStats = handleAsync(async (req, res) => {
   const { userId, creatorOrAssignorId, departmentId, createdBy } = req.body;
@@ -1917,7 +2598,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
       ? FmsInstanceTask.countDocuments({
           ...fmsQuery,
           plannedDueDate: { $lt: todayStart },
-          status: { $ne: "Completed" },
+          status: { $nin: ["Completed", "Stopped"] },
         })
       : Promise.resolve(0),
   ]);
@@ -2155,10 +2836,18 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   // =========================
   // 🔁 TASK TYPE
   // =========================
-  if (taskType) {
-    andConditions.push({ taskType });
+  // if (taskType) {
+  //   andConditions.push({ taskType });
+  // }
+  if (taskType === "RecurringTask") {
+    // User only wants virtual upcoming recurring tasks
+    query.taskType = "__NO_TASKS__"; // impossible value
+  } else if (taskType) {
+    query.taskType = taskType;
+  } else {
+    // default hide recurring templates
+    query.taskType = { $ne: "RecurringTask" };
   }
-
   // =========================
   // 👤 ASSIGNED BY FILTER
   // =========================
