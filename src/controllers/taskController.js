@@ -1227,8 +1227,9 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   // 🔁 TASK TYPE
   // 🔁 TASK TYPE
-  if (taskType === "FutureRecurringTask") {
+  if (taskType === "RecurringTask") {
     // don't query DB tasks
+    query.taskType = { $ne: "RecurringTask" };
   } else if (taskType) {
     query.taskType = taskType;
   } else {
@@ -1344,47 +1345,124 @@ export const filterTasks = handleAsync(async (req, res) => {
   });
   const getNextOccurrence = (template, existingMap) => {
     const today = startOfDay(new Date());
+    const searchDays =
+      template.frequency === "Yearly"
+        ? 366 * 5
+        : template.frequency === "Half Yearly"
+          ? 366 * 2
+          : template.frequency === "Quarterly"
+            ? 366
+            : 120;
 
-    // WEEKLY
-    if (template.frequency === "Weekly") {
-      const currentWeekDates = [];
+    // startDate is ONLY activation date
+    const activationDate = startOfDay(new Date(template.startDate));
 
-      for (let i = 0; i < 7; i++) {
-        const date = addDays(today, i);
+    // search starts from max(today, activationDate)
+    let searchDate = today > activationDate ? today : activationDate;
 
-        if (isTaskValidForToday(template, date)) {
-          currentWeekDates.push(date);
-        }
+    // endDate safety
+    const templateEndDate = template.endDate
+      ? endOfDay(new Date(template.endDate))
+      : null;
+
+    // search next 365 days
+    for (let i = 0; i < searchDays; i++) {
+      const date = addDays(searchDate, i);
+
+      // stop if crossed end date
+      if (templateEndDate && date > templateEndDate) {
+        break;
       }
 
-      // if ANY occurrence already created this week
-      const hasCurrentWeekInstance = currentWeekDates.some((date) => {
-        const key = `${template._id}_${format(date, "yyyy-MM-dd")}`;
-        return existingMap.has(key);
-      });
+      let isValid = false;
 
-      // if already created -> move to NEXT WEEK
-      const startSearch = hasCurrentWeekInstance ? addWeeks(today, 1) : today;
-
-      for (let i = 0; i < 7; i++) {
-        const date = addDays(startSearch, i);
-
-        if (isTaskValidForToday(template, date)) {
-          return date;
-        }
+      // ==================================================
+      // DAILY
+      // ==================================================
+      if (template.frequency === "Daily") {
+        isValid = true;
       }
+
+      // ==================================================
+      // WEEKLY
+      // ==================================================
+      else if (template.frequency === "Weekly") {
+        const currentDay = format(date, "EEEE").toLowerCase();
+
+        isValid = template.weekDays?.includes(currentDay);
+      }
+
+      // ==================================================
+      // FORTNIGHTLY
+      // ==================================================
+      else if (template.frequency === "Fortnightly") {
+        const currentDay = format(date, "EEEE").toLowerCase();
+
+        const daysDiff = differenceInCalendarDays(date, activationDate);
+
+        isValid =
+          daysDiff >= 0 &&
+          daysDiff % 14 === 0 &&
+          template.weekDays?.includes(currentDay);
+      }
+
+      // ==================================================
+      // MONTHLY
+      // ==================================================
+      else if (template.frequency === "Monthly") {
+        isValid = date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // QUARTERLY
+      // ==================================================
+      else if (template.frequency === "Quarterly") {
+        const monthsDiff =
+          (date.getFullYear() - activationDate.getFullYear()) * 12 +
+          (date.getMonth() - activationDate.getMonth());
+
+        isValid =
+          monthsDiff >= 0 &&
+          monthsDiff % 3 === 0 &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // HALF YEARLY
+      // ==================================================
+      else if (template.frequency === "Half Yearly") {
+        const monthsDiff =
+          (date.getFullYear() - activationDate.getFullYear()) * 12 +
+          (date.getMonth() - activationDate.getMonth());
+
+        isValid =
+          monthsDiff >= 0 &&
+          monthsDiff % 6 === 0 &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      // ==================================================
+      // YEARLY
+      // ==================================================
+      else if (template.frequency === "Yearly") {
+        isValid =
+          date.getMonth() === activationDate.getMonth() &&
+          date.getDate() === activationDate.getDate();
+      }
+
+      if (!isValid) continue;
+
+      // ==================================================
+      // SKIP already created occurrence
+      // ==================================================
+      const key = `${template._id}_${format(startOfDay(date), "yyyy-MM-dd")}`;
+
+      if (existingMap.has(key)) {
+        continue;
+      }
+
+      return date;
     }
-
-    // DAILY
-    // if (template.frequency === "Daily") {
-    //   const todayKey = `${template._id}_${format(today, "yyyy-MM-dd")}`;
-
-    //   if (existingMap.has(todayKey)) {
-    //     return addDays(today, 1);
-    //   }
-
-    //   return today;
-    // }
 
     return null;
   };
@@ -1858,7 +1936,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
   res.json({
     success: true,
     stats: {
-      total: total  + fmsTotal,
+      total: total + fmsTotal,
       completed: completed + fmsCompleted,
       pending: pending + fmsPending,
       overdue: overdue + fmsOverdue,
