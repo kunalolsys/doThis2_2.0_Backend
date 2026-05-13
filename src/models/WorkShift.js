@@ -47,7 +47,7 @@ const workShiftSchema = new mongoose.Schema(
 );
 
 // Add Partial index for "name" where isDeleted is false
-// workShiftSchema.index({ name: 1 }, {unique: true ,partialFilterExpression: { isDeleted: false } });
+workShiftSchema.index({ name: 1 }, {unique: true ,partialFilterExpression: { isDeleted: false } });
 
 const WorkShift = mongoose.model("WorkShift", workShiftSchema);
 

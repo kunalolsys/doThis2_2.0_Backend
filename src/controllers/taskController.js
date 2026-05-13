@@ -3998,11 +3998,11 @@ export const importTasks = handleAsync(async (req, res, next) => {
           );
         }
 
-        // Split assignToEmail and assignToName if they are comma-separated
         const assignToEmails = assignToEmail
           .split(",")
           .map((e) => e.trim())
           .filter(Boolean);
+
         const assignToNames = assignToName
           ? assignToName
               .split(",")
@@ -4010,53 +4010,141 @@ export const importTasks = handleAsync(async (req, res, next) => {
               .filter(Boolean)
           : [];
 
+        const departmentNames = departmentName
+          .split(",")
+          .map((d) => d.trim())
+          .filter(Boolean);
+
         if (assignToEmails.length === 0) {
           throw new Error('At least one "Assign To(Email)" is required.');
         }
+
         if (
           assignToNames.length > 0 &&
           assignToNames.length !== assignToEmails.length
         ) {
           throw new Error(
-            'Mismatched count for "Assign To(Email)" and "Assign To(Name)". If "Assign To(Name)" is provided, it must match the number of emails.',
-          );
-        }
-
-        const department = await Department.findOne({
-          name: { $regex: `^${departmentName}$`, $options: "i" },
-        });
-        if (!department) {
-          throw new Error(
-            `Department with name "${departmentName}" not found.`,
+            "Assign To(Name) count must match Assign To(Email) count.",
           );
         }
 
         const usersForThisRow = [];
-        for (let i = 0; i < assignToEmails.length; i++) {
-          const currentEmail = assignToEmails[i];
-          const currentName = assignToNames[i];
 
-          const userQuery = { email: currentEmail };
+        // =======================================================
+        // CASE 1 -> ONE USER + MULTIPLE DEPARTMENTS
+        // =======================================================
+
+        if (assignToEmails.length === 1 && departmentNames.length >= 1) {
+          const currentEmail = assignToEmails[0];
+          const currentName = assignToNames[0];
+
+          const query = {
+            email: currentEmail,
+          };
+
           if (currentName) {
-            userQuery.name = currentName;
+            query.name = currentName;
           }
-          const user = await User.findOne(userQuery);
+
+          const user = await User.findOne(query);
+
           if (!user) {
+            throw new Error(`User "${currentEmail}" not found.`);
+          }
+
+          // Create task for EACH department
+          for (const currentDepartmentName of departmentNames) {
+            const department = await Department.findOne({
+              name: {
+                $regex: `^${currentDepartmentName}$`,
+                $options: "i",
+              },
+            });
+
+            if (!department) {
+              throw new Error(
+                `Department "${currentDepartmentName}" not found.`,
+              );
+            }
+
+            const belongsToDepartment =
+              Array.isArray(user.department) &&
+              user.department.some(
+                (deptId) => deptId.toString() === department._id.toString(),
+              );
+
+            if (!belongsToDepartment) {
+              throw new Error(
+                `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+              );
+            }
+
+            usersForThisRow.push({
+              user,
+              departmentId: department._id,
+            });
+          }
+        }
+
+        // =======================================================
+        // CASE 2 -> MULTIPLE USERS + MATCHING DEPARTMENTS
+        // =======================================================
+        else {
+          if (assignToEmails.length !== departmentNames.length) {
             throw new Error(
-              `User with email "${currentEmail}" and name "${currentName || "N/A"}" not found.`,
+              "When using multiple users, department count must match user count.",
             );
           }
-          // Validate user belongs to the specified department
-          if (
-            !user.department ||
-            user.department.length === 0 ||
-            !user.department.some((deptId) => deptId.equals(department._id))
-          ) {
-            throw new Error(
-              `User "${currentEmail}" does not belong to the "${departmentName}" department.`,
-            );
+
+          for (let i = 0; i < assignToEmails.length; i++) {
+            const currentEmail = assignToEmails[i];
+            const currentName = assignToNames[i];
+            const currentDepartmentName = departmentNames[i];
+
+            const department = await Department.findOne({
+              name: {
+                $regex: `^${currentDepartmentName}$`,
+                $options: "i",
+              },
+            });
+
+            if (!department) {
+              throw new Error(
+                `Department "${currentDepartmentName}" not found.`,
+              );
+            }
+
+            const query = {
+              email: currentEmail,
+            };
+
+            if (currentName) {
+              query.name = currentName;
+            }
+
+            const user = await User.findOne(query);
+
+            if (!user) {
+              throw new Error(`User "${currentEmail}" not found.`);
+            }
+
+            const belongsToDepartment =
+              Array.isArray(user.department) &&
+              user.department.some(
+                (deptId) => deptId.toString() === department._id.toString(),
+              );
+
+            if (!belongsToDepartment) {
+              throw new Error(
+                `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+              );
+            }
+
+            usersForThisRow.push({
+              user,
+              departmentId: department._id,
+            });
           }
-          usersForThisRow.push(user);
         }
 
         // Derive isDependent: explicit column OR presence of parent Task ID
@@ -4159,7 +4247,8 @@ export const importTasks = handleAsync(async (req, res, next) => {
           ? checkListStr.split(",").map((item) => ({ text: item.trim() }))
           : [];
 
-        for (const user of usersForThisRow) {
+        for (const item of usersForThisRow) {
+          const user = item.user;
           // <--- NEW LOOP
           // Duplicate Check: Same title, same user, same start day
           if (startDate) {
@@ -4192,10 +4281,10 @@ export const importTasks = handleAsync(async (req, res, next) => {
             taskEndDays,
             attachmentFile: finalAttachmentPath,
             isDependent,
-            departmentOfAssignToUser: department._id, // <--- Department is now from the single lookup
+            departmentOfAssignToUser: item.departmentId,
             checklist,
           };
-
+          console.log(item);
           let taskInstance;
 
           // Delegation vs Recurring vs Dependent
@@ -4297,6 +4386,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
       } catch (error) {
         originalRow["Error"] = `Row ${rowCount}: ${error.message}`;
         errors.push(originalRow);
+        continue;
       }
     }
 
