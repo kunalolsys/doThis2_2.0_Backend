@@ -15,6 +15,9 @@ const routeToModuleKey = (path) => {
   if (path.startsWith("/api/v1/fms")) {
     return ["FMS_ENGINE"];
   }
+  if (path.startsWith("/api/v1/company")) {
+    return ["COMPANY_SETUP"];
+  }
 
   // // Shared APIs
   // if (path.startsWith("/api/v1/tasks") || path.startsWith("/api/v1/queries")) {

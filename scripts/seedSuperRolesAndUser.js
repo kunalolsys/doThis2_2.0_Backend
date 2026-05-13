@@ -130,7 +130,7 @@ async function main() {
   }
 
   // 3) Ensure ModuleSetting rows exist for known module keys
-  const defaultModules = [ "DO_THIS2", "FMS_ENGINE"];
+  const defaultModules = [ "DO_THIS2", "FMS_ENGINE","COMPANY_SETUP"];
 
   for (const moduleKey of defaultModules) {
     await ModuleSetting.findOneAndUpdate(

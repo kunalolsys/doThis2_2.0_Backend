@@ -11,6 +11,7 @@ import fmsRoutes from "./fms.js";
 import queriesRoutes from "./queries.js";
 import threadRoutes from "./thread.js";
 import fmsReportRoutes from "./fmsReport.js";
+import companyProfileRoutes from "./CompanyRoutes.js";
 import { moduleGate } from "../middleware/moduleGate.js";
 
 const router = express.Router();
@@ -36,5 +37,6 @@ router.use("/fms", moduleGate, fmsRoutes);
 router.use("/fms-report", moduleGate, fmsReportRoutes);
 router.use("/queries", moduleGate, queriesRoutes);
 router.use("/thread", threadRoutes);
-
+router.use("/uploads", express.static("uploads"));
+router.use("/company",moduleGate, companyProfileRoutes);
 export default router;

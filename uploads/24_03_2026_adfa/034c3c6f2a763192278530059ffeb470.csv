@@ -1,4 +1,0 @@
-"Service","Name","Username","Password","Hostname","Port","Security"
-"SMTP","Sarina Lesch","sarina.lesch36@ethereal.email","rQuxubNwrpHK4FKdca","smtp.ethereal.email",587,"STARTTLS"
-"IMAP","Sarina Lesch","sarina.lesch36@ethereal.email","rQuxubNwrpHK4FKdca","imap.ethereal.email",993,"TLS"
-"POP3","Sarina Lesch","sarina.lesch36@ethereal.email","rQuxubNwrpHK4FKdca","pop3.ethereal.email",995,"TLS"

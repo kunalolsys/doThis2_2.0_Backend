@@ -9,6 +9,10 @@ const userSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    profilePhoto: {
+      type: String,
+      default: "",
+    },
     employeeCode: {
       type: String,
       default: "",

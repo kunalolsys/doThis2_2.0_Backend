@@ -6,6 +6,8 @@ import AppError from "../utils/AppError.js";
 import Department from "../models/Department.js";
 import WorkShift from "../models/WorkShift.js";
 import { sendTestEmail } from "../services/emailService.js";
+import fs from "fs";
+
 import {
   greetingTemplate,
   taskAssignedTemplate,
@@ -258,6 +260,16 @@ export const createUser = handleAsync(async (req, res, next) => {
   });
 });
 // Update user
+
+const deleteFile = (filePath) => {
+  if (!filePath) return;
+
+  const fullPath = `.${filePath}`;
+
+  if (fs.existsSync(fullPath)) {
+    fs.unlinkSync(fullPath);
+  }
+};
 export const updateUser = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   const {
@@ -341,7 +353,10 @@ export const updateUser = handleAsync(async (req, res, next) => {
     user.assignShift = assignShift;
   }
   if (isActive !== undefined) user.isActive = isActive;
-
+  if (req.files?.profilePhoto?.[0]) {
+    deleteFile(user.profilePhoto);
+    user.profilePhoto = `/${req.files.profilePhoto[0].path.replace(/\\/g, "/")}`;
+  }
   // if (isEmailNotificationEnabled) {
   //   await sendTestEmail({
   //     from: user.email,

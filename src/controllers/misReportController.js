@@ -46,6 +46,8 @@ export const getMisReport = handleAsync(async (req, res, next) => {
   const matchCondition = {
     // assignedTo: { $in: userIdArray },
     isDeleted: { $ne: true },
+    status: { $ne: "Upcoming" },
+
     isVisible: true,
     $or: [
       { dueDate: { $ne: null, $gte: start, $lte: end } },

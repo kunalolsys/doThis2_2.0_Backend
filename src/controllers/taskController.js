@@ -1529,7 +1529,7 @@ export const filterTasks = handleAsync(async (req, res) => {
     }),
   );
 
-  const filteredRecurring = futureRecurring.filter(Boolean);
+  let filteredRecurring = futureRecurring.filter(Boolean);
   // let filteredRecurring = futureRecurring;
   if (startDate || endDate) {
     const startBoundary = startDate ? startOfDay(parseISO(startDate)) : null;
@@ -2170,7 +2170,7 @@ export const exportMYTasks = handleAsync(async (req, res) => {
     }),
   );
 
-  const filteredRecurring = futureRecurring.filter(Boolean);
+  let filteredRecurring = futureRecurring.filter(Boolean);
   // let filteredRecurring = futureRecurring;
   if (startDate || endDate) {
     const startBoundary = startDate ? startOfDay(parseISO(startDate)) : null;

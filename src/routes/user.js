@@ -11,6 +11,7 @@ import {
   dashboardUserCount,
 } from "../controllers/userController.js";
 import { authenticateJWT } from "../middleware/authMiddleware.js";
+import upload from "../services/Upload.js";
 
 const router = express.Router();
 
@@ -20,7 +21,14 @@ router.get("/list-drop", authenticateJWT, getAllUsersForDrop);
 router.get("/user-count", authenticateJWT, dashboardUserCount);
 router.get("/allUsers", authenticateJWT, getAllUserForDrops);
 router.get("/:id", authenticateJWT, getSingleUser);
-router.put("/:id", authenticateJWT, updateUser);
+router.put(
+  "/:id",
+  upload.fields([
+    { name: "profilePhoto", maxCount: 1 },
+  ]),
+  authenticateJWT,
+  updateUser,
+);
 router.delete("/:id", authenticateJWT, deleteUser);
 router.post("/export", authenticateJWT, exportUsers);
 
