@@ -15,7 +15,6 @@ import { format } from "date-fns";
 const isTaskDueToday = (task) => {
   const today = moment().utc().startOf("day");
   const start = moment(task.startDate).utc().startOf("day");
-
   // 1. Basic Date Validation
   if (today.isBefore(start)) return false; // Hasn't started yet
   if (task.endDate && today.isAfter(moment(task.endDate).utc().endOf("day")))
@@ -61,11 +60,11 @@ const generateRecurringTasks = async () => {
     const now = new Date();
     const recurringTasks = await RecurringTask.find({
       startDate: { $lte: now },
-      $or: [
-        { endDate: { $exists: false } },
-        { endDate: null },
-        { endDate: { $gte: now } },
-      ],
+      // $or: [
+      //   { endDate: { $exists: false } },
+      //   { endDate: null },
+      //   { endDate: { $gte: now } },
+      // ],
     });
 
     let createdCount = 0;
@@ -132,6 +131,7 @@ const generateRecurringTasks = async () => {
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
         recurringRefId: task.TaskId,
+        frequency:task.frequency,
         checklist:
           task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
           [],

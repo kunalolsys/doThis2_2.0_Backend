@@ -95,7 +95,19 @@ const BaseTaskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
-
+    frequency: {
+      type: String,
+      enum: [
+        "Daily",
+        "Weekly",
+        "Fortnightly",
+        "Monthly",
+        "Quarterly",
+        "Half Yearly",
+        "Yearly",
+      ],
+      required: false,
+    },
     // --- DEPENDENCY LOGIC (Shared by both types) ---
     isDependent: {
       type: Boolean,

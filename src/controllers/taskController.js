@@ -1245,14 +1245,27 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   // 🔁 TASK TYPE
   if (taskType === "RecurringTask") {
-    // User only wants virtual upcoming recurring tasks
-    query.taskType = "__NO_TASKS__"; // impossible value
-  } else if (taskType) {
-    query.taskType = taskType;
-  } else {
-    // default hide recurring templates
-    query.taskType = { $ne: "RecurringTask" };
-  }
+  // ONLY generated recurring delegation tasks
+  query.taskType = "DelegationTask";
+
+  query.frequency = {
+    $exists: true,
+    $ne: null,
+  };
+} else if (taskType === "DelegationTask") {
+  // ONLY normal delegation tasks
+  query.taskType = "DelegationTask";
+
+  query.$or = [
+    { frequency: { $exists: false } },
+    { frequency: null },
+  ];
+}
+ else {
+  // hide recurring templates
+  query.taskType = { $ne: "RecurringTask" };
+}
+  
   // 📅 DATE RANGE FILTER (startDate OR dueDate)
   // 📅 DATE RANGE FILTER (FIXED)
   if (startDate || endDate) {
@@ -1741,12 +1754,13 @@ export const filterTasks = handleAsync(async (req, res) => {
   let recurringResponse = [];
   // const shouldShowFutureRecurring = taskType != "DelegationTask";
 
-  const shouldShowFutureRecurring =
-    taskCategory === "upcoming" && taskType != "DelegationTask";
+ const shouldShowFutureRecurring =
+  taskCategory === "upcoming" &&
+  (!taskType || taskType === "RecurringTask");
 
-  if (shouldShowFutureRecurring) {
-    recurringResponse = finalVirtualRecurring;
-  }
+if (shouldShowFutureRecurring) {
+  recurringResponse = finalVirtualRecurring;
+}
   res.json({
     success: true,
     // data: tasks,
@@ -3099,13 +3113,31 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     taskCategory, // New parameter for filtering by 'today', 'upcoming', 'completed'
     type,
   } = req.query;
+  console.log("object",creatorOrAssignorId)
   const skip = (parseInt(page) - 1) * parseInt(limit);
   let tasks = [];
   let total = 0;
 
   const filterQuery = {};
   const today = startOfDay(new Date());
+const loggedInUserId =
+  req.cookies.userId || req.user?._id;
 
+const loggedInUser = await User.findById(
+  loggedInUserId
+).populate("role", "name");
+
+const roleName =
+  loggedInUser?.role?.name?.toLowerCase();
+
+const isSuperUser =
+  roleName === "admin" ||
+  roleName === "owner";
+
+// ✅ only non-admin/non-owner
+if (!isSuperUser) {
+  filterQuery.createdBy = loggedInUserId;
+}
   if (creatorOrAssignorId) {
     // If creatorOrAssignorId is provided, apply an OR condition
     filterQuery.$or = [

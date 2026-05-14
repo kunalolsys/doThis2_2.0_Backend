@@ -49,7 +49,9 @@ async function updateTaskStatuses() {
         newStatus = "Completed";
       } else if (start && start > today) {
         newStatus = "Upcoming";
-      } else if (due && due.getTime() === today.getTime()) {
+      } else if (start && due && today >= start && today <= due) {
+        newStatus = "Pending";
+      } else if (due && today > due) {
         newStatus = "Delayed";
       } else if (due && due < today) {
         newStatus = "Overdue";
@@ -101,7 +103,7 @@ async function updateTaskStatuses() {
 
       if (start && start > today) {
         newStatus = "Upcoming";
-      } else if (due && due.getTime() === today.getTime()) {
+      } else if (due && due.getTime() > today.getTime()) {
         newStatus = "Delayed";
       } else if (due && due < today) {
         newStatus = "Overdue";

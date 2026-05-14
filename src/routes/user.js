@@ -9,6 +9,7 @@ import {
   getAllUserForDrops,
   getAllUsersForDrop,
   dashboardUserCount,
+  getAllFilterUserForDrops,
 } from "../controllers/userController.js";
 import { authenticateJWT } from "../middleware/authMiddleware.js";
 import upload from "../services/Upload.js";
@@ -20,6 +21,7 @@ router.post("/list", authenticateJWT, getAllUsers);
 router.get("/list-drop", authenticateJWT, getAllUsersForDrop);
 router.get("/user-count", authenticateJWT, dashboardUserCount);
 router.get("/allUsers", authenticateJWT, getAllUserForDrops);
+router.get("/filter-allUsers", authenticateJWT, getAllFilterUserForDrops);
 router.get("/:id", authenticateJWT, getSingleUser);
 router.put(
   "/:id",

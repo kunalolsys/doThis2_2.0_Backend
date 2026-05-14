@@ -4,15 +4,24 @@ import AppError from "../utils/AppError.js";
 import User from "../models/User.js";
 
 // Get all roles
-export const getAllRoles = handleAsync(async (req, res, next) => {
-  const roles = await Role.find();
+export const getAllRoles = handleAsync(
+  async (req, res, next) => {
+    const roles = await Role.find({
+      name: { $ne: "Super" },
+    });
 
-  if (!roles || roles.length === 0) {
-    return next(new AppError("No roles found", 404));
+    if (!roles || roles.length === 0) {
+      return next(
+        new AppError("No roles found", 404)
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: roles,
+    });
   }
-  return res.status(200).json({ success: true, data: roles });
-});
-
+);
 // Create a new role
 export const createRole = handleAsync(async (req, res, next) => {
   const { name, permissions } = req.body;

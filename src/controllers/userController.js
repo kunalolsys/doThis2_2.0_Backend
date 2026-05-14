@@ -88,6 +88,13 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
   // const total = await User.countDocuments(filter);
 
   // ✅ Fetch users
+  const superRole = await Role.findOne({
+    name: "Super",
+  }).select("_id");
+
+  if (superRole) {
+    filter.role = { $ne: superRole._id };
+  }
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("role", "name")
@@ -117,6 +124,13 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
 export const getAllUsersForDrop = handleAsync(async (req, res, next) => {
   const filter = { isDeleted: { $ne: true }, isActive: true };
   // ✅ Fetch users
+  const superRole = await Role.findOne({
+    name: "Super",
+  }).select("_id");
+
+  if (superRole) {
+    filter.role = { $ne: superRole._id };
+  }
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("role", "name")
@@ -131,6 +145,13 @@ export const getAllUsersForDrop = handleAsync(async (req, res, next) => {
 });
 export const dashboardUserCount = handleAsync(async (req, res, next) => {
   const filter = { isDeleted: { $ne: true }, isActive: true };
+  const superRole = await Role.findOne({
+    name: "Super",
+  }).select("_id");
+
+  if (superRole) {
+    filter.role = { $ne: superRole._id };
+  }
   const totalUser = await User.countDocuments(filter);
   return res.status(200).json({
     success: true,
@@ -173,8 +194,65 @@ export const exportUsers = handleAsync(async (req, res) => {
 export const getAllUserForDrops = handleAsync(async (req, res) => {
   const filter = { isDeleted: { $ne: true } };
   // 🔥 NO PAGINATION HERE
+  const superRole = await Role.findOne({
+    name: "Super",
+  }).select("_id");
+
+  if (superRole) {
+    filter.role = { $ne: superRole._id };
+  }
   const users = await User.find(filter)
     .select("department role assignShift name _id")
+    .populate("department", "name")
+    .populate("role", "name")
+    .populate("assignShift");
+
+  return res.status(200).json({
+    success: true,
+    data: users,
+  });
+});
+export const getAllFilterUserForDrops = handleAsync(async (req, res) => {
+  const userId = req.cookies.userId || req.user._id || null;
+  const loggedInUser = await User.findById(userId).populate("role", "name");
+
+  if (!loggedInUser) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  const roleName = loggedInUser.role?.name?.toLowerCase();
+
+  const isSuperUser = roleName === "admin" || roleName === "owner";
+  const isMember = roleName === "member";
+
+  let filter = {
+    isDeleted: { $ne: true },
+  };
+
+  // ✅ Non-admin users only see reporting users
+  if (!isSuperUser) {
+    // ✅ Member → only himself
+    if (isMember) {
+      filter._id = loggedInUser._id;
+    }
+
+    // ✅ Manager / Sr.Manager → reporting users
+    else {
+      filter.reportingManager = loggedInUser._id;
+    }
+  }
+  const superRole = await Role.findOne({
+    name: "Super",
+  }).select("_id");
+
+  if (superRole) {
+    filter.role = { $ne: superRole._id };
+  }
+  const users = await User.find(filter)
+    .select("department role assignShift name _id reportingManager")
     .populate("department", "name")
     .populate("role", "name")
     .populate("assignShift");

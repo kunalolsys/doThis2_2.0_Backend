@@ -51,14 +51,73 @@ export const exportDepartment = handleAsync(async (req, res) => {
   });
 });
 export const getAllDeptsForDrops = handleAsync(async (req, res) => {
-  // 🔥 NO PAGINATION HERE
-  const department = await Department.find({ isDeleted: false });
+  const userId = req.cookies.userId || req.user._id || null;
+  const loggedInUser = await User.findById(userId).populate("role", "name");
+
+  if (!loggedInUser) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  // ✅ Admin / Owner gets all departments
+  const roleName = loggedInUser.role?.name?.toLowerCase();
+
+  const isSuperUser = roleName === "admin" || roleName === "owner";
+  const isMember = roleName === "member";
+
+  let departments = [];
+
+  if (isSuperUser) {
+    departments = await Department.find({
+      isDeleted: false,
+    });
+  } else if (isMember) {
+    // ✅ Member sees only own departments
+
+    departments = await Department.find({
+      _id: {
+        $in: loggedInUser.department || [],
+      },
+      isDeleted: false,
+    });
+  } else {
+    // ✅ Find users reporting to logged in user
+    const reportingUsers = await User.find({
+      reportingManager: loggedInUser._id,
+      isDeleted: false,
+    }).select("department");
+
+    // collect unique department ids
+    const deptIds = [
+      ...new Set(
+        reportingUsers.flatMap((u) =>
+          (u.department || []).map((d) => d.toString()),
+        ),
+      ),
+    ];
+
+    departments = await Department.find({
+      _id: { $in: deptIds },
+      isDeleted: false,
+    });
+  }
 
   return res.status(200).json({
     success: true,
-    data: department,
+    data: departments,
   });
 });
+// export const getAllDeptsForDrops = handleAsync(async (req, res) => {
+//   // 🔥 NO PAGINATION HERE
+//   const department = await Department.find({ isDeleted: false });
+
+//   return res.status(200).json({
+//     success: true,
+//     data: department,
+//   });
+// });
 // create Department
 export const createDepartment = handleAsync(async (req, res, next) => {
   const { name } = req.body;
