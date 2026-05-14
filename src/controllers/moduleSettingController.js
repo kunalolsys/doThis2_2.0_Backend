@@ -30,9 +30,7 @@ const upsertModuleSetting = handleAsync(async (req, res, next) => {
 });
 
 const listModules = handleAsync(async (req, res) => {
-  const modules = await ModuleSetting.find({ deletedAt: null }).sort({
-    moduleKey: 1,
-  });
+  const modules = await ModuleSetting.find({ deletedAt: null });
   res.status(200).json({ success: true, data: modules });
 });
 
