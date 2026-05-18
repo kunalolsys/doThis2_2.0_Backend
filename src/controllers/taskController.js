@@ -3444,7 +3444,7 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     }
 
     updateData.status = "Completed";
-    updateData.taskDoneBy = req.user._id;
+    updateData.taskDoneBy =req.cookies.userId|| req.user._id;
     updateData.completedAt = new Date();
   } else {
     updateData.status = "Pending";
@@ -4316,7 +4316,7 @@ export const importTasks = handleAsync(async (req, res, next) => {
             departmentOfAssignToUser: item.departmentId,
             checklist,
           };
-          console.log(item);
+          // console.log(item);
           let taskInstance;
 
           // Delegation vs Recurring vs Dependent

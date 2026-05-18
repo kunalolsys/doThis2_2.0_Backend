@@ -13,12 +13,14 @@ import { format } from "date-fns";
 
 // Helper: Check if today matches the frequency criteria
 const isTaskDueToday = (task) => {
-  const today = moment().utc().startOf("day");
-  const start = moment(task.startDate).utc().startOf("day");
+  const today = moment().startOf("day");
+  const start = moment(task.startDate).startOf("day");
+
   // 1. Basic Date Validation
   if (today.isBefore(start)) return false; // Hasn't started yet
-  if (task.endDate && today.isAfter(moment(task.endDate).utc().endOf("day")))
-    return false; // Expired
+  if (task.endDate && today.isAfter(moment(task.endDate).endOf("day"))) {
+    return false;
+  }
 
   // 2. Frequency Logic (unchanged)
   switch (task.frequency) {
@@ -58,15 +60,7 @@ const generateRecurringTasks = async () => {
 
   try {
     const now = new Date();
-    const recurringTasks = await RecurringTask.find({
-      startDate: { $lte: now },
-      // $or: [
-      //   { endDate: { $exists: false } },
-      //   { endDate: null },
-      //   { endDate: { $gte: now } },
-      // ],
-    });
-
+    const recurringTasks = await RecurringTask.find({});
     let createdCount = 0;
 
     for (const task of recurringTasks) {
@@ -131,7 +125,7 @@ const generateRecurringTasks = async () => {
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
         recurringRefId: task.TaskId,
-        frequency:task.frequency,
+        frequency: task.frequency,
         checklist:
           task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
           [],

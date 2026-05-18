@@ -1,9 +1,8 @@
 import mongoose from "mongoose";
 import Task from "../models/Task.js";
-import User from "../models/User.js";
 import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
-import { getSubordinates, getDateRange } from "../utils/reportHelpers.js";
+import { getDateRange } from "../utils/reportHelpers.js";
 
 export const getMisReport = handleAsync(async (req, res, next) => {
   let {
@@ -16,19 +15,24 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     memberIds,
   } = req.body;
 
-  // ✅ Normalize inputs
+  // =========================
+  // Normalize Inputs
+  // =========================
   if (memberIds === "all" || !Array.isArray(memberIds)) {
     memberIds = [];
   }
 
   if (srManagerId === "all") srManagerId = null;
   if (managerId === "all") managerId = null;
+  if (departmentId === "all") departmentId = null;
 
-  // ✅ Date Range
   const { start, end } = getDateRange(period, startDate, endDate);
 
-  // ✅ Simple userIds = selected manager/member/sr IDs
+  // =========================
+  // User Filters
+  // =========================
   const userIds = new Set(memberIds || []);
+
   if (managerId) userIds.add(managerId);
   if (srManagerId) userIds.add(srManagerId);
 
@@ -40,45 +44,86 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     )
     .filter(Boolean);
 
-  // if (userIds.size === 0) {
-  //   return next(new AppError("No users found for report", 400));
-  // }
+  // =========================
+  // Base Match
+  // =========================
   const matchCondition = {
-    // assignedTo: { $in: userIdArray },
     isDeleted: { $ne: true },
-    status: { $ne: "Upcoming" },
-
-    isVisible: true,
+taskType:{$ne:"RecurringTask"},
     $or: [
-      { dueDate: { $ne: null, $gte: start, $lte: end } },
-      { endDate: { $ne: null, $gte: start, $lte: end } },
+      {
+        dueDate: {
+          $ne: null,
+          $gte: start,
+          $lte: end,
+        },
+      },
+      {
+        endDate: {
+          $ne: null,
+          $gte: start,
+          $lte: end,
+        },
+      },
+      {
+        startDate: {
+          $ne: null,
+          $gte: start,
+          $lte: end,
+        },
+      },
     ],
   };
+
   if (userIdArray.length > 0) {
     matchCondition.assignedTo = { $in: userIdArray };
   }
-  const globalTopPerformers = await Task.aggregate([
+
+  if (departmentId) {
+    matchCondition.departmentOfAssignToUser = new mongoose.Types.ObjectId(
+      departmentId,
+    );
+  }
+
+  // =========================
+  // Dashboard Summary
+  // =========================
+  const summary = await Task.aggregate([
     {
-      $match: {
-        isDeleted: { $ne: true },
-        isVisible: true,
-        $or: [
-          { dueDate: { $ne: null, $gte: start, $lte: end } },
-          { endDate: { $ne: null, $gte: start, $lte: end } },
-        ],
-      },
+      $match: matchCondition,
     },
+
     {
       $group: {
-        _id: "$assignedTo",
+        _id: null,
+
         totalTasks: { $sum: 1 },
-        doneOnTime: {
+
+        completed: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
+          },
+        },
+
+        pending: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Pending"] }, 1, 0],
+          },
+        },
+
+        upcoming: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Upcoming"] }, 1, 0],
+          },
+        },
+
+        overdue: {
           $sum: {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$completedAt", null] },
-                  { $lte: ["$completedAt", "$dueDate"] },
+                  { $ne: ["$status", "Completed"] },
+                  { $lt: ["$dueDate", new Date()] },
                 ],
               },
               1,
@@ -86,12 +131,13 @@ export const getMisReport = handleAsync(async (req, res, next) => {
             ],
           },
         },
-        notDoneOnTime: {
+
+        delayed: {
           $sum: {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$completedAt", null] },
+                  { $eq: ["$status", "Completed"] },
                   { $gt: ["$completedAt", "$dueDate"] },
                 ],
               },
@@ -100,78 +146,28 @@ export const getMisReport = handleAsync(async (req, res, next) => {
             ],
           },
         },
-      },
-    },
-    {
-      $addFields: {
-        score: {
-          $round: [
-            {
-              $multiply: [
-                {
-                  $divide: [
-                    "$doneOnTime",
-                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
+
+        doneOnTime: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ["$status", "Completed"] },
+                  { $lte: ["$completedAt", "$dueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
         },
-        lateScore: {
-          $round: [
-            {
-              $multiply: [
-                {
-                  $divide: [
-                    "$notDoneOnTime",
-                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
-        },
-      },
-    },
-
-    // ✅ ❗ REMOVE score = 0 performers
-    {
-      $match: {
-        score: { $gt: 0 },
-      },
-    },
-
-    { $sort: { score: -1, totalTasks: -1 } },
-    { $limit: 3 },
-
-    {
-      $lookup: {
-        from: "users",
-        localField: "_id",
-        foreignField: "_id",
-        as: "user",
-      },
-    },
-    { $unwind: "$user" },
-
-    {
-      $project: {
-        _id: 0,
-        userId: "$user._id",
-        name: "$user.name",
-        totalTasks: 1,
-        doneOnTime: 1,
-        score: 1,
-        lateScore: 1,
       },
     },
   ]);
-  // ✅ Aggregation
+
+  // =========================
+  // User Wise MIS Report
+  // =========================
   const reports = await Task.aggregate([
     {
       $match: matchCondition,
@@ -183,14 +179,31 @@ export const getMisReport = handleAsync(async (req, res, next) => {
 
         totalTasks: { $sum: 1 },
 
-        // ✅ Done on time → completed AND before dueDate
-        doneOnTime: {
+        completed: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
+          },
+        },
+
+        pending: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Pending"] }, 1, 0],
+          },
+        },
+
+        upcoming: {
+          $sum: {
+            $cond: [{ $eq: ["$status", "Upcoming"] }, 1, 0],
+          },
+        },
+
+        overdue: {
           $sum: {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$completedAt", null] },
-                  { $lte: ["$completedAt", "$dueDate"] },
+                  { $ne: ["$status", "Completed"] },
+                  { $lt: ["$dueDate", new Date()] },
                 ],
               },
               1,
@@ -199,13 +212,12 @@ export const getMisReport = handleAsync(async (req, res, next) => {
           },
         },
 
-        // ❌ Not done on time → completed BUT late
-        notDoneOnTime: {
+        delayed: {
           $sum: {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$completedAt", null] },
+                  { $eq: ["$status", "Completed"] },
                   { $gt: ["$completedAt", "$dueDate"] },
                 ],
               },
@@ -215,14 +227,13 @@ export const getMisReport = handleAsync(async (req, res, next) => {
           },
         },
 
-        // ⏳ Not done → not completed
-        notDone: {
+        doneOnTime: {
           $sum: {
             $cond: [
               {
-                $or: [
-                  { $eq: ["$completedAt", null] },
-                  { $ne: ["$status", "Completed"] },
+                $and: [
+                  { $eq: ["$status", "Completed"] },
+                  { $lte: ["$completedAt", "$dueDate"] },
                 ],
               },
               1,
@@ -233,7 +244,9 @@ export const getMisReport = handleAsync(async (req, res, next) => {
       },
     },
 
-    // ✅ Join user
+    // =========================
+    // User Join
+    // =========================
     {
       $lookup: {
         from: "users",
@@ -242,9 +255,14 @@ export const getMisReport = handleAsync(async (req, res, next) => {
         as: "user",
       },
     },
-    { $unwind: "$user" },
 
-    // ✅ Join role
+    {
+      $unwind: "$user",
+    },
+
+    // =========================
+    // Role Join
+    // =========================
     {
       $lookup: {
         from: "roles",
@@ -253,6 +271,7 @@ export const getMisReport = handleAsync(async (req, res, next) => {
         as: "role",
       },
     },
+
     {
       $unwind: {
         path: "$role",
@@ -260,27 +279,33 @@ export const getMisReport = handleAsync(async (req, res, next) => {
       },
     },
 
-    // ✅ Final projection
+    // =========================
+    // Department Join
+    // =========================
     {
-      $project: {
-        _id: 0,
-        userId: "$user._id",
-        userName: "$user.name",
-        role: { $ifNull: ["$role.name", "Unknown"] },
+      $lookup: {
+        from: "departments",
+        localField: "user.department",
+        foreignField: "_id",
+        as: "departments",
+      },
+    },
 
-        totalTasks: 1,
-        doneOnTime: 1,
-        notDoneOnTime: 1,
-        notDone: 1,
-
-        score: {
+    // =========================
+    // Calculations
+    // =========================
+    {
+      $addFields: {
+        completionRate: {
           $round: [
             {
               $multiply: [
                 {
                   $divide: [
-                    "$doneOnTime",
-                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
+                    "$completed",
+                    {
+                      $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+                    },
                   ],
                 },
                 100,
@@ -289,14 +314,36 @@ export const getMisReport = handleAsync(async (req, res, next) => {
             2,
           ],
         },
-        lateScore: {
+
+        onTimeRate: {
           $round: [
             {
               $multiply: [
                 {
                   $divide: [
-                    "$notDoneOnTime",
-                    { $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"] },
+                    "$doneOnTime",
+                    {
+                      $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                    },
+                  ],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+
+        overdueRate: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: [
+                    "$overdue",
+                    {
+                      $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+                    },
                   ],
                 },
                 100,
@@ -308,43 +355,119 @@ export const getMisReport = handleAsync(async (req, res, next) => {
       },
     },
 
-    { $sort: { score: -1, totalTasks: -1 } },
+    // =========================
+    // Final Response
+    // =========================
+    {
+      $project: {
+        _id: 0,
+
+        userId: "$user._id",
+        userName: "$user.name",
+        email: "$user.email",
+
+        role: {
+          $ifNull: ["$role.name", "Unknown"],
+        },
+
+        departments: "$departments.name",
+
+        totalTasks: 1,
+        completed: 1,
+        pending: 1,
+        upcoming: 1,
+        overdue: 1,
+        delayed: 1,
+        doneOnTime: 1,
+
+        completionRate: 1,
+        onTimeRate: 1,
+        overdueRate: 1,
+      },
+    },
+
+    {
+      $sort: {
+        completionRate: -1,
+        doneOnTime: -1,
+        totalTasks: -1,
+      },
+    },
   ]);
+
+  // =========================
+  // Top Performers
+  // =========================
+  const topPerformers = reports.filter((u) => u.completionRate > 0).slice(0, 5);
+
+  // =========================
+  // Bottom Performers
+  // =========================
+  const lowPerformers = [...reports]
+    .sort((a, b) => b.overdue - a.overdue)
+    .slice(0, 5);
+
+  // =========================
+  // Task List
+  // =========================
   const filteredTasks = await Task.find(matchCondition)
-    .select("_id title")
+    .select(
+      `
+      TaskId
+      title
+      status
+      taskType
+      startDate
+      dueDate
+      endDate
+      completedAt
+    `,
+    )
     .populate("assignedTo", "name email")
     .populate("createdBy", "name")
+    .populate("departmentOfAssignToUser", "name")
     .sort({ createdAt: -1 })
     .lean();
-  //**filter top performer */
-  // let finalTopPerformers = globalTopPerformers;
 
-  // // 👉 If filters exist → keep only matching users
-  // if (userIdArray.length > 0) {
-  //   const userIdsSet = new Set(userIdArray.map((id) => id.toString()));
-
-  //   finalTopPerformers = globalTopPerformers.filter((user) =>
-  //     userIdsSet.has(user.userId.toString()),
-  //   );
-  // }
-  // ✅ Response
+  // =========================
+  // Response
+  // =========================
   res.status(200).json({
     success: true,
-    count: reports.length,
-    data: reports,
-    tasks: filteredTasks,
-    topPerformers: globalTopPerformers,
+
     filters: {
       period,
       startDate,
       endDate,
       srManagerId,
       managerId,
+      departmentId,
       memberCount: memberIds.length,
     },
+
     dateRange: {
-      start: start.toISOString().split("T")[0],
-      end: end.toISOString().split("T")[0],
+      start: start.toISOString(),
+      end: end.toISOString(),
     },
+
+    summary: summary[0] || {
+      totalTasks: 0,
+      completed: 0,
+      pending: 0,
+      upcoming: 0,
+      overdue: 0,
+      delayed: 0,
+      doneOnTime: 0,
+    },
+
+    topPerformers,
+
+    lowPerformers,
+
+    count: reports.length,
+
+    reports,
+
+    tasks: filteredTasks,
   });
 });
