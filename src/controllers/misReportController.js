@@ -294,22 +294,122 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     // =========================
     // Calculations
     // =========================
+    // {
+    //   $addFields: {
+    //     // =========================
+    //     // TOTAL COMPLETION RATE
+    //     // completed / total
+    //     // =========================
+    //     completionRate: {
+    //       $round: [
+    //         {
+    //           $multiply: [
+    //             {
+    //               $divide: [
+    //                 "$completed",
+    //                 {
+    //                   $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+    //                 },
+    //               ],
+    //             },
+    //             100,
+    //           ],
+    //         },
+    //         2,
+    //       ],
+    //     },
+
+    //     // =========================
+    //     // ON TIME COMPLETION RATE
+    //     // doneOnTime / completed
+    //     // =========================
+    //     onTimeCompletionRate: {
+    //       $round: [
+    //         {
+    //           $multiply: [
+    //             {
+    //               $divide: [
+    //                 "$doneOnTime",
+    //                 {
+    //                   $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+    //                 },
+    //               ],
+    //             },
+    //             100,
+    //           ],
+    //         },
+    //         2,
+    //       ],
+    //     },
+
+    //     // =========================
+    //     // DELAYED COMPLETION RATE
+    //     // delayed / completed
+    //     // =========================
+    //     delayedCompletionRate: {
+    //       $round: [
+    //         {
+    //           $multiply: [
+    //             {
+    //               $divide: [
+    //                 "$delayed",
+    //                 {
+    //                   $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+    //                 },
+    //               ],
+    //             },
+    //             100,
+    //           ],
+    //         },
+    //         2,
+    //       ],
+    //     },
+
+    //     // =========================
+    //     // OVERDUE RATE
+    //     // overdue / total
+    //     // =========================
+    //     overdueRate: {
+    //       $round: [
+    //         {
+    //           $multiply: [
+    //             {
+    //               $divide: [
+    //                 "$overdue",
+    //                 {
+    //                   $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+    //                 },
+    //               ],
+    //             },
+    //             100,
+    //           ],
+    //         },
+    //         2,
+    //       ],
+    //     },
+    //   },
+    // },
     {
       $addFields: {
-        // =========================
-        // TOTAL COMPLETION RATE
-        // completed / total
-        // =========================
         completionRate: {
           $round: [
             {
-              $multiply: [
+              $subtract: [
                 {
-                  $divide: [
-                    "$completed",
+                  $multiply: [
                     {
-                      $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+                      $divide: [
+                        "$completed",
+                        {
+                          $cond: [
+                            { $eq: ["$totalTasks", 0] },
+                            1,
+                            "$totalTasks",
+                          ],
+                        },
+                      ],
                     },
+                    100,
                   ],
                 },
                 100,
@@ -319,20 +419,21 @@ export const getMisReport = handleAsync(async (req, res, next) => {
           ],
         },
 
-        // =========================
-        // ON TIME COMPLETION RATE
-        // doneOnTime / completed
-        // =========================
         onTimeCompletionRate: {
           $round: [
             {
-              $multiply: [
+              $subtract: [
                 {
-                  $divide: [
-                    "$doneOnTime",
+                  $multiply: [
                     {
-                      $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                      $divide: [
+                        "$doneOnTime",
+                        {
+                          $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                        },
+                      ],
                     },
+                    100,
                   ],
                 },
                 100,
@@ -342,20 +443,21 @@ export const getMisReport = handleAsync(async (req, res, next) => {
           ],
         },
 
-        // =========================
-        // DELAYED COMPLETION RATE
-        // delayed / completed
-        // =========================
         delayedCompletionRate: {
           $round: [
             {
-              $multiply: [
+              $subtract: [
                 {
-                  $divide: [
-                    "$delayed",
+                  $multiply: [
                     {
-                      $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                      $divide: [
+                        "$delayed",
+                        {
+                          $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                        },
+                      ],
                     },
+                    100,
                   ],
                 },
                 100,
@@ -365,20 +467,25 @@ export const getMisReport = handleAsync(async (req, res, next) => {
           ],
         },
 
-        // =========================
-        // OVERDUE RATE
-        // overdue / total
-        // =========================
         overdueRate: {
           $round: [
             {
-              $multiply: [
+              $subtract: [
                 {
-                  $divide: [
-                    "$overdue",
+                  $multiply: [
                     {
-                      $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
+                      $divide: [
+                        "$overdue",
+                        {
+                          $cond: [
+                            { $eq: ["$totalTasks", 0] },
+                            1,
+                            "$totalTasks",
+                          ],
+                        },
+                      ],
                     },
+                    100,
                   ],
                 },
                 100,
@@ -389,7 +496,6 @@ export const getMisReport = handleAsync(async (req, res, next) => {
         },
       },
     },
-
     // =========================
     // Final Response
     // =========================
