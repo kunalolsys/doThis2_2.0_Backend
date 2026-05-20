@@ -16,12 +16,7 @@ import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
 /**
  * Check if date is a holiday
  */
-// export async function isHoliday(date) {
-//   const startDay = startOfDay(new Date(date));
-//   const holiday = await Holiday.findOne({ date: startDay })
-//   console.log(holiday,startDay);
-//   return !!holiday;
-// }
+
 export async function isHoliday(date) {
   const startDay = startOfDay(new Date(date));
   const endDay = endOfDay(new Date(date));
@@ -174,61 +169,7 @@ export async function addWorkingDaysHoliday(
 
   return snapToShiftTime(current, workShift, false);
 }
-// export async function addWorkingDaysHoliday(
-//   startDate,
-//   workShiftId
-// ) {
-//   let current = new Date(startDate);
 
-//   const workShift = await WorkShift.findById(workShiftId);
-//   if (!workShift) throw new Error("WorkShift not found");
-
-//   // ✅ get schedule config
-//   const schedule = await ScheduleHolidayTask.findOne();
-//   const holidayAction = schedule?.holidayAction || "AFTER";
-
-//   let holidayDate = null;
-
-//   // 🔍 find nearest holiday (next 30 days)
-//   for (let i = 0; i < 30; i++) {
-//     const checkDate = addDays(current, i);
-//     if (await isHoliday(checkDate)) {
-//       holidayDate = checkDate;
-//       break;
-//     }
-//   }
-
-//   // fallback
-//   if (!holidayDate) {
-//     return snapToShiftTime(current, workShift, false);
-//   }
-
-//   // ================= LOGIC =================
-
-//   if (holidayAction === "BEFORE") {
-//     current = addDays(holidayDate, -1);
-
-//     while (
-//       (await isHoliday(current)) ||
-//       !isWorkingDay(current, workShift)
-//     ) {
-//       current = addDays(current, -1);
-//     }
-//   }
-
-//   if (holidayAction === "AFTER") {
-//     current = addDays(holidayDate, 1);
-
-//     while (
-//       (await isHoliday(current)) ||
-//       !isWorkingDay(current, workShift)
-//     ) {
-//       current = addDays(current, 1);
-//     }
-//   }
-
-//   return snapToShiftTime(current, workShift, false);
-// }
 export async function addWorkingDays(
   startDate,
   daysCount,

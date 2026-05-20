@@ -6,8 +6,8 @@ import User from "./User.js";
 // 1. BASE SCHEMA (Common Fields & Dependency Logic)
 // ---------------------------------------------------------
 const baseOptions = {
-  discriminatorKey: "taskType", // This differentiates 'Delegation' vs 'Recurring'
-  collection: "tasks", // Everything stays in one collection
+  discriminatorKey: "taskType",
+  collection: "tasks",
   timestamps: true,
 };
 
@@ -44,20 +44,17 @@ const BaseTaskSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // --- NEW FIELD: Start Date ---
     startDate: {
       type: Date,
-      default: null, // Optional: Can be Date.now if you want a default
+      default: null,
       required: false,
     },
 
     taskEndDays: {
       type: Number,
       default: null,
-      // required: true,
     },
 
-    // --- NEW FIELD: Checklist ---
     checklist: {
       type: [ChecklistItemSchema],
       default: [],
@@ -108,7 +105,6 @@ const BaseTaskSchema = new mongoose.Schema(
       ],
       required: false,
     },
-    // --- DEPENDENCY LOGIC (Shared by both types) ---
     isDependent: {
       type: Boolean,
       default: false,
@@ -134,7 +130,6 @@ const BaseTaskSchema = new mongoose.Schema(
         default: null,
       },
     },
-    // 🔥 NEW: Task Visibility based on workshift
     isVisible: {
       type: Boolean,
       default: false,
@@ -143,7 +138,6 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    // 🔌 Socket.IO Threading Integration
     conversationId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Conversation",
@@ -154,7 +148,6 @@ const BaseTaskSchema = new mongoose.Schema(
       ref: "Queries",
       default: null,
     },
-    //**for re-open task */
     isReopen: {
       type: Boolean,
       default: false,
@@ -203,9 +196,7 @@ BaseTaskSchema.pre("validate", function (next) {
 // --- MIDDLEWARE: Generate TaskId and populate departmentOfAssignToUser on new document ---
 BaseTaskSchema.pre("save", async function (next) {
   if (this.isNew) {
-    //-Populate TaskId
     if (!this.TaskId) {
-      // Generate period-based counter key so sequence can be YYMM + 4-digit seq
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
       const mm = String(now.getMonth() + 1).padStart(2, "0");
@@ -219,7 +210,6 @@ BaseTaskSchema.pre("save", async function (next) {
       this.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`; // e.g., '25120001'
     }
 
-    //-Populate departmentOfAssignToUser (only if not already set by controller)
     if (!this.departmentOfAssignToUser && this.assignedTo) {
       try {
         const user = await User.findById(this.assignedTo);
@@ -250,16 +240,11 @@ const DelegationTaskSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
-  // attachmentFile: {
-  //   type: String,
-  //   default: null
-  // },
   recurrenceTaskId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Task",
     default: null,
   },
-  //to find recurrence task
   recurringRefId: {
     type: String,
     default: null,
@@ -303,26 +288,17 @@ const RecurringTaskSchema = new mongoose.Schema({
       ],
     },
   ],
-  // Recurring tasks already had startDate, but since we added it to Base,
-  // we don't strictly need it here, but keeping it ensures validation if specific to logic.
-  // However, BaseTaskSchema definitions usually override unless strictly distinct.
-  // We can leave it in BaseTaskSchema to handle both.
+
   endDate: {
     type: Date,
     default: null,
   },
-  // attachmentFile: {
-  //   type: String,
-  //   default: null,
-  // },
+
   attachmentFile: {
     type: [String],
     default: [],
   },
-  // refID: {
-  //   type: String,
-  //   default: null,
-  // },
+
 });
 
 // --- MIDDLEWARE: Ensure dueDate is null for Recurring Tasks ---
@@ -332,27 +308,7 @@ RecurringTaskSchema.pre("validate", function (next) {
   }
   next();
 });
-// RecurringTaskSchema.pre("save", async function (next) {
-//   if (this.isNew && !this.refID) {
-//     const now = new Date();
 
-//     const yy = String(now.getFullYear()).slice(-2);
-//     const mm = String(now.getMonth() + 1).padStart(2, "0");
-
-//     const period = `${yy}${mm}`; // e.g. 2604
-
-//     const counter = await Counter.findByIdAndUpdate(
-//       { _id: `recurringRef-${period}` },
-//       { $inc: { seq: 1 } },
-//       { new: true, upsert: true },
-//     );
-
-//     this.refID = `R-${period}${counter.seq.toString().padStart(4, "0")}`;
-//     // Example: R-26040001
-//   }
-
-//   next();
-// });
 // ---------------------------------------------------------
 // CREATE DISCRIMINATORS & EXPORT
 // ---------------------------------------------------------

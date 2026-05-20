@@ -4,6 +4,6 @@ import { authenticateJWT } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post("/report", authenticateJWT, getMisReport); // Add authorizeRoles if needed e.g. 'Admin,Sr. Manager'
+router.post("/report", authenticateJWT, getMisReport);
 
 export default router;

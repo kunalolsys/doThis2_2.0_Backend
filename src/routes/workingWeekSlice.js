@@ -3,13 +3,11 @@ import axios from 'axios';
 
 const API_URL = `${import.meta.env.VITE_API_URL}/working-week`;
 
-// Async thunk for fetching the single working week configuration
 export const fetchWorkingWeek = createAsyncThunk(
   'workingWeek/fetchWorkingWeek',
   async (_, { rejectWithValue }) => {
     try {
       const response = await axios.get(API_URL);
-      // The API returns { status: 'success', data: { workingWeek: ... } }
       return response.data.data.workingWeek;
     } catch (error) {
       const message =
@@ -26,7 +24,6 @@ export const updateWorkingWeek = createAsyncThunk(
   'workingWeek/updateWorkingWeek',
   async (workingWeekData, { rejectWithValue }) => {
     try {
-      // The payload from the component is { workingDays: { monday: true, ... } }
       const response = await axios.patch(API_URL, workingWeekData);
       return response.data.data.workingWeek;
     } catch (error) {

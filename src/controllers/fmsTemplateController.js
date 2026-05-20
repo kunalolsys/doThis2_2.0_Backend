@@ -372,20 +372,6 @@ export const deleteTemplate = handleAsync(async (req, res, next) => {
     );
   }
 
-  // 3. Existing task check
-  // if (force !== "true") {
-  //   const taskCount = await FmsTask.countDocuments({
-  //     fmsTemplateId: template._id,
-  //   });
-  //   if (taskCount > 0) {
-  //     return next(
-  //       new AppError(
-  //         `Cannot delete: ${taskCount} tasks exist. Use ?force=true`,
-  //         400,
-  //       ),
-  //     );
-  //   }
-  // }
   // 2️⃣ SOFT DELETE TEMPLATE
   template.isDeleted = true;
   template.deletedAt = new Date();

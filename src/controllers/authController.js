@@ -26,11 +26,6 @@ export const login = handleAsync(async (req, res, next) => {
     return next(new AppError("Incorrect email or password", 401));
   }
 
-  // Check if user is active using isActive boolean
-  // if (!user.isActive) {
-  //     return next(new AppError('Your account is inactive. Please contact administrator.', 403));
-  // }
-
   const compare = await bcrypt.compare(password, user.password);
   if (!compare) {
     return next(new AppError("Incorrect email or password", 401));
@@ -40,11 +35,7 @@ export const login = handleAsync(async (req, res, next) => {
     expiresIn: process.env.JWT_EXPIRES_IN,
   });
 
-  // console.log("Login User Department: ", user.department.name);
-  // console.log("Login User Role ID: ", user.role.name);
 
-  // Convert permissions
-  // Safely handle permissions, defaulting to an empty array if they don't exist
   const rolePermissions = user.role?.permissions || [];
   const permissions = rolePermissions.reduce((acc, permission) => {
     acc[permission.toLowerCase().replace(/ /g, "_") + "_view"] = true;
@@ -79,34 +70,6 @@ export const login = handleAsync(async (req, res, next) => {
     });
 });
 
-// export const register = handleAsync(async (req, res, next) => {
-//     const { name, email, phone, department, role, reportingManager ,assignShift, password,  } = req.body;
-
-//     if (!name || !email || !phone || !password) {
-//         return next(new AppError('Please provide all required fields', 400));
-//     }
-
-//     const hashedPassword = await bcrypt.hash(password, 12);
-
-//     const newUser = await User.create({
-//         name,
-//         email,
-//         phone,
-//         department,
-//         role,
-//         reportingManager,
-//         assignShift,
-//         password: hashedPassword,
-//     });
-
-//     res.status(201).json({
-//         status: 'success',
-//         data: {
-//             user: newUser
-//         },
-//         message: 'User registered successfully'
-//     });
-// });
 
 export const logout = (req, res) => {
   res.cookie("token", "loggedout", {

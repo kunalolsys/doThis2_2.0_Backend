@@ -6,17 +6,10 @@ import * as moduleSettingController from "../controllers/moduleSettingController
 
 const router = express.Router();
 
-// Super UI: only Module Management permission can toggle
-router.get(
-  "/list",
-  authenticateJWT,
-  // requirePermission("Module Management"),
-  moduleSettingController.listModules,
-);
+router.get("/list", authenticateJWT, moduleSettingController.listModules);
 router.post(
   "/toggle",
   authenticateJWT,
-  // requirePermission("Module Management"),
   moduleSettingController.upsertModuleSetting,
 );
 

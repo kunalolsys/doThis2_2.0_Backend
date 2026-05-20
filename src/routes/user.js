@@ -25,9 +25,7 @@ router.get("/filter-allUsers", authenticateJWT, getAllFilterUserForDrops);
 router.get("/:id", authenticateJWT, getSingleUser);
 router.put(
   "/:id",
-  upload.fields([
-    { name: "profilePhoto", maxCount: 1 },
-  ]),
+  upload.fields([{ name: "profilePhoto", maxCount: 1 }]),
   authenticateJWT,
   updateUser,
 );

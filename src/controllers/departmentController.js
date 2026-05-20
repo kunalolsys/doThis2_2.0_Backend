@@ -109,15 +109,7 @@ export const getAllDeptsForDrops = handleAsync(async (req, res) => {
     data: departments,
   });
 });
-// export const getAllDeptsForDrops = handleAsync(async (req, res) => {
-//   // 🔥 NO PAGINATION HERE
-//   const department = await Department.find({ isDeleted: false });
 
-//   return res.status(200).json({
-//     success: true,
-//     data: department,
-//   });
-// });
 // create Department
 export const createDepartment = handleAsync(async (req, res, next) => {
   const { name } = req.body;
