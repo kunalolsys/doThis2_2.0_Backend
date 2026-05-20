@@ -1296,8 +1296,11 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (andConditions.length > 0) {
     query.$and = andConditions;
   }
-  if (query.status !== "Upcoming") {
-    query.isVisible = true;
+  // 🔥 visibility filter
+  if (query.status !== "Upcoming" && taskType !== "All") {
+    andConditions.push({
+      isVisible: true,
+    });
   }
   // =========================
   // MODULE ENABLE CHECK
@@ -3855,583 +3858,21 @@ const parseFlexibleDate = (dateStr) => {
 
   return isNaN(date.getTime()) ? null : date;
 };
-// export const importTasks = handleAsync(async (req, res, next) => {
-//   if (!req.file) {
-//     return next(new AppError("No file uploaded.", 400));
-//   }
-
-//   const filePath = req.file.path;
-
-//   // ── Result tracking ────────────────────────────────────────────────────
-//   const importLog = []; // one entry per row — success or error
-//   const validTasks = []; // task instances ready to insertMany
-//   let rows = [];
-//   let rowCount = 0;
-
-//   try {
-//     // ── 1. Parse file ────────────────────────────────────────────────────
-//     if (
-//       req.file.mimetype === "text/csv" ||
-//       req.file.originalname.toLowerCase().endsWith(".csv")
-//     ) {
-//       rows = await new Promise((resolve, reject) => {
-//         const results = [];
-//         fs.createReadStream(filePath)
-//           .pipe(csv())
-//           .on("data", (data) => results.push(data))
-//           .on("end", () => resolve(results))
-//           .on("error", (error) => reject(error));
-//       });
-//     } else {
-//       const workbook = XLSX.readFile(filePath);
-//       const sheetName = workbook.SheetNames[0];
-//       rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
-//     }
-
-//     if (rows.length === 0) {
-//       fs.unlinkSync(filePath);
-//       return next(
-//         new AppError(
-//           "The uploaded file is empty or in an unsupported format.",
-//           400,
-//         ),
-//       );
-//     }
-
-//     // ── 2. Header validation ─────────────────────────────────────────────
-//     const headers = Object.keys(rows[0] || {}).map((h) => String(h).trim());
-//     const normalize = (s) =>
-//       String(s)
-//         .toLowerCase()
-//         .replace(/[^a-z0-9]/g, "");
-//     const normalized = headers.map(normalize);
-
-//     const required = {
-//       delegation: [
-//         "tasktitle",
-//         "taskdescription",
-//         "assigntoemail",
-//         "assigntouserdepartment",
-//         "startdate",
-//         "taskenddays",
-//       ],
-//       recurring: [
-//         "tasktitle",
-//         "taskdescription",
-//         "assigntoemail",
-//         "assigntouserdepartment",
-//         "startdate",
-//         "frequency",
-//         "enddate",
-//       ],
-//       dependent: [
-//         "taskid",
-//         "tasktitle",
-//         "taskdescription",
-//         "assigntoemail",
-//         "assigntouserdepartment",
-//         "starttimesetting",
-//         "frequency",
-//         "xvalue",
-//       ],
-//     };
-
-//     let detected = "delegation";
-//     if (normalized.includes("taskid")) detected = "dependent";
-//     else if (normalized.includes("frequency") && normalized.includes("enddate"))
-//       detected = "recurring";
-
-//     const missing = required[detected].filter((h) => !normalized.includes(h));
-//     if (missing.length > 0) {
-//       const suspects = headers.filter((h) =>
-//         missing.some(
-//           (m) =>
-//             h.toLowerCase().includes(m.replace(/([a-z])([A-Z])/g, "$1 $2")) ||
-//             m.includes(h.toLowerCase().replace(/[^a-z0-9]/g, "")),
-//         ),
-//       );
-//       fs.unlinkSync(filePath);
-//       return next(
-//         new AppError(
-//           `Missing required column(s) for ${detected} import: ${missing.join(", ")}. Please use exact header names.${suspects.length ? " Suspect headers: " + suspects.join(", ") : ""}`,
-//           400,
-//         ),
-//       );
-//     }
-
-//     // ── 3. Process each row independently ────────────────────────────────
-//     for (const row of rows) {
-//       rowCount++;
-
-//       // Each row gets its own try/catch — errors here SKIP the row, not abort
-//       try {
-//         const {
-//           "Task Title": title,
-//           "Task Description": description,
-//           "Assign To(Email)": assignToEmail,
-//           "Assign To(Name)": assignToName,
-//           "Assign To UserDepartment": departmentName,
-//           "Start Date": startDateStr,
-//           "Due Date": dueDateStr,
-//           "Task End Days": taskEndDaysStr,
-//           isDependent: isDependentStr,
-//           "Attachment File": attachmentFile,
-//           "Check List": checkListStr,
-//           Frequency: frequency,
-//           "Task ID": parentTaskId,
-//           "Start Time Setting": startTimeSetting,
-//           "X Value": xValue,
-//           "End Date": endDateStr,
-//           "Week Days": weekDaysStr,
-//         } = row;
-
-//         const trimStr = (v) => (v ? String(v).trim() : "");
-
-//         const trimmedStartDateStr = trimStr(startDateStr);
-//         const trimmedTaskEndDays = trimStr(taskEndDaysStr);
-//         const trimmedDueDateStr = trimStr(dueDateStr);
-//         const trimmedEndDateStr = trimStr(endDateStr);
-//         const trimmedIsDependentStr = trimStr(isDependentStr);
-//         const trimmedParentTaskId = trimStr(parentTaskId);
-//         const trimmedStartTimeSetting = trimStr(startTimeSetting);
-//         const trimmedXValue = trimStr(xValue);
-//         const trimmedFrequency = trimStr(frequency);
-
-//         const weekDaysArr = weekDaysStr
-//           ? String(weekDaysStr)
-//               .split(",")
-//               .map((d) => d.trim().toLowerCase())
-//               .filter(Boolean)
-//           : [];
-
-//         // Required field check
-//         if (!title || !description || !assignToEmail || !departmentName) {
-//           throw new Error(
-//             "Missing required fields: Task Title, Task Description, Assign To(Email), Assign To UserDepartment.",
-//           );
-//         }
-
-//         const assignToEmails = assignToEmail
-//           .split(",")
-//           .map((e) => e.trim())
-//           .filter(Boolean);
-//         const assignToNames = assignToName
-//           ? String(assignToName)
-//               .split(",")
-//               .map((n) => n.trim())
-//               .filter(Boolean)
-//           : [];
-//         const departmentNames = departmentName
-//           .split(",")
-//           .map((d) => d.trim())
-//           .filter(Boolean);
-
-//         if (assignToEmails.length === 0) {
-//           throw new Error('At least one "Assign To(Email)" is required.');
-//         }
-//         if (
-//           assignToNames.length > 0 &&
-//           assignToNames.length !== assignToEmails.length
-//         ) {
-//           throw new Error(
-//             "Assign To(Name) count must match Assign To(Email) count.",
-//           );
-//         }
-
-//         // ── Build usersForThisRow ────────────────────────────────────────
-//         const usersForThisRow = [];
-
-//         // CASE 1: one user → multiple departments
-//         if (assignToEmails.length === 1 && departmentNames.length >= 1) {
-//           const query = { email: assignToEmails[0] };
-//           if (assignToNames[0]) query.name = assignToNames[0];
-
-//           const user = await User.findOne(query);
-//           if (!user) throw new Error(`User "${assignToEmails[0]}" not found.`);
-
-//           for (const deptName of departmentNames) {
-//             const department = await Department.findOne({
-//               name: { $regex: `^${deptName}$`, $options: "i" },
-//             });
-//             if (!department)
-//               throw new Error(`Department "${deptName}" not found.`);
-
-//             const belongs =
-//               Array.isArray(user.department) &&
-//               user.department.some(
-//                 (id) => id.toString() === department._id.toString(),
-//               );
-//             if (!belongs)
-//               throw new Error(
-//                 `User "${assignToEmails[0]}" does not belong to "${deptName}".`,
-//               );
-
-//             usersForThisRow.push({
-//               user,
-//               departmentId: department._id,
-//               departmentName: deptName,
-//             });
-//           }
-//         }
-//         // CASE 2: multiple users → matching departments
-//         else {
-//           if (assignToEmails.length !== departmentNames.length) {
-//             throw new Error(
-//               "When using multiple users, department count must match user count.",
-//             );
-//           }
-//           for (let i = 0; i < assignToEmails.length; i++) {
-//             const deptName = departmentNames[i];
-//             const department = await Department.findOne({
-//               name: { $regex: `^${deptName}$`, $options: "i" },
-//             });
-//             if (!department)
-//               throw new Error(`Department "${deptName}" not found.`);
-
-//             const query = { email: assignToEmails[i] };
-//             if (assignToNames[i]) query.name = assignToNames[i];
-
-//             const user = await User.findOne(query);
-//             if (!user)
-//               throw new Error(`User "${assignToEmails[i]}" not found.`);
-
-//             const belongs =
-//               Array.isArray(user.department) &&
-//               user.department.some(
-//                 (id) => id.toString() === department._id.toString(),
-//               );
-//             if (!belongs)
-//               throw new Error(
-//                 `User "${assignToEmails[i]}" does not belong to "${deptName}".`,
-//               );
-
-//             usersForThisRow.push({
-//               user,
-//               departmentId: department._id,
-//               departmentName: deptName,
-//             });
-//           }
-//         }
-
-//         // ── Dates ────────────────────────────────────────────────────────
-//         const isDependent =
-//           trimmedIsDependentStr.toLowerCase() === "true" ||
-//           Boolean(trimmedParentTaskId);
-//         const isRecurrent = detected === "recurring";
-
-//         let startDate = trimmedStartDateStr
-//           ? parseFlexibleDate(trimmedStartDateStr)
-//           : null;
-//         let dueDate = trimmedDueDateStr
-//           ? parseFlexibleDate(trimmedDueDateStr)
-//           : null;
-//         let endDate = trimmedEndDateStr
-//           ? parseFlexibleDate(trimmedEndDateStr)
-//           : null;
-//         const taskEndDays = trimmedTaskEndDays
-//           ? Number(trimmedTaskEndDays)
-//           : null;
-
-//         if (startDate && taskEndDays) {
-//           dueDate = new Date(startDate);
-//           dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
-//         }
-
-//         if (!isDependent && !isRecurrent) {
-//           if (!taskEndDays || isNaN(taskEndDays)) {
-//             throw new Error(
-//               "Task End Days must be a valid number for delegation tasks.",
-//             );
-//           }
-//         }
-//         if (!isDependent && !startDate) {
-//           throw new Error(
-//             "Start Date is required for delegation and recurring tasks.",
-//           );
-//         }
-//         if (isDependent && trimmedStartDateStr && !startDate) {
-//           throw new Error(
-//             "Invalid Start Date format. Use DD-MM-YYYY or YYYY-MM-DD.",
-//           );
-//         }
-
-//         // ── Normalise dependent frequency ────────────────────────────────
-//         let depFreqNormalized = null;
-//         if (isDependent) {
-//           if (!trimmedFrequency)
-//             throw new Error(
-//               'Frequency is required for dependent tasks. Use "T+X in days" or "T+X in hours".',
-//             );
-//           const f = trimmedFrequency.toLowerCase();
-//           if (/t\+x\s*.*days|t\+xdays/i.test(f))
-//             depFreqNormalized = "T+X in days";
-//           else if (/t\+x\s*.*hours|t-?x\s*.*hours|t\+xhours/i.test(f))
-//             depFreqNormalized = "T-X in hours";
-//           else
-//             throw new Error(
-//               `Invalid Frequency "${trimmedFrequency}". Allowed: "T+X in days" or "T+X in hours".`,
-//             );
-//         }
-
-//         // ── Attachment ───────────────────────────────────────────────────
-//         let finalAttachmentPath = null;
-//         if (attachmentFile) {
-//           const attachmentPath = path.join(
-//             process.cwd(),
-//             "uploads",
-//             String(attachmentFile).trim(),
-//           );
-//           if (!fs.existsSync(attachmentPath)) {
-//             throw new Error(
-//               `Attachment file "${attachmentFile}" not found in uploads directory.`,
-//             );
-//           }
-//           finalAttachmentPath = String(attachmentFile).trim();
-//         }
-
-//         const checklist = checkListStr
-//           ? String(checkListStr)
-//               .split(",")
-//               .map((item) => ({ text: item.trim() }))
-//           : [];
-
-//         // ── Per-user task creation ────────────────────────────────────────
-//         const rowCreated = []; // track tasks created in THIS row for the log
-
-//         for (const item of usersForThisRow) {
-//           const { user, departmentId, departmentName: deptLabel } = item;
-
-//           // Duplicate check
-//           if (startDate) {
-//             const existingTask = await Task.findOne({
-//               title: title.trim(),
-//               assignedTo: user._id,
-//               startDate: {
-//                 $gte: startOfDay(startDate),
-//                 $lt: startOfDay(new Date(startDate.getTime() + 86400000)),
-//               },
-//             });
-//             if (existingTask) {
-//               // Log this specific user as skipped but don't throw — continue other users in same row
-//               importLog.push({
-//                 row: rowCount,
-//                 status: "skipped",
-//                 reason: `Duplicate: task "${title.trim()}" for ${user.email} on same start date already exists.`,
-//                 user: user.email,
-//                 department: deptLabel,
-//                 taskTitle: title.trim(),
-//               });
-//               continue; // skip this user, not the whole row
-//             }
-//           }
-
-//           // ── Build task data ──────────────────────────────────────────
-//           const taskData = {
-//             title: title.trim(),
-//             description: description.trim(),
-//             assignedTo: user._id,
-//             assignedBy: req.user._id,
-//             createdBy: req.user._id,
-//             startDate,
-//             dueDate,
-//             taskEndDays,
-//             attachmentFile: finalAttachmentPath,
-//             isDependent,
-//             departmentOfAssignToUser: departmentId,
-//             checklist,
-//           };
-
-//           let taskInstance;
-
-//           if (isDependent) {
-//             const parentTask = await Task.findOne({
-//               TaskId: trimmedParentTaskId,
-//             });
-//             if (!parentTask)
-//               throw new Error(
-//                 `Parent task ID "${trimmedParentTaskId}" not found.`,
-//               );
-
-//             const parentEnd =
-//               parentTask.dueDate || parentTask.endDate || parentTask.startDate;
-//             if (!parentEnd) throw new Error("Parent task has no valid date.");
-
-//             const x = Number(trimmedXValue) || 0;
-//             const freq = (trimmedFrequency || "").toLowerCase();
-
-//             let calcStart = new Date(parentEnd);
-//             if (freq.includes("hour"))
-//               calcStart.setHours(calcStart.getHours() + x);
-//             else calcStart.setDate(calcStart.getDate() + x);
-
-//             startDate = calcStart;
-//             if (taskEndDays && !isNaN(taskEndDays)) {
-//               dueDate = new Date(startDate);
-//               dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
-//             }
-
-//             const existingDep = await Task.findOne({
-//               title: title.trim(),
-//               assignedTo: user._id,
-//               "dependencyConfig.taskDependent": parentTask._id,
-//             });
-//             if (existingDep) {
-//               importLog.push({
-//                 row: rowCount,
-//                 status: "skipped",
-//                 reason: `Duplicate dependent task for ${user.email} linked to parent ${trimmedParentTaskId}.`,
-//                 user: user.email,
-//                 department: deptLabel,
-//                 taskTitle: title.trim(),
-//               });
-//               continue;
-//             }
-
-//             taskInstance = new DelegationTask({
-//               ...taskData,
-//               startDate,
-//               dueDate,
-//               dependencyConfig: {
-//                 taskDependent: parentTask._id,
-//                 startTimeSetting:
-//                   trimmedStartTimeSetting === "Planned to Planned"
-//                     ? "planned-to-planned"
-//                     : "actual-to-planned",
-//                 isDependentFrequency: depFreqNormalized,
-//                 xValue: x,
-//               },
-//             });
-//           } else if (trimmedFrequency) {
-//             taskInstance = new RecurringTask({
-//               ...taskData,
-//               endDate,
-//               weekDays: weekDaysArr,
-//               frequency: trimmedFrequency,
-//             });
-//           } else {
-//             taskInstance = new DelegationTask(taskData);
-//           }
-
-//           // ── Auto-generate TaskId ────────────────────────────────────
-//           const now = new Date();
-//           const yy = String(now.getFullYear()).slice(-2);
-//           const mm = String(now.getMonth() + 1).padStart(2, "0");
-//           const period = `${yy}${mm}`;
-//           const counter = await Counter.findByIdAndUpdate(
-//             { _id: `taskId-${period}` },
-//             { $inc: { seq: 1 } },
-//             { new: true, upsert: true },
-//           );
-//           taskInstance.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`;
-
-//           validTasks.push(taskInstance);
-//           rowCreated.push({
-//             user: user.email,
-//             department: deptLabel,
-//             taskId: taskInstance.TaskId,
-//           });
-//         } // end per-user loop
-
-//         // Log success for this row (one entry per user+dept pair created)
-//         rowCreated.forEach(({ user: email, department: dept, taskId }) => {
-//           importLog.push({
-//             row: rowCount,
-//             status: "imported",
-//             reason: "OK",
-//             user: email,
-//             department: dept,
-//             taskTitle: title.trim(),
-//             taskId,
-//           });
-//         });
-//       } catch (rowError) {
-//         // Row-level failure — log it and continue to next row
-//         importLog.push({
-//           row: rowCount,
-//           status: "error",
-//           reason: rowError.message,
-//           user: row["Assign To(Email)"] || "",
-//           department: row["Assign To UserDepartment"] || "",
-//           taskTitle: row["Task Title"] || "",
-//           taskId: null,
-//         });
-//         // ↑ No `continue` needed — for-loop naturally moves to next row
-//       }
-//     } // end rows loop
-
-//     // ── 4. Insert all valid tasks ─────────────────────────────────────────
-//     let insertedCount = 0;
-//     if (validTasks.length > 0) {
-//       await Task.insertMany(validTasks);
-//       insertedCount = validTasks.length;
-//     }
-
-//     // ── 5. Build summary ──────────────────────────────────────────────────
-//     const importedRows = importLog.filter((l) => l.status === "imported");
-//     const skippedRows = importLog.filter((l) => l.status === "skipped");
-//     const errorRows = importLog.filter((l) => l.status === "error");
-
-//     // Generate error/skip CSV only when there are failures
-//     let errorFile = null;
-//     const failedRows = [...skippedRows, ...errorRows];
-//     if (failedRows.length > 0) {
-//       const parser = new Parser({
-//         fields: [
-//           "row",
-//           "status",
-//           "reason",
-//           "user",
-//           "department",
-//           "taskTitle",
-//           "taskId",
-//         ],
-//       });
-//       const csvContent = parser.parse(failedRows);
-//       const errorFileName = `${Date.now()}-import-errors.csv`;
-//       const errorFilePath = path.join(process.cwd(), "uploads", errorFileName);
-//       fs.writeFileSync(errorFilePath, csvContent);
-//       errorFile = errorFileName;
-//     }
-
-//     // ── 6. Response ───────────────────────────────────────────────────────
-//     // Always 200 here — partial imports are valid results, not HTTP errors
-//     return res.status(200).json({
-//       success: insertedCount > 0,
-//       message:
-//         insertedCount > 0
-//           ? `Import complete. ${insertedCount} task(s) created across ${importedRows.length} row(s).`
-//           : "No tasks were imported. All rows had errors or duplicates.",
-//       summary: {
-//         totalRows: rowCount,
-//         imported: importedRows.length,
-//         skipped: skippedRows.length,
-//         errors: errorRows.length,
-//       },
-//       log: importLog, // full per-row log — frontend can display a table
-//       errorFile, // CSV download link for failed rows (null if all succeeded)
-//     });
-//   } catch (topLevelError) {
-//     return next(new AppError(topLevelError.message, 500));
-//   } finally {
-//     fs.unlink(filePath, (err) => {
-//       if (err) console.error(`Error deleting uploaded file ${filePath}:`, err);
-//     });
-//   }
-// });
-
 export const importTasks = handleAsync(async (req, res, next) => {
   if (!req.file) {
     return next(new AppError("No file uploaded.", 400));
   }
 
   const filePath = req.file.path;
-  const errors = [];
-  const validTasks = [];
+
+  // ── Result tracking ────────────────────────────────────────────────────
+  const importLog = []; // one entry per row — success or error
+  const validTasks = []; // task instances ready to insertMany
   let rows = [];
   let rowCount = 0;
 
   try {
-    // --- 1. Parse File (CSV or XLSX) ---
+    // ── 1. Parse file ────────────────────────────────────────────────────
     if (
       req.file.mimetype === "text/csv" ||
       req.file.originalname.toLowerCase().endsWith(".csv")
@@ -4460,14 +3901,14 @@ export const importTasks = handleAsync(async (req, res, next) => {
       );
     }
 
-    // --- Header Validation: enforce required headers per detected template and flag mistyped names ---
+    // ── 2. Header validation ─────────────────────────────────────────────
     const headers = Object.keys(rows[0] || {}).map((h) => String(h).trim());
     const normalize = (s) =>
       String(s)
         .toLowerCase()
         .replace(/[^a-z0-9]/g, "");
     const normalized = headers.map(normalize);
-    // Define required headers for each template (normalized)
+
     const required = {
       delegation: [
         "tasktitle",
@@ -4498,16 +3939,13 @@ export const importTasks = handleAsync(async (req, res, next) => {
       ],
     };
 
-    // Detect template from headers: dependent if Task ID present; recurring if Frequency+End Date; else delegation
     let detected = "delegation";
     if (normalized.includes("taskid")) detected = "dependent";
     else if (normalized.includes("frequency") && normalized.includes("enddate"))
       detected = "recurring";
 
-    // Check for missing required headers for detected template
     const missing = required[detected].filter((h) => !normalized.includes(h));
     if (missing.length > 0) {
-      // Find any suspect headers that look similar to missing ones (basic substring match)
       const suspects = headers.filter((h) =>
         missing.some(
           (m) =>
@@ -4515,48 +3953,33 @@ export const importTasks = handleAsync(async (req, res, next) => {
             m.includes(h.toLowerCase().replace(/[^a-z0-9]/g, "")),
         ),
       );
+      fs.unlinkSync(filePath);
       return next(
         new AppError(
-          `Missing required column(s) for ${detected} import: ${missing.join(", ")}. Please use the exact header names.${suspects.length ? " Suspect headers: " + suspects.join(", ") : ""}`,
+          `Missing required column(s) for ${detected} import: ${missing.join(", ")}. Please use exact header names.${suspects.length ? " Suspect headers: " + suspects.join(", ") : ""}`,
           400,
         ),
       );
     }
 
-    // Additionally, detect common misspellings for optional columns like "Check List" and complain
-    const checklistNormalized = "checklist";
-    if (!normalized.includes(checklistNormalized)) {
-      const suspectHeaders = headers.filter((h) => /check|list/i.test(h));
-      if (suspectHeaders.length > 0) {
-        return next(
-          new AppError(
-            `Invalid column name(s): ${suspectHeaders.join(", ")}. Did you mean "Check List"? Please use the exact header name.`,
-            400,
-          ),
-        );
-      }
-    }
-
-    // --- 2. Process each row ---
+    // ── 3. Process each row independently ────────────────────────────────
     for (const row of rows) {
       rowCount++;
-      const originalRow = { ...row }; // Keep original for error reporting
 
+      // Each row gets its own try/catch — errors here SKIP the row, not abort
       try {
-        // --- 3. Validation ---
         const {
           "Task Title": title,
           "Task Description": description,
-          "Assign To(Email)": assignToEmail, // Assuming email is used for lookup
-          "Assign To(Name)": assignToName, // New: Assuming name is also used for lookup and validation
+          "Assign To(Email)": assignToEmail,
+          "Assign To(Name)": assignToName,
           "Assign To UserDepartment": departmentName,
           "Start Date": startDateStr,
           "Due Date": dueDateStr,
           "Task End Days": taskEndDaysStr,
           isDependent: isDependentStr,
           "Attachment File": attachmentFile,
-          "Check List": checkListStr, // Added checklist
-          // Fields for different task types
+          "Check List": checkListStr,
           Frequency: frequency,
           "Task ID": parentTaskId,
           "Start Time Setting": startTimeSetting,
@@ -4564,42 +3987,30 @@ export const importTasks = handleAsync(async (req, res, next) => {
           "End Date": endDateStr,
           "Week Days": weekDaysStr,
         } = row;
-        // Trim whitespace from string fields
-        const trimmedStartDateStr = startDateStr
-          ? String(startDateStr).trim()
-          : "";
-        const trimmedTaskEndDays = taskEndDaysStr
-          ? String(taskEndDaysStr).trim()
-          : "";
-        const trimmedDueDateStr = dueDateStr ? String(dueDateStr).trim() : "";
-        const trimmedEndDateStr = endDateStr ? String(endDateStr).trim() : "";
-        const trimmedIsDependentStr = isDependentStr
-          ? String(isDependentStr).trim()
-          : "";
-        const trimmedParentTaskId = parentTaskId
-          ? String(parentTaskId).trim()
-          : "";
-        const trimmedStartTimeSetting = startTimeSetting
-          ? String(startTimeSetting).trim()
-          : "";
-        const trimmedXValue = xValue ? String(xValue).trim() : "";
-        const trimmedFrequency = frequency ? String(frequency).trim() : "";
-        const trimmedAttachmentFile = attachmentFile
-          ? String(attachmentFile).trim()
-          : "";
-        const trimmedCheckListStr = checkListStr
-          ? String(checkListStr).trim()
-          : "";
+
+        const trimStr = (v) => (v ? String(v).trim() : "");
+
+        const trimmedStartDateStr = trimStr(startDateStr);
+        const trimmedTaskEndDays = trimStr(taskEndDaysStr);
+        const trimmedDueDateStr = trimStr(dueDateStr);
+        const trimmedEndDateStr = trimStr(endDateStr);
+        const trimmedIsDependentStr = trimStr(isDependentStr);
+        const trimmedParentTaskId = trimStr(parentTaskId);
+        const trimmedStartTimeSetting = trimStr(startTimeSetting);
+        const trimmedXValue = trimStr(xValue);
+        const trimmedFrequency = trimStr(frequency);
+
         const weekDaysArr = weekDaysStr
-          ? weekDaysStr
+          ? String(weekDaysStr)
               .split(",")
-              .map((day) => day.trim().toLowerCase())
+              .map((d) => d.trim().toLowerCase())
               .filter(Boolean)
           : [];
-        // Basic required fields
+
+        // Required field check
         if (!title || !description || !assignToEmail || !departmentName) {
           throw new Error(
-            "Missing one or more required fields: Task Title, Task Description, Assign To(Email), Assign To UserDepartment.",
+            "Missing required fields: Task Title, Task Description, Assign To(Email), Assign To UserDepartment.",
           );
         }
 
@@ -4607,14 +4018,12 @@ export const importTasks = handleAsync(async (req, res, next) => {
           .split(",")
           .map((e) => e.trim())
           .filter(Boolean);
-
         const assignToNames = assignToName
-          ? assignToName
+          ? String(assignToName)
               .split(",")
               .map((n) => n.trim())
               .filter(Boolean)
           : [];
-
         const departmentNames = departmentName
           .split(",")
           .map((d) => d.trim())
@@ -4623,7 +4032,6 @@ export const importTasks = handleAsync(async (req, res, next) => {
         if (assignToEmails.length === 0) {
           throw new Error('At least one "Assign To(Email)" is required.');
         }
-
         if (
           assignToNames.length > 0 &&
           assignToNames.length !== assignToEmails.length
@@ -4633,142 +4041,90 @@ export const importTasks = handleAsync(async (req, res, next) => {
           );
         }
 
+        // ── Build usersForThisRow ────────────────────────────────────────
         const usersForThisRow = [];
 
-        // =======================================================
-        // CASE 1 -> ONE USER + MULTIPLE DEPARTMENTS
-        // =======================================================
-
+        // CASE 1: one user → multiple departments
         if (assignToEmails.length === 1 && departmentNames.length >= 1) {
-          const currentEmail = assignToEmails[0];
-          const currentName = assignToNames[0];
-
-          const query = {
-            email: currentEmail,
-          };
-
-          if (currentName) {
-            query.name = currentName;
-          }
+          const query = { email: assignToEmails[0] };
+          if (assignToNames[0]) query.name = assignToNames[0];
 
           const user = await User.findOne(query);
+          if (!user) throw new Error(`User "${assignToEmails[0]}" not found.`);
 
-          if (!user) {
-            throw new Error(`User "${currentEmail}" not found.`);
-          }
-
-          // Create task for EACH department
-          for (const currentDepartmentName of departmentNames) {
+          for (const deptName of departmentNames) {
             const department = await Department.findOne({
-              name: {
-                $regex: `^${currentDepartmentName}$`,
-                $options: "i",
-              },
+              name: { $regex: `^${deptName}$`, $options: "i" },
             });
+            if (!department)
+              throw new Error(`Department "${deptName}" not found.`);
 
-            if (!department) {
-              throw new Error(
-                `Department "${currentDepartmentName}" not found.`,
-              );
-            }
-
-            const belongsToDepartment =
+            const belongs =
               Array.isArray(user.department) &&
               user.department.some(
-                (deptId) => deptId.toString() === department._id.toString(),
+                (id) => id.toString() === department._id.toString(),
               );
-
-            if (!belongsToDepartment) {
+            if (!belongs)
               throw new Error(
-                `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+                `User "${assignToEmails[0]}" does not belong to "${deptName}".`,
               );
-            }
 
             usersForThisRow.push({
               user,
               departmentId: department._id,
+              departmentName: deptName,
             });
           }
         }
-
-        // =======================================================
-        // CASE 2 -> MULTIPLE USERS + MATCHING DEPARTMENTS
-        // =======================================================
+        // CASE 2: multiple users → matching departments
         else {
           if (assignToEmails.length !== departmentNames.length) {
             throw new Error(
               "When using multiple users, department count must match user count.",
             );
           }
-
           for (let i = 0; i < assignToEmails.length; i++) {
-            const currentEmail = assignToEmails[i];
-            const currentName = assignToNames[i];
-            const currentDepartmentName = departmentNames[i];
-
+            const deptName = departmentNames[i];
             const department = await Department.findOne({
-              name: {
-                $regex: `^${currentDepartmentName}$`,
-                $options: "i",
-              },
+              name: { $regex: `^${deptName}$`, $options: "i" },
             });
+            if (!department)
+              throw new Error(`Department "${deptName}" not found.`);
 
-            if (!department) {
-              throw new Error(
-                `Department "${currentDepartmentName}" not found.`,
-              );
-            }
-
-            const query = {
-              email: currentEmail,
-            };
-
-            if (currentName) {
-              query.name = currentName;
-            }
+            const query = { email: assignToEmails[i] };
+            if (assignToNames[i]) query.name = assignToNames[i];
 
             const user = await User.findOne(query);
+            if (!user)
+              throw new Error(`User "${assignToEmails[i]}" not found.`);
 
-            if (!user) {
-              throw new Error(`User "${currentEmail}" not found.`);
-            }
-
-            const belongsToDepartment =
+            const belongs =
               Array.isArray(user.department) &&
               user.department.some(
-                (deptId) => deptId.toString() === department._id.toString(),
+                (id) => id.toString() === department._id.toString(),
               );
-
-            if (!belongsToDepartment) {
+            if (!belongs)
               throw new Error(
-                `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+                `User "${assignToEmails[i]}" does not belong to "${deptName}".`,
               );
-            }
 
             usersForThisRow.push({
               user,
               departmentId: department._id,
+              departmentName: deptName,
             });
           }
         }
 
-        // Derive isDependent: explicit column OR presence of parent Task ID
+        // ── Dates ────────────────────────────────────────────────────────
         const isDependent =
-          (trimmedIsDependentStr &&
-            trimmedIsDependentStr.toLowerCase() === "true") ||
+          trimmedIsDependentStr.toLowerCase() === "true" ||
           Boolean(trimmedParentTaskId);
+        const isRecurrent = detected === "recurring";
 
-        // Date Validation
-        // const startDate = trimmedStartDateStr
-        //   ? parseDateIST(trimmedStartDateStr)
-        //   : null;
-        // const dueDate = trimmedDueDateStr
-        //   ? parseDateIST(trimmedDueDateStr)
-        //   : null;
         let startDate = trimmedStartDateStr
           ? parseFlexibleDate(trimmedStartDateStr)
           : null;
-
         let dueDate = trimmedDueDateStr
           ? parseFlexibleDate(trimmedDueDateStr)
           : null;
@@ -4778,13 +4134,11 @@ export const importTasks = handleAsync(async (req, res, next) => {
         const taskEndDays = trimmedTaskEndDays
           ? Number(trimmedTaskEndDays)
           : null;
-        // let dueDate = null;
 
         if (startDate && taskEndDays) {
           dueDate = new Date(startDate);
           dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
         }
-        const isRecurrent = detected === "recurring"; // ⚠️ also fix spelling
 
         if (!isDependent && !isRecurrent) {
           if (!taskEndDays || isNaN(taskEndDays)) {
@@ -4793,92 +4147,92 @@ export const importTasks = handleAsync(async (req, res, next) => {
             );
           }
         }
-        // For non-dependent tasks, start date is required and must be valid
         if (!isDependent && !startDate) {
           throw new Error(
-            "Start Date is required for delegation and recurring tasks. Please use DD-MM-YYYY or YYYY-MM-DD format.",
+            "Start Date is required for delegation and recurring tasks.",
           );
         }
-        // For dependent tasks, start date is optional; only validate when provided
         if (isDependent && trimmedStartDateStr && !startDate) {
           throw new Error(
-            "Invalid Start Date format. Please use DD-MM-YYYY or YYYY-MM-DD.",
-          );
-        }
-        if (trimmedDueDateStr && !dueDate) {
-          throw new Error(
-            "Invalid Due Date format. Please use DD-MM-YYYY or YYYY-MM-DD.",
+            "Invalid Start Date format. Use DD-MM-YYYY or YYYY-MM-DD.",
           );
         }
 
-        // Normalize and validate dependent task Frequency (if row is dependent)
+        // ── Normalise dependent frequency ────────────────────────────────
         let depFreqNormalized = null;
         if (isDependent) {
-          if (!trimmedFrequency) {
+          if (!trimmedFrequency)
             throw new Error(
-              'Frequency is required for dependent tasks. Allowed values: "T+X in days" or "T+X in hours".',
+              'Frequency is required for dependent tasks. Use "T+X in days" or "T+X in hours".',
             );
-          }
           const f = trimmedFrequency.toLowerCase();
-          if (/t\+x\s*.*days|t\+xdays/i.test(f)) {
+          if (/t\+x\s*.*days|t\+xdays/i.test(f))
             depFreqNormalized = "T+X in days";
-          } else if (/t\+x\s*.*hours|t-?x\s*.*hours|t\+xhours/i.test(f)) {
-            // Map common hour variants to the stored value
+          else if (/t\+x\s*.*hours|t-?x\s*.*hours|t\+xhours/i.test(f))
             depFreqNormalized = "T-X in hours";
-          } else {
+          else
             throw new Error(
-              `Invalid Frequency "${trimmedFrequency}" for dependent task. Allowed: "T+X in days" or "T+X in hours".`,
+              `Invalid Frequency "${trimmedFrequency}". Allowed: "T+X in days" or "T+X in hours".`,
             );
-          }
         }
 
-        // Attachment Check (remains outside the user loop as it's per row, not per user)
+        // ── Attachment ───────────────────────────────────────────────────
         let finalAttachmentPath = null;
         if (attachmentFile) {
           const attachmentPath = path.join(
             process.cwd(),
             "uploads",
-            attachmentFile,
+            String(attachmentFile).trim(),
           );
           if (!fs.existsSync(attachmentPath)) {
             throw new Error(
-              `Attachment file "${attachmentFile}" not found in the uploads directory.`,
+              `Attachment file "${attachmentFile}" not found in uploads directory.`,
             );
           }
-          finalAttachmentPath = attachmentFile;
+          finalAttachmentPath = String(attachmentFile).trim();
         }
 
         const checklist = checkListStr
-          ? checkListStr.split(",").map((item) => ({ text: item.trim() }))
+          ? String(checkListStr)
+              .split(",")
+              .map((item) => ({ text: item.trim() }))
           : [];
 
+        // ── Per-user task creation ────────────────────────────────────────
+        const rowCreated = []; // track tasks created in THIS row for the log
+
         for (const item of usersForThisRow) {
-          const user = item.user;
-          // <--- NEW LOOP
-          // Duplicate Check: Same title, same user, same start day
+          const { user, departmentId, departmentName: deptLabel } = item;
+
+          // Duplicate check
           if (startDate) {
             const existingTask = await Task.findOne({
-              title,
-              assignedTo: user._id, // <--- Now uses current user from loop
-              // Using gte and lt to check for the same day regardless of time
+              title: title.trim(),
+              assignedTo: user._id,
               startDate: {
                 $gte: startOfDay(startDate),
-                $lt: startOfDay(
-                  new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
-                ),
+                $lt: startOfDay(new Date(startDate.getTime() + 86400000)),
               },
             });
             if (existingTask) {
-              throw new Error(
-                `A task with the same title for user ${user.email} on the same start date already exists.`,
-              );
+              // Log this specific user as skipped but don't throw — continue other users in same row
+              importLog.push({
+                row: rowCount,
+                status: "skipped",
+                reason: `Duplicate: task "${title.trim()}" for ${user.email} on same start date already exists.`,
+                user: user.email,
+                department: deptLabel,
+                taskTitle: title.trim(),
+              });
+              continue; // skip this user, not the whole row
             }
           }
-          // --- 4. Prepare Task Data ---
+
+          // ── Build task data ──────────────────────────────────────────
           const taskData = {
             title: title.trim(),
             description: description.trim(),
-            assignedTo: user._id, // <--- Now uses current user from loop
+            assignedTo: user._id,
             assignedBy: req.user._id,
             createdBy: req.user._id,
             startDate,
@@ -4886,62 +4240,54 @@ export const importTasks = handleAsync(async (req, res, next) => {
             taskEndDays,
             attachmentFile: finalAttachmentPath,
             isDependent,
-            departmentOfAssignToUser: item.departmentId,
+            departmentOfAssignToUser: departmentId,
             checklist,
           };
-          // console.log(item);
+
           let taskInstance;
 
-          // Delegation vs Recurring vs Dependent
           if (isDependent) {
             const parentTask = await Task.findOne({
               TaskId: trimmedParentTaskId,
             });
-
-            if (!parentTask) {
+            if (!parentTask)
               throw new Error(
-                `Parent task with ID "${trimmedParentTaskId}" not found.`,
+                `Parent task ID "${trimmedParentTaskId}" not found.`,
               );
-            }
+
             const parentEnd =
               parentTask.dueDate || parentTask.endDate || parentTask.startDate;
-
-            if (!parentEnd) {
-              throw new Error("Parent task has no valid date.");
-            }
+            if (!parentEnd) throw new Error("Parent task has no valid date.");
 
             const x = Number(trimmedXValue) || 0;
             const freq = (trimmedFrequency || "").toLowerCase();
 
-            let calculatedStartDate = new Date(parentEnd);
+            let calcStart = new Date(parentEnd);
+            if (freq.includes("hour"))
+              calcStart.setHours(calcStart.getHours() + x);
+            else calcStart.setDate(calcStart.getDate() + x);
 
-            // ✅ Handle T+X
-            if (freq.includes("hour")) {
-              calculatedStartDate.setHours(calculatedStartDate.getHours() + x);
-            } else {
-              calculatedStartDate.setDate(calculatedStartDate.getDate() + x);
-            }
-
-            // ✅ Override startDate
-            startDate = calculatedStartDate;
-
-            // ✅ Now calculate dueDate using taskEndDays
+            startDate = calcStart;
             if (taskEndDays && !isNaN(taskEndDays)) {
               dueDate = new Date(startDate);
               dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
             }
 
-            // Duplicate check (keep yours)
-            const existingDependent = await Task.findOne({
+            const existingDep = await Task.findOne({
               title: title.trim(),
               assignedTo: user._id,
               "dependencyConfig.taskDependent": parentTask._id,
             });
-
-            if (existingDependent) {
-              throw new Error(
-                `A dependent task with the same title for user ${user.email} linked to parent ${trimmedParentTaskId} already exists.`,
-              );
+            if (existingDep) {
+              importLog.push({
+                row: rowCount,
+                status: "skipped",
+                reason: `Duplicate dependent task for ${user.email} linked to parent ${trimmedParentTaskId}.`,
+                user: user.email,
+                department: deptLabel,
+                taskTitle: title.trim(),
+              });
+              continue;
             }
 
             taskInstance = new DelegationTask({
@@ -4959,22 +4305,17 @@ export const importTasks = handleAsync(async (req, res, next) => {
               },
             });
           } else if (trimmedFrequency) {
-            // Recurring Task
             taskInstance = new RecurringTask({
               ...taskData,
               endDate,
               weekDays: weekDaysArr,
-              frequency: trimmedFrequency, // e.g., 'Daily', 'Weekly'
-              // endDate will be handled by recurring logic if needed
+              frequency: trimmedFrequency,
             });
           } else {
-            // Simple Delegation Task
-            // Allow delegation tasks without a dueDate (no strict server-side requirement).
             taskInstance = new DelegationTask(taskData);
           }
 
-          // Manually generate TaskId for each task before bulk insert
-          // Generate period-based counter (YYMM) so TaskId becomes YYMM####
+          // ── Auto-generate TaskId ────────────────────────────────────
           const now = new Date();
           const yy = String(now.getFullYear()).slice(-2);
           const mm = String(now.getMonth() + 1).padStart(2, "0");
@@ -4987,47 +4328,709 @@ export const importTasks = handleAsync(async (req, res, next) => {
           taskInstance.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`;
 
           validTasks.push(taskInstance);
-        } // <--- END NEW LOOP
-      } catch (error) {
-        originalRow["Error"] = `Row ${rowCount}: ${error.message}`;
-        errors.push(originalRow);
-        continue;
+          rowCreated.push({
+            user: user.email,
+            department: deptLabel,
+            taskId: taskInstance.TaskId,
+          });
+        } // end per-user loop
+
+        // Log success for this row (one entry per user+dept pair created)
+        rowCreated.forEach(({ user: email, department: dept, taskId }) => {
+          importLog.push({
+            row: rowCount,
+            status: "imported",
+            reason: "OK",
+            user: email,
+            department: dept,
+            taskTitle: title.trim(),
+            taskId,
+          });
+        });
+      } catch (rowError) {
+        // Row-level failure — log it and continue to next row
+        importLog.push({
+          row: rowCount,
+          status: "error",
+          reason: rowError.message,
+          user: row["Assign To(Email)"] || "",
+          department: row["Assign To UserDepartment"] || "",
+          taskTitle: row["Task Title"] || "",
+          taskId: null,
+        });
+        // ↑ No `continue` needed — for-loop naturally moves to next row
       }
+    } // end rows loop
+
+    // ── 4. Insert all valid tasks ─────────────────────────────────────────
+    let insertedCount = 0;
+    if (validTasks.length > 0) {
+      await Task.insertMany(validTasks);
+      insertedCount = validTasks.length;
     }
 
-    // --- 5. Finalize ---
-    if (errors.length > 0) {
-      // Create error report
-      const parser = new Parser({ fields: [...Object.keys(errors[0])] });
-      const csv = parser.parse(errors);
+    // ── 5. Build summary ──────────────────────────────────────────────────
+    const importedRows = importLog.filter((l) => l.status === "imported");
+    const skippedRows = importLog.filter((l) => l.status === "skipped");
+    const errorRows = importLog.filter((l) => l.status === "error");
+
+    // Generate error/skip CSV only when there are failures
+    let errorFile = null;
+    const failedRows = [...skippedRows, ...errorRows];
+    if (failedRows.length > 0) {
+      const parser = new Parser({
+        fields: [
+          "row",
+          "status",
+          "reason",
+          "user",
+          "department",
+          "taskTitle",
+          "taskId",
+        ],
+      });
+      const csvContent = parser.parse(failedRows);
       const errorFileName = `${Date.now()}-import-errors.csv`;
       const errorFilePath = path.join(process.cwd(), "uploads", errorFileName);
-      fs.writeFileSync(errorFilePath, csv);
-
-      // Send error response
-      return res.status(422).json({
-        success: false,
-        message: `Import failed. ${errors.length} of ${rows.length} rows have errors.`,
-        errorFile: errorFileName, // Only return the filename
-      });
-    } else {
-      // Save all valid tasks to DB
-      await Task.insertMany(validTasks);
-      res.status(201).json({
-        success: true,
-        message: `Successfully imported ${validTasks.length} tasks.`,
-      });
+      fs.writeFileSync(errorFilePath, csvContent);
+      errorFile = errorFileName;
     }
-  } catch (err) {
-    // Catch any top-level errors (e.g., file read failure)
-    return next(new AppError(err.message, 500));
+
+    // ── 6. Response ───────────────────────────────────────────────────────
+    // Always 200 here — partial imports are valid results, not HTTP errors
+    return res.status(200).json({
+      success: insertedCount > 0,
+      message:
+        insertedCount > 0
+          ? `Import complete. ${insertedCount} task(s) created across ${importedRows.length} row(s).`
+          : "No tasks were imported. All rows had errors or duplicates.",
+      summary: {
+        totalRows: rowCount,
+        imported: importedRows.length,
+        skipped: skippedRows.length,
+        errors: errorRows.length,
+      },
+      log: importLog, // full per-row log — frontend can display a table
+      errorFile, // CSV download link for failed rows (null if all succeeded)
+    });
+  } catch (topLevelError) {
+    return next(new AppError(topLevelError.message, 500));
   } finally {
-    // --- 6. Cleanup ---
     fs.unlink(filePath, (err) => {
       if (err) console.error(`Error deleting uploaded file ${filePath}:`, err);
     });
   }
 });
+
+// export const importTasks = handleAsync(async (req, res, next) => {
+//   if (!req.file) {
+//     return next(new AppError("No file uploaded.", 400));
+//   }
+
+//   const filePath = req.file.path;
+//   const errors = [];
+//   const validTasks = [];
+//   let rows = [];
+//   let rowCount = 0;
+
+//   try {
+//     // --- 1. Parse File (CSV or XLSX) ---
+//     if (
+//       req.file.mimetype === "text/csv" ||
+//       req.file.originalname.toLowerCase().endsWith(".csv")
+//     ) {
+//       rows = await new Promise((resolve, reject) => {
+//         const results = [];
+//         fs.createReadStream(filePath)
+//           .pipe(csv())
+//           .on("data", (data) => results.push(data))
+//           .on("end", () => resolve(results))
+//           .on("error", (error) => reject(error));
+//       });
+//     } else {
+//       const workbook = XLSX.readFile(filePath);
+//       const sheetName = workbook.SheetNames[0];
+//       rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+//     }
+
+//     if (rows.length === 0) {
+//       fs.unlinkSync(filePath);
+//       return next(
+//         new AppError(
+//           "The uploaded file is empty or in an unsupported format.",
+//           400,
+//         ),
+//       );
+//     }
+
+//     // --- Header Validation: enforce required headers per detected template and flag mistyped names ---
+//     const headers = Object.keys(rows[0] || {}).map((h) => String(h).trim());
+//     const normalize = (s) =>
+//       String(s)
+//         .toLowerCase()
+//         .replace(/[^a-z0-9]/g, "");
+//     const normalized = headers.map(normalize);
+//     // Define required headers for each template (normalized)
+//     const required = {
+//       delegation: [
+//         "tasktitle",
+//         "taskdescription",
+//         "assigntoemail",
+//         "assigntouserdepartment",
+//         "startdate",
+//         "taskenddays",
+//       ],
+//       recurring: [
+//         "tasktitle",
+//         "taskdescription",
+//         "assigntoemail",
+//         "assigntouserdepartment",
+//         "startdate",
+//         "frequency",
+//         "enddate",
+//       ],
+//       dependent: [
+//         "taskid",
+//         "tasktitle",
+//         "taskdescription",
+//         "assigntoemail",
+//         "assigntouserdepartment",
+//         "starttimesetting",
+//         "frequency",
+//         "xvalue",
+//       ],
+//     };
+
+//     // Detect template from headers: dependent if Task ID present; recurring if Frequency+End Date; else delegation
+//     let detected = "delegation";
+//     if (normalized.includes("taskid")) detected = "dependent";
+//     else if (normalized.includes("frequency") && normalized.includes("enddate"))
+//       detected = "recurring";
+
+//     // Check for missing required headers for detected template
+//     const missing = required[detected].filter((h) => !normalized.includes(h));
+//     if (missing.length > 0) {
+//       // Find any suspect headers that look similar to missing ones (basic substring match)
+//       const suspects = headers.filter((h) =>
+//         missing.some(
+//           (m) =>
+//             h.toLowerCase().includes(m.replace(/([a-z])([A-Z])/g, "$1 $2")) ||
+//             m.includes(h.toLowerCase().replace(/[^a-z0-9]/g, "")),
+//         ),
+//       );
+//       return next(
+//         new AppError(
+//           `Missing required column(s) for ${detected} import: ${missing.join(", ")}. Please use the exact header names.${suspects.length ? " Suspect headers: " + suspects.join(", ") : ""}`,
+//           400,
+//         ),
+//       );
+//     }
+
+//     // Additionally, detect common misspellings for optional columns like "Check List" and complain
+//     const checklistNormalized = "checklist";
+//     if (!normalized.includes(checklistNormalized)) {
+//       const suspectHeaders = headers.filter((h) => /check|list/i.test(h));
+//       if (suspectHeaders.length > 0) {
+//         return next(
+//           new AppError(
+//             `Invalid column name(s): ${suspectHeaders.join(", ")}. Did you mean "Check List"? Please use the exact header name.`,
+//             400,
+//           ),
+//         );
+//       }
+//     }
+
+//     // --- 2. Process each row ---
+//     for (const row of rows) {
+//       rowCount++;
+//       const originalRow = { ...row }; // Keep original for error reporting
+
+//       try {
+//         // --- 3. Validation ---
+//         const {
+//           "Task Title": title,
+//           "Task Description": description,
+//           "Assign To(Email)": assignToEmail, // Assuming email is used for lookup
+//           "Assign To(Name)": assignToName, // New: Assuming name is also used for lookup and validation
+//           "Assign To UserDepartment": departmentName,
+//           "Start Date": startDateStr,
+//           "Due Date": dueDateStr,
+//           "Task End Days": taskEndDaysStr,
+//           isDependent: isDependentStr,
+//           "Attachment File": attachmentFile,
+//           "Check List": checkListStr, // Added checklist
+//           // Fields for different task types
+//           Frequency: frequency,
+//           "Task ID": parentTaskId,
+//           "Start Time Setting": startTimeSetting,
+//           "X Value": xValue,
+//           "End Date": endDateStr,
+//           "Week Days": weekDaysStr,
+//         } = row;
+//         // Trim whitespace from string fields
+//         const trimmedStartDateStr = startDateStr
+//           ? String(startDateStr).trim()
+//           : "";
+//         const trimmedTaskEndDays = taskEndDaysStr
+//           ? String(taskEndDaysStr).trim()
+//           : "";
+//         const trimmedDueDateStr = dueDateStr ? String(dueDateStr).trim() : "";
+//         const trimmedEndDateStr = endDateStr ? String(endDateStr).trim() : "";
+//         const trimmedIsDependentStr = isDependentStr
+//           ? String(isDependentStr).trim()
+//           : "";
+//         const trimmedParentTaskId = parentTaskId
+//           ? String(parentTaskId).trim()
+//           : "";
+//         const trimmedStartTimeSetting = startTimeSetting
+//           ? String(startTimeSetting).trim()
+//           : "";
+//         const trimmedXValue = xValue ? String(xValue).trim() : "";
+//         const trimmedFrequency = frequency ? String(frequency).trim() : "";
+//         const trimmedAttachmentFile = attachmentFile
+//           ? String(attachmentFile).trim()
+//           : "";
+//         const trimmedCheckListStr = checkListStr
+//           ? String(checkListStr).trim()
+//           : "";
+//         const weekDaysArr = weekDaysStr
+//           ? weekDaysStr
+//               .split(",")
+//               .map((day) => day.trim().toLowerCase())
+//               .filter(Boolean)
+//           : [];
+//         // Basic required fields
+//         if (!title || !description || !assignToEmail || !departmentName) {
+//           throw new Error(
+//             "Missing one or more required fields: Task Title, Task Description, Assign To(Email), Assign To UserDepartment.",
+//           );
+//         }
+
+//         const assignToEmails = assignToEmail
+//           .split(",")
+//           .map((e) => e.trim())
+//           .filter(Boolean);
+
+//         const assignToNames = assignToName
+//           ? assignToName
+//               .split(",")
+//               .map((n) => n.trim())
+//               .filter(Boolean)
+//           : [];
+
+//         const departmentNames = departmentName
+//           .split(",")
+//           .map((d) => d.trim())
+//           .filter(Boolean);
+
+//         if (assignToEmails.length === 0) {
+//           throw new Error('At least one "Assign To(Email)" is required.');
+//         }
+
+//         if (
+//           assignToNames.length > 0 &&
+//           assignToNames.length !== assignToEmails.length
+//         ) {
+//           throw new Error(
+//             "Assign To(Name) count must match Assign To(Email) count.",
+//           );
+//         }
+
+//         const usersForThisRow = [];
+
+//         // =======================================================
+//         // CASE 1 -> ONE USER + MULTIPLE DEPARTMENTS
+//         // =======================================================
+
+//         if (assignToEmails.length === 1 && departmentNames.length >= 1) {
+//           const currentEmail = assignToEmails[0];
+//           const currentName = assignToNames[0];
+
+//           const query = {
+//             email: currentEmail,
+//           };
+
+//           if (currentName) {
+//             query.name = currentName;
+//           }
+
+//           const user = await User.findOne(query);
+
+//           if (!user) {
+//             throw new Error(`User "${currentEmail}" not found.`);
+//           }
+
+//           // Create task for EACH department
+//           for (const currentDepartmentName of departmentNames) {
+//             const department = await Department.findOne({
+//               name: {
+//                 $regex: `^${currentDepartmentName}$`,
+//                 $options: "i",
+//               },
+//             });
+
+//             if (!department) {
+//               throw new Error(
+//                 `Department "${currentDepartmentName}" not found.`,
+//               );
+//             }
+
+//             const belongsToDepartment =
+//               Array.isArray(user.department) &&
+//               user.department.some(
+//                 (deptId) => deptId.toString() === department._id.toString(),
+//               );
+
+//             if (!belongsToDepartment) {
+//               throw new Error(
+//                 `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+//               );
+//             }
+
+//             usersForThisRow.push({
+//               user,
+//               departmentId: department._id,
+//             });
+//           }
+//         }
+
+//         // =======================================================
+//         // CASE 2 -> MULTIPLE USERS + MATCHING DEPARTMENTS
+//         // =======================================================
+//         else {
+//           if (assignToEmails.length !== departmentNames.length) {
+//             throw new Error(
+//               "When using multiple users, department count must match user count.",
+//             );
+//           }
+
+//           for (let i = 0; i < assignToEmails.length; i++) {
+//             const currentEmail = assignToEmails[i];
+//             const currentName = assignToNames[i];
+//             const currentDepartmentName = departmentNames[i];
+
+//             const department = await Department.findOne({
+//               name: {
+//                 $regex: `^${currentDepartmentName}$`,
+//                 $options: "i",
+//               },
+//             });
+
+//             if (!department) {
+//               throw new Error(
+//                 `Department "${currentDepartmentName}" not found.`,
+//               );
+//             }
+
+//             const query = {
+//               email: currentEmail,
+//             };
+
+//             if (currentName) {
+//               query.name = currentName;
+//             }
+
+//             const user = await User.findOne(query);
+
+//             if (!user) {
+//               throw new Error(`User "${currentEmail}" not found.`);
+//             }
+
+//             const belongsToDepartment =
+//               Array.isArray(user.department) &&
+//               user.department.some(
+//                 (deptId) => deptId.toString() === department._id.toString(),
+//               );
+
+//             if (!belongsToDepartment) {
+//               throw new Error(
+//                 `User "${currentEmail}" does not belong to "${currentDepartmentName}".`,
+//               );
+//             }
+
+//             usersForThisRow.push({
+//               user,
+//               departmentId: department._id,
+//             });
+//           }
+//         }
+
+//         // Derive isDependent: explicit column OR presence of parent Task ID
+//         const isDependent =
+//           (trimmedIsDependentStr &&
+//             trimmedIsDependentStr.toLowerCase() === "true") ||
+//           Boolean(trimmedParentTaskId);
+
+//         // Date Validation
+//         // const startDate = trimmedStartDateStr
+//         //   ? parseDateIST(trimmedStartDateStr)
+//         //   : null;
+//         // const dueDate = trimmedDueDateStr
+//         //   ? parseDateIST(trimmedDueDateStr)
+//         //   : null;
+//         let startDate = trimmedStartDateStr
+//           ? parseFlexibleDate(trimmedStartDateStr)
+//           : null;
+
+//         let dueDate = trimmedDueDateStr
+//           ? parseFlexibleDate(trimmedDueDateStr)
+//           : null;
+//         let endDate = trimmedEndDateStr
+//           ? parseFlexibleDate(trimmedEndDateStr)
+//           : null;
+//         const taskEndDays = trimmedTaskEndDays
+//           ? Number(trimmedTaskEndDays)
+//           : null;
+//         // let dueDate = null;
+
+//         if (startDate && taskEndDays) {
+//           dueDate = new Date(startDate);
+//           dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
+//         }
+//         const isRecurrent = detected === "recurring"; // ⚠️ also fix spelling
+
+//         if (!isDependent && !isRecurrent) {
+//           if (!taskEndDays || isNaN(taskEndDays)) {
+//             throw new Error(
+//               "Task End Days must be a valid number for delegation tasks.",
+//             );
+//           }
+//         }
+//         // For non-dependent tasks, start date is required and must be valid
+//         if (!isDependent && !startDate) {
+//           throw new Error(
+//             "Start Date is required for delegation and recurring tasks. Please use DD-MM-YYYY or YYYY-MM-DD format.",
+//           );
+//         }
+//         // For dependent tasks, start date is optional; only validate when provided
+//         if (isDependent && trimmedStartDateStr && !startDate) {
+//           throw new Error(
+//             "Invalid Start Date format. Please use DD-MM-YYYY or YYYY-MM-DD.",
+//           );
+//         }
+//         if (trimmedDueDateStr && !dueDate) {
+//           throw new Error(
+//             "Invalid Due Date format. Please use DD-MM-YYYY or YYYY-MM-DD.",
+//           );
+//         }
+
+//         // Normalize and validate dependent task Frequency (if row is dependent)
+//         let depFreqNormalized = null;
+//         if (isDependent) {
+//           if (!trimmedFrequency) {
+//             throw new Error(
+//               'Frequency is required for dependent tasks. Allowed values: "T+X in days" or "T+X in hours".',
+//             );
+//           }
+//           const f = trimmedFrequency.toLowerCase();
+//           if (/t\+x\s*.*days|t\+xdays/i.test(f)) {
+//             depFreqNormalized = "T+X in days";
+//           } else if (/t\+x\s*.*hours|t-?x\s*.*hours|t\+xhours/i.test(f)) {
+//             // Map common hour variants to the stored value
+//             depFreqNormalized = "T-X in hours";
+//           } else {
+//             throw new Error(
+//               `Invalid Frequency "${trimmedFrequency}" for dependent task. Allowed: "T+X in days" or "T+X in hours".`,
+//             );
+//           }
+//         }
+
+//         // Attachment Check (remains outside the user loop as it's per row, not per user)
+//         let finalAttachmentPath = null;
+//         if (attachmentFile) {
+//           const attachmentPath = path.join(
+//             process.cwd(),
+//             "uploads",
+//             attachmentFile,
+//           );
+//           if (!fs.existsSync(attachmentPath)) {
+//             throw new Error(
+//               `Attachment file "${attachmentFile}" not found in the uploads directory.`,
+//             );
+//           }
+//           finalAttachmentPath = attachmentFile;
+//         }
+
+//         const checklist = checkListStr
+//           ? checkListStr.split(",").map((item) => ({ text: item.trim() }))
+//           : [];
+
+//         for (const item of usersForThisRow) {
+//           const user = item.user;
+//           // <--- NEW LOOP
+//           // Duplicate Check: Same title, same user, same start day
+//           if (startDate) {
+//             const existingTask = await Task.findOne({
+//               title,
+//               assignedTo: user._id, // <--- Now uses current user from loop
+//               // Using gte and lt to check for the same day regardless of time
+//               startDate: {
+//                 $gte: startOfDay(startDate),
+//                 $lt: startOfDay(
+//                   new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
+//                 ),
+//               },
+//             });
+//             if (existingTask) {
+//               throw new Error(
+//                 `A task with the same title for user ${user.email} on the same start date already exists.`,
+//               );
+//             }
+//           }
+//           // --- 4. Prepare Task Data ---
+//           const taskData = {
+//             title: title.trim(),
+//             description: description.trim(),
+//             assignedTo: user._id, // <--- Now uses current user from loop
+//             assignedBy: req.user._id,
+//             createdBy: req.user._id,
+//             startDate,
+//             dueDate,
+//             taskEndDays,
+//             attachmentFile: finalAttachmentPath,
+//             isDependent,
+//             departmentOfAssignToUser: item.departmentId,
+//             checklist,
+//           };
+//           // console.log(item);
+//           let taskInstance;
+
+//           // Delegation vs Recurring vs Dependent
+//           if (isDependent) {
+//             const parentTask = await Task.findOne({
+//               TaskId: trimmedParentTaskId,
+//             });
+
+//             if (!parentTask) {
+//               throw new Error(
+//                 `Parent task with ID "${trimmedParentTaskId}" not found.`,
+//               );
+//             }
+//             const parentEnd =
+//               parentTask.dueDate || parentTask.endDate || parentTask.startDate;
+
+//             if (!parentEnd) {
+//               throw new Error("Parent task has no valid date.");
+//             }
+
+//             const x = Number(trimmedXValue) || 0;
+//             const freq = (trimmedFrequency || "").toLowerCase();
+
+//             let calculatedStartDate = new Date(parentEnd);
+
+//             // ✅ Handle T+X
+//             if (freq.includes("hour")) {
+//               calculatedStartDate.setHours(calculatedStartDate.getHours() + x);
+//             } else {
+//               calculatedStartDate.setDate(calculatedStartDate.getDate() + x);
+//             }
+
+//             // ✅ Override startDate
+//             startDate = calculatedStartDate;
+
+//             // ✅ Now calculate dueDate using taskEndDays
+//             if (taskEndDays && !isNaN(taskEndDays)) {
+//               dueDate = new Date(startDate);
+//               dueDate.setDate(dueDate.getDate() + Number(taskEndDays));
+//             }
+
+//             // Duplicate check (keep yours)
+//             const existingDependent = await Task.findOne({
+//               title: title.trim(),
+//               assignedTo: user._id,
+//               "dependencyConfig.taskDependent": parentTask._id,
+//             });
+
+//             if (existingDependent) {
+//               throw new Error(
+//                 `A dependent task with the same title for user ${user.email} linked to parent ${trimmedParentTaskId} already exists.`,
+//               );
+//             }
+
+//             taskInstance = new DelegationTask({
+//               ...taskData,
+//               startDate,
+//               dueDate,
+//               dependencyConfig: {
+//                 taskDependent: parentTask._id,
+//                 startTimeSetting:
+//                   trimmedStartTimeSetting === "Planned to Planned"
+//                     ? "planned-to-planned"
+//                     : "actual-to-planned",
+//                 isDependentFrequency: depFreqNormalized,
+//                 xValue: x,
+//               },
+//             });
+//           } else if (trimmedFrequency) {
+//             // Recurring Task
+//             taskInstance = new RecurringTask({
+//               ...taskData,
+//               endDate,
+//               weekDays: weekDaysArr,
+//               frequency: trimmedFrequency, // e.g., 'Daily', 'Weekly'
+//               // endDate will be handled by recurring logic if needed
+//             });
+//           } else {
+//             // Simple Delegation Task
+//             // Allow delegation tasks without a dueDate (no strict server-side requirement).
+//             taskInstance = new DelegationTask(taskData);
+//           }
+
+//           // Manually generate TaskId for each task before bulk insert
+//           // Generate period-based counter (YYMM) so TaskId becomes YYMM####
+//           const now = new Date();
+//           const yy = String(now.getFullYear()).slice(-2);
+//           const mm = String(now.getMonth() + 1).padStart(2, "0");
+//           const period = `${yy}${mm}`;
+//           const counter = await Counter.findByIdAndUpdate(
+//             { _id: `taskId-${period}` },
+//             { $inc: { seq: 1 } },
+//             { new: true, upsert: true },
+//           );
+//           taskInstance.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`;
+
+//           validTasks.push(taskInstance);
+//         } // <--- END NEW LOOP
+//       } catch (error) {
+//         originalRow["Error"] = `Row ${rowCount}: ${error.message}`;
+//         errors.push(originalRow);
+//         continue;
+//       }
+//     }
+
+//     // --- 5. Finalize ---
+//     if (errors.length > 0) {
+//       // Create error report
+//       const parser = new Parser({ fields: [...Object.keys(errors[0])] });
+//       const csv = parser.parse(errors);
+//       const errorFileName = `${Date.now()}-import-errors.csv`;
+//       const errorFilePath = path.join(process.cwd(), "uploads", errorFileName);
+//       fs.writeFileSync(errorFilePath, csv);
+
+//       // Send error response
+//       return res.status(422).json({
+//         success: false,
+//         message: `Import failed. ${errors.length} of ${rows.length} rows have errors.`,
+//         errorFile: errorFileName, // Only return the filename
+//       });
+//     } else {
+//       // Save all valid tasks to DB
+//       await Task.insertMany(validTasks);
+//       res.status(201).json({
+//         success: true,
+//         message: `Successfully imported ${validTasks.length} tasks.`,
+//       });
+//     }
+//   } catch (err) {
+//     // Catch any top-level errors (e.g., file read failure)
+//     return next(new AppError(err.message, 500));
+//   } finally {
+//     // --- 6. Cleanup ---
+//     fs.unlink(filePath, (err) => {
+//       if (err) console.error(`Error deleting uploaded file ${filePath}:`, err);
+//     });
+//   }
+// });
 
 // ---------------------------------------------------------
 // FINAL MERGED UPDATE TASK CONTROLLER
@@ -5243,16 +5246,16 @@ export const updateTask = handleAsync(async (req, res, next) => {
   // 6. SAVE THE TASK (Parent/Current Task)
   const updatedTask = await task.save();
   if (
-  task.taskType === "RecurringTask" &&
-  assignedTo &&
-  oldAssignedTo !== assignedTo.toString()
-) {
-  await updateRecurringGeneratedTaskAssignee({
-    recurringTaskId: task._id,
-    assignedTo,
-    updatedBy: req.user._id,
-  });
-}
+    task.taskType === "RecurringTask" &&
+    assignedTo &&
+    oldAssignedTo !== assignedTo.toString()
+  ) {
+    await updateRecurringGeneratedTaskAssignee({
+      recurringTaskId: task._id,
+      assignedTo,
+      updatedBy: req.user._id,
+    });
+  }
 
   await createLog({
     action: "UPDATE",
@@ -5385,9 +5388,8 @@ export const updateRecurringGeneratedTaskAssignee = async ({
     if (!recurringTaskId || !assignedTo) return;
 
     // ✅ new assigned user
-    const assignedUser = await User.findById(assignedTo).populate(
-      "assignShift",
-    );
+    const assignedUser =
+      await User.findById(assignedTo).populate("assignShift");
 
     // ✅ find generated delegated tasks
     // skip completed tasks
@@ -5396,7 +5398,7 @@ export const updateRecurringGeneratedTaskAssignee = async ({
       taskType: "DelegationTask",
       status: { $ne: "Completed" },
     });
-    console.log("generatedTasks",generatedTasks)
+    console.log("generatedTasks", generatedTasks);
     console.log(
       `🔁 Updating ${generatedTasks.length} recurring generated tasks`,
     );
@@ -5430,13 +5432,8 @@ export const updateRecurringGeneratedTaskAssignee = async ({
       await task.save();
     }
 
-    console.log(
-      `✅ Successfully updated generated recurring tasks`,
-    );
+    console.log(`✅ Successfully updated generated recurring tasks`);
   } catch (error) {
-    console.error(
-      "❌ updateRecurringGeneratedTaskAssignee Error:",
-      error,
-    );
+    console.error("❌ updateRecurringGeneratedTaskAssignee Error:", error);
   }
 };

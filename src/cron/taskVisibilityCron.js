@@ -83,40 +83,80 @@ const makeTasksVisible = async () => {
         }).lean();
         let validTasks = 0;
         for (const task of tasksToCheck) {
-          // ✅ find next valid visible working date
-          const visibleDate = await nextWorkingShiftDate(
-            task.startDate,
-            workShift._id,
-          );
-
-          // today
+          // =====================================================
+          // ✅ NORMALIZED DATES
+          // =====================================================
           const today = startOfDay(now);
+          const startDay = startOfDay(new Date(task.startDate));
 
-          // normalize visible date
-          const visibleDay = startOfDay(new Date(visibleDate));
+          const dueDay = task.dueDate
+            ? startOfDay(new Date(task.dueDate))
+            : null;
 
-          // ❌ skip if due date already crossed
-          if (task.dueDate && visibleDay > startOfDay(new Date(task.dueDate))) {
+          // =====================================================
+          // ✅ TODAY MUST BE VALID WORKING DAY
+          // =====================================================
+          const isTodayHoliday = await isHoliday(today);
+
+          if (isTodayHoliday || !isWorkingDay(today, workShift)) {
             continue;
           }
 
-          // ✅ make visible ONLY on actual next working day
-          if (isSameDay(today, visibleDay)) {
-            await Task.findByIdAndUpdate(task._id, {
-              isVisible: true,
-              updatedAt: now,
-              visibleFrom: now,
-            });
+          // =====================================================
+          // ✅ FIND FIRST VALID WORKING DAY
+          // AFTER TASK START DATE
+          // =====================================================
+          const firstVisibleDay = startOfDay(
+            await nextWorkingShiftDate(task.startDate, workShift._id),
+          );
 
-            validTasks++;
+          /**
+           * =====================================================
+           * ✅ MAIN RULE
+           * =====================================================
+           *
+           * Task should become visible if:
+           *
+           * 1. Today >= first valid working day
+           * 2. Today <= due date
+           *
+           * This automatically handles:
+           * - holidays
+           * - weekends
+           * - server downtime
+           * - missed cron executions
+           * - shift-based visibility
+           * - delayed visibility recovery
+           */
 
-            console.log(
-              `✅ Task ${task.TaskId} visible on ${format(
-                visibleDay,
-                "dd MMM yyyy",
-              )}`,
-            );
+          const withinVisibleWindow =
+            today >= firstVisibleDay && (!dueDay || today <= dueDay);
+
+          if (!withinVisibleWindow) {
+            continue;
           }
+
+          // =====================================================
+          // ✅ AVOID EXTRA DB WRITES
+          // =====================================================
+          if (task.isVisible) {
+            continue;
+          }
+
+          // =====================================================
+          // ✅ MAKE TASK VISIBLE
+          // =====================================================
+          await Task.findByIdAndUpdate(task._id, {
+            isVisible: true,
+            visibleFrom: now,
+            updatedAt: now,
+          });
+
+          validTasks++;
+
+          console.log(
+            `✅ ${task.TaskId} visible | ${format(today, "dd MMM yyyy")}`,
+          );
         }
 
         updatedCount += validTasks;

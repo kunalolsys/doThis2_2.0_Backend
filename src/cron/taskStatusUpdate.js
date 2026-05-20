@@ -42,7 +42,8 @@ async function updateTaskStatuses() {
       if (start) start.setHours(0, 0, 0, 0);
       if (due) due.setHours(0, 0, 0, 0);
 
-      const completed = t.status === "Completed" || isChecklistComplete(t);
+      const completed = t.status === "Completed";
+      // || isChecklistComplete(t);
       let newStatus = t.status || "Pending";
 
       if (completed) {
@@ -136,7 +137,7 @@ async function updateTaskStatuses() {
             update: {
               $set: {
                 status: u.status,
-                ...(u.status=="Completed" && {
+                ...(u.status == "Completed" && {
                   isReopen: false,
                   reopenedBy: null,
                   reopenedAt: null,
