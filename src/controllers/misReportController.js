@@ -49,7 +49,7 @@ export const getMisReport = handleAsync(async (req, res, next) => {
   // =========================
   const matchCondition = {
     isDeleted: { $ne: true },
-taskType:{$ne:"RecurringTask"},
+    taskType: { $ne: "RecurringTask" },
     $or: [
       {
         dueDate: {
@@ -296,6 +296,10 @@ taskType:{$ne:"RecurringTask"},
     // =========================
     {
       $addFields: {
+        // =========================
+        // TOTAL COMPLETION RATE
+        // completed / total
+        // =========================
         completionRate: {
           $round: [
             {
@@ -315,7 +319,11 @@ taskType:{$ne:"RecurringTask"},
           ],
         },
 
-        onTimeRate: {
+        // =========================
+        // ON TIME COMPLETION RATE
+        // doneOnTime / completed
+        // =========================
+        onTimeCompletionRate: {
           $round: [
             {
               $multiply: [
@@ -334,6 +342,33 @@ taskType:{$ne:"RecurringTask"},
           ],
         },
 
+        // =========================
+        // DELAYED COMPLETION RATE
+        // delayed / completed
+        // =========================
+        delayedCompletionRate: {
+          $round: [
+            {
+              $multiply: [
+                {
+                  $divide: [
+                    "$delayed",
+                    {
+                      $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
+                    },
+                  ],
+                },
+                100,
+              ],
+            },
+            2,
+          ],
+        },
+
+        // =========================
+        // OVERDUE RATE
+        // overdue / total
+        // =========================
         overdueRate: {
           $round: [
             {
@@ -381,7 +416,8 @@ taskType:{$ne:"RecurringTask"},
         doneOnTime: 1,
 
         completionRate: 1,
-        onTimeRate: 1,
+        onTimeCompletionRate: 1,
+        delayedCompletionRate: 1,
         overdueRate: 1,
       },
     },
@@ -468,6 +504,6 @@ taskType:{$ne:"RecurringTask"},
 
     reports,
 
-    tasks: filteredTasks,
+    // tasks: filteredTasks,
   });
 });

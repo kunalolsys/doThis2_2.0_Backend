@@ -19,6 +19,8 @@ import {
   getConversations,
   exportMYTasks,
 } from '../controllers/taskController.js'; // Ensure this matches your actual controller filename
+import { reopenTask } from '../controllers/taskReopenController.js';
+
 import upload from '../middleware/upload.js';
 // import { authenticateJWT } from '../middleware/auth.js';
 import { authenticateJWT } from '../middleware/authMiddleware.js';
@@ -66,6 +68,10 @@ router.put('/:id', authenticateJWT, upload.array('attachmentFile'), updateTask);
 
 // Toggle Task Completion (Mark as Complete/Incomplete)
 router.patch('/:id/completion', authenticateJWT, toggleTaskCompletion);
+
+// Reopen Task (sets isReopen, reopenedBy, reopenedAt)
+router.patch('/:id/reopen', authenticateJWT, reopenTask);
+
 // Toggle single checklist item
 router.patch('/:id/checklist/:index', authenticateJWT, updateChecklistItem);
 

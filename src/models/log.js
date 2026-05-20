@@ -4,7 +4,7 @@ const logSchema = new mongoose.Schema(
   {
     action: {
       type: String,
-      enum: ["CREATE", "UPDATE", "DELETE"],
+      enum: ["CREATE", "UPDATE", "DELETE","REOPEN"],
       required: true,
     },
 

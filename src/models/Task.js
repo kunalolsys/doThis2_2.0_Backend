@@ -154,6 +154,24 @@ const BaseTaskSchema = new mongoose.Schema(
       ref: "Queries",
       default: null,
     },
+    //**for re-open task */
+    isReopen: {
+      type: Boolean,
+      default: false,
+    },
+    reopenedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    reopenedAt: {
+      type: Date,
+      default: null,
+    },
+    reopenedReason: {
+      type: String,
+      default: null,
+    },
   },
   baseOptions,
 );

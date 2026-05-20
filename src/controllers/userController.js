@@ -5,7 +5,7 @@ import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
 import Department from "../models/Department.js";
 import WorkShift from "../models/WorkShift.js";
-import { sendTestEmail } from "../services/emailService.js";
+import sendEmail from "../services/emailService.js";
 import fs from "fs";
 
 import {
@@ -97,6 +97,7 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
   }
   const users = await User.find(filter, "-password")
     .populate("department", "name")
+    .populate("reportingManager", "name")
     .populate("role", "name")
     .populate("assignShift")
     .sort({ createdAt: -1 })
@@ -436,7 +437,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
     user.profilePhoto = `/${req.files.profilePhoto[0].path.replace(/\\/g, "/")}`;
   }
   // if (isEmailNotificationEnabled) {
-  //   await sendTestEmail({
+  //   await sendEmail({
   //     from: user.email,
   //     subject: "Greeting Mail",
   //     html: greetingTemplate(user.name),
@@ -452,7 +453,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
     newData: user,
     message: "User updated",
   });
-  // await sendTestEmail()
+  // await sendEmail()
   const updatedUser = await User.findById(user._id)
     .populate("department", "name")
     .populate("role", "name")

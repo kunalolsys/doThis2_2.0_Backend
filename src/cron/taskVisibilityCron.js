@@ -7,12 +7,15 @@ import {
   snapToShiftTime,
   isWorkingDay,
   isHoliday,
+  nextWorkingShiftDate,
 } from "../utils/dateCalculator.js";
-import { startOfDay } from "date-fns";
+import { format, isSameDay, startOfDay } from "date-fns";
 
 // 🔥 MAIN CRON: Make tasks VISIBLE at shift start
 const makeTasksVisible = async () => {
-  // console.log("⏰ [TASK VISIBILITY CRON] Checking shift starts...", { timestamp: new Date().toISOString() });
+  console.log("⏰ [TASK VISIBILITY CRON] Checking shift starts...", {
+    timestamp: new Date().toISOString(),
+  });
 
   try {
     const now = new Date();
@@ -80,15 +83,39 @@ const makeTasksVisible = async () => {
         }).lean();
         let validTasks = 0;
         for (const task of tasksToCheck) {
-          const taskDate = startOfDay(new Date(task.startDate));
-          const isTaskHoliday = await isHoliday(taskDate);
-          if (!isTaskHoliday && isWorkingDay(taskDate, workShift)) {
+          // ✅ find next valid visible working date
+          const visibleDate = await nextWorkingShiftDate(
+            task.startDate,
+            workShift._id,
+          );
+
+          // today
+          const today = startOfDay(now);
+
+          // normalize visible date
+          const visibleDay = startOfDay(new Date(visibleDate));
+
+          // ❌ skip if due date already crossed
+          if (task.dueDate && visibleDay > startOfDay(new Date(task.dueDate))) {
+            continue;
+          }
+
+          // ✅ make visible ONLY on actual next working day
+          if (isSameDay(today, visibleDay)) {
             await Task.findByIdAndUpdate(task._id, {
               isVisible: true,
               updatedAt: now,
               visibleFrom: now,
             });
+
             validTasks++;
+
+            console.log(
+              `✅ Task ${task.TaskId} visible on ${format(
+                visibleDay,
+                "dd MMM yyyy",
+              )}`,
+            );
           }
         }
 

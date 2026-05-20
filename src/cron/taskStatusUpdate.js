@@ -133,7 +133,17 @@ async function updateTaskStatuses() {
         regularUpdates.map((u) => ({
           updateOne: {
             filter: { _id: u.id },
-            update: { $set: { status: u.status } },
+            update: {
+              $set: {
+                status: u.status,
+                ...(u.status=="Completed" && {
+                  isReopen: false,
+                  reopenedBy: null,
+                  reopenedAt: null,
+                  reopenedReason: null,
+                }),
+              },
+            },
           },
         })),
       );
