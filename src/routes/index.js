@@ -12,6 +12,7 @@ import queriesRoutes from "./queries.js";
 import threadRoutes from "./thread.js";
 import fmsReportRoutes from "./fmsReport.js";
 import companyProfileRoutes from "./CompanyRoutes.js";
+import openFormRoutes from "./openFormRoutes.js";
 import { moduleGate } from "../middleware/moduleGate.js";
 
 const router = express.Router();
@@ -42,6 +43,8 @@ router.use("/thread", threadRoutes);
 
 router.use("/uploads", express.static("uploads"));
 
-router.use("/company",moduleGate, companyProfileRoutes);
+router.use("/company", moduleGate, companyProfileRoutes);
+
+router.use("/open-forms", openFormRoutes);
 
 export default router;

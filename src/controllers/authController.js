@@ -123,7 +123,7 @@ export const forgotPassword = handleAsync(async (req, res, next) => {
   } catch (err) {
     console.error("Error sending reset email:", err);
     // For development, log the reset link in console
-    const resetLink = `${process.env.RESET_URL}/reset-password?token=${resetToken}`;
+    const resetLink = `${process.env.BASE_URL}/reset-password?token=${resetToken}`;
     console.log("Password reset link (for development):", resetLink);
 
     // Clear the token on error

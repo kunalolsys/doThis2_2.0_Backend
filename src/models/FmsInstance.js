@@ -57,23 +57,75 @@ const FmsInstanceSchema = new mongoose.Schema(
       rate: Number,
       lastUpdated: Date,
     },
+    triggerType: {
+      type: String,
+      default: "SYSTEM_SUBMISSION",
+    },
+
+    formId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "OpenForm",
+    },
+
+    submissionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FormSubmission",
+    },
+
+    // instanceCode: {
+    //   type: String,
+    //   unique: true,
+    // },
+
+    holdReason: String,
+
+    holdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    stoppedReason: String,
+
+    stoppedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    runtimeContext: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
   },
   { timestamps: true },
 );
 
 // Auto instanceId
+// FmsInstanceSchema.pre("save", async function (next) {
+//   if (this.isNew && !this.instanceId) {
+//     const template = await FmsTemplate.findById(this.fmsTemplateId);
+//     const ym = new Date().toISOString().slice(2, 7).replace("-", "");
+//     const counter = await Counter.findByIdAndUpdate(
+//       `fmsInstance_${ym}`,
+//       { $inc: { seq: 1 } },
+//       { upsert: true, new: true },
+//     );
+//     this.instanceId = `${template.fmsId}-I${counter.seq.toString().padStart(4, "0")}`;
+//   }
+//   next();
+// });
 FmsInstanceSchema.pre("save", async function (next) {
   if (this.isNew && !this.instanceId) {
     const template = await FmsTemplate.findById(this.fmsTemplateId);
-    const ym = new Date().toISOString().slice(2, 7).replace("-", "");
+
     const counter = await Counter.findByIdAndUpdate(
-      `fmsInstance_${ym}`,
+      { _id: `instance_${template.fmsId}` },
       { $inc: { seq: 1 } },
       { upsert: true, new: true },
     );
-    this.instanceId = `${template.fmsId}-I${counter.seq.toString().padStart(4, "0")}`;
+
+    this.instanceId = `${template.fmsId}_I${counter.seq}`;
   }
+
   next();
 });
-
 export default mongoose.model("FmsInstance", FmsInstanceSchema);

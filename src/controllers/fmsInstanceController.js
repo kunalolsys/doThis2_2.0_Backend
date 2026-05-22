@@ -17,6 +17,7 @@ import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
 import { createLog } from "./logController.js";
 import { updateTaskStatuses } from "../cron/taskStatusUpdate.js";
 import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
+import Counter from "../models/Counter.js";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -44,19 +45,19 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     );
   }
   // 🔒 CHECK BEFORE CREATING INSTANCE
-  const existingInstance = await FmsInstance.findOne({
-    fmsTemplateId: templateId,
-    status: { $in: ["Upcoming", "Ongoing"] },
-  });
+  // const existingInstance = await FmsInstance.findOne({
+  //   fmsTemplateId: templateId,
+  //   status: { $in: ["Upcoming", "Ongoing"] },
+  // });
 
-  if (existingInstance) {
-    return next(
-      new AppError(
-        `FMS already launched (Instance: ${existingInstance.instanceName})`,
-        400,
-      ),
-    );
-  }
+  // if (existingInstance) {
+  //   return next(
+  //     new AppError(
+  //       `FMS already launched (Instance: ${existingInstance.instanceName})`,
+  //       400,
+  //     ),
+  //   );
+  // }
   const launchDate = new Date(launchDateStr || Date.now());
   const instanceEnd =
     template.fmsDuration === "Fixed Period" ? template.endDate : null;
@@ -70,6 +71,24 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
 
   const status = calculateInstanceStatus(launchDate, parsedEndDate);
   // Create instance
+  const counter = await Counter.findOneAndUpdate(
+    {
+      _id: "fms_instance",
+    },
+    {
+      $inc: {
+        seq: 1,
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+    },
+  );
+
+  const sequence = String(counter.seq).padStart(5, "0");
+
+  // const instanceCode = `FMS-${new Date().getFullYear()}-${sequence}`;
   const instance = await FmsInstance.create({
     fmsTemplateId: template._id,
     instanceName: `${template.templateName}`,
@@ -80,6 +99,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     createdBy: userId,
     fmsDuration: template.fmsDuration,
     status,
+    // instanceCode
   });
 
   // Get template tasks IN ORDER
@@ -294,7 +314,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   await updateInstanceProgress();
   // 🔥 FIND CHILDREN (reverse: who depends ON this parent)
   const children = await FmsInstanceTask.find({
-    // fmsInstanceId: instanceId,
+    fmsInstanceId: instanceId,
     startTimeSetting: "actual-to-planned",
     waitingForParent: true,
     dependentOn: task.taskId, // ← CHILDREN dependentOn = THIS parent.taskId
@@ -546,10 +566,14 @@ export const holdFmsInstance = handleAsync(async (req, res) => {
     },
     { status: "Onhold" },
   );
-  await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
-    fmsHoldReason: reason || "Manual stop",
-    holdBy: currentUser,
-  });
+  // await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
+  //   fmsHoldReason: reason || "Manual stop",
+  //   holdBy: currentUser,
+  // });
+  instance.holdReason = reason || "Manual hold";
+  instance.holdBy = currentUser;
+
+  await instance.save();
   res.json({ success: true, message: "FMS put on hold" });
 });
 //**RESUME FMS INSTANCE */
@@ -609,10 +633,14 @@ export const stopFmsInstance = handleAsync(async (req, res) => {
       status: "Stopped",
     },
   );
-  await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
-    fmsStoppedReason: reason || "Manual stop",
-    stoppedBy: currentUser,
-  });
+  // await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
+  //   fmsStoppedReason: reason || "Manual stop",
+  //   stoppedBy: currentUser,
+  // });
+  instance.stoppedReason = reason || "Manual stop";
+  instance.stoppedBy = currentUser;
+
+  await instance.save();
   res.json({ success: true, message: "FMS stopped permanently" });
 });
 

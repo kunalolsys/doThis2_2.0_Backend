@@ -75,7 +75,7 @@ FmsTemplateSchema.index({ manager: 1 });
 // FmsTemplateSchema.index({ templateName: 1 }); // Explicit for queries
 FmsTemplateSchema.index(
   { templateName: 1 },
-  { unique: true, partialFilterExpression: { isDeleted: false } }
+  { unique: true, partialFilterExpression: { isDeleted: false } },
 );
 // BRD: Fixed Period → endDate required
 FmsTemplateSchema.pre("validate", function (next) {
@@ -85,20 +85,19 @@ FmsTemplateSchema.pre("validate", function (next) {
   next();
 });
 
-// Auto FMS ID (FMS-YYMMNNNN)
 FmsTemplateSchema.pre("save", async function (next) {
   if (this.isNew && !this.fmsId) {
     const counter = await Counter.findByIdAndUpdate(
-      { _id: "fms" },
+      { _id: "fmsTemplate" },
       { $inc: { seq: 1 } },
       { upsert: true, new: true },
     );
 
-    this.fmsId = `FMS-${counter.seq}`;
+    this.fmsId = `F${counter.seq}`;
   }
+
   next();
 });
-
 // Virtuals for stats
 FmsTemplateSchema.virtual("taskCount", {
   ref: "FmsTask",

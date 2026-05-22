@@ -135,15 +135,15 @@ export const updateFmsTask = handleAsync(async (req, res, next) => {
 });
 export const deleteFmsTask = handleAsync(async (req, res, next) => {
   const { id: templateId, taskId } = req.params;
-  
-  const task = await FmsTask.findOne({ 
-    fmsTemplateId: templateId, 
-    taskId 
+
+  const task = await FmsTask.findOne({
+    fmsTemplateId: templateId,
+    taskId,
   }).populate([
-    'fmsTemplateId', 
-    'assignedTo', 
-    'departmentOfAssignToUser',
-    'assignedBy'
+    "fmsTemplateId",
+    "assignedTo",
+    "departmentOfAssignToUser",
+    "assignedBy",
   ]);
 
   if (!task) {
@@ -152,7 +152,7 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
 
   // Remove from template's tasks array
   await FmsTemplate.findByIdAndUpdate(templateId, {
-    $pull: { tasks: task._id }
+    $pull: { tasks: task._id },
   });
 
   // Delete the task
@@ -160,28 +160,24 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
 
   // Log deletion
   await createLog({
-    action: 'DELETE_FMS_TASK',
+    action: "DELETE_FMS_TASK",
     performedBy: req.cookies.userId || req.user._id || null,
     targetId: task._id,
-    targetType: 'FmsTask',
+    targetType: "FmsTask",
     details: `Template task ${task.taskId} deleted from template ${templateId}`,
     metadata: {
       templateId,
       taskId: task.taskId,
-      description: task.description.substring(0, 100)
-    }
+      description: task.description.substring(0, 100),
+    },
   });
 
   res.json({
     success: true,
     message: `Template task "${task.taskId}" deleted successfully`,
-    deletedTaskId: task.taskId
+    deletedTaskId: task.taskId,
   });
 });
-
-
-
-
 
 //**IMPORT FMS TASK */
 

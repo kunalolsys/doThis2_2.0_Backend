@@ -106,12 +106,14 @@ export const generateRecurringFmsTasks = async () => {
           $gte: moment().startOf("day").toDate(),
           $lte: moment().endOf("day").toDate(),
         };
+        const recurrenceKey = moment().format("YYYY-MM-DD");
 
         if (
           await FmsInstanceTask.findOne({
             fmsInstanceId: instance._id,
             fmsTaskId: task._id,
-            createdAt: todayRange,
+            // createdAt: todayRange,
+            recurrenceKey
           })
         ) {
           console.log(`⚠️ Duplicate: ${task.taskId}`);
@@ -133,7 +135,7 @@ export const generateRecurringFmsTasks = async () => {
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
         });
-        const instanceTaskId = `${task.taskId}-R${count + 1}`;
+        const instanceTaskId = `${instance.instanceId}-${task.taskId}-R${count + 1}`;
         await new FmsInstanceTask({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
@@ -149,6 +151,8 @@ export const generateRecurringFmsTasks = async () => {
           isVisible: false,
           checklist: task.checklist || [],
           createdForm: task.createdForm || [],
+          recurrenceKey,
+          triggerKey: `RECURRENCE:${instance._id}:${task._id}:${recurrenceKey}`
         }).save();
 
         createdCount++;

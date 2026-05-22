@@ -125,11 +125,34 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     },
     // Audit
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // Open Form runtime traceability (optional; used by OpenForm submissions)
+    submissionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FormSubmission",
+    },
+    formId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "OpenForm",
+    },
+    // instanceCode: String,
+
+    // Idempotency keys for “every trigger should generate tasks”
+    // - recurrenceKey: cron occurrence key (e.g., YYYY-MM-DD)
+    // - triggerKey: generic occurrence key for dependency activation/generation
+    recurrenceKey: String,
+    triggerKey: String,
   },
   { timestamps: true },
 );
 
-FmsInstanceTaskSchema.index({ fmsInstanceId: 1, taskId: 1 });
+FmsInstanceTaskSchema.index(
+  { fmsInstanceId: 1, taskId: 1, recurrenceKey: 1 },
+  {
+    unique: true,
+    sparse: true,
+  },
+);
 FmsInstanceTaskSchema.index({ fmsInstanceId: 1, status: 1 });
 FmsInstanceTaskSchema.index({ assignedTo: 1, isVisible: 1 });
 

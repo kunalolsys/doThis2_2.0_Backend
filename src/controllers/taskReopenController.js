@@ -113,7 +113,7 @@ export const reopenTask = handleAsync(async (req, res, next) => {
   // ======================================================
 
   const frontendUrl = `${
-    process.env.RESET_URL
+    process.env.BASE_URL
   }/my-day/mytasks?taskId=${task._id}`;
 
   if (
