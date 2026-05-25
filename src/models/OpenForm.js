@@ -70,7 +70,15 @@ const OpenFormSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-
+    formUrl: {
+      type: String,
+      default: null,
+    },
+    slug: {
+      type: String,
+      unique: true,
+      required: true,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

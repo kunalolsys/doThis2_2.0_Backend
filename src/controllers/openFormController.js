@@ -9,9 +9,25 @@ import Counter from "../models/Counter.js";
 import AppError from "../utils/AppError.js";
 import fmsDateCalculator from "../utils/fmsDateCalculator.js";
 import User from "../models/User.js";
+
+const generateSlug = (text) => {
+  return text
+    ?.toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-") // spaces → -
+    .replace(/[^\w-]+/g, ""); // remove special chars
+};
+
+//**CREATE OPEN FORM */
 export const createOpenForm = handleAsync(async (req, res) => {
+  const baseUrl = process.env.BASE_URL;
+  const { formName } = req.body;
+  const slug = generateSlug(formName);
+
   const form = await OpenForm.create({
     ...req.body,
+    slug,
+    formUrl: `${baseUrl}/open-form/${slug}`,
     createdBy: req.cookies.userId || req.user._id,
   });
 
@@ -20,6 +36,8 @@ export const createOpenForm = handleAsync(async (req, res) => {
     data: form,
   });
 });
+
+//**GET ALL FORMS */
 export const getAllOpenForms = handleAsync(async (req, res) => {
   const { search, isActive } = req.query;
 
@@ -49,10 +67,15 @@ export const getAllOpenForms = handleAsync(async (req, res) => {
     data: forms,
   });
 });
+
+//**GET FORM BY ID */
 export const getOpenForm = handleAsync(async (req, res) => {
-  const form = await OpenForm.findById(req.params.id).populate(
-    "linkedTemplate",
-  );
+  const { slug } = req.params;
+
+  const form = await OpenForm.findOne({
+    slug,
+    isActive: true,
+  }).populate("linkedTemplate");
 
   res.json({
     success: true,
@@ -94,8 +117,10 @@ const calculateTaskStatus = (startDate, dueDate) => {
 
   return "Pending";
 };
+
+//**UPDATE FORM */
 export const updateOpenForm = handleAsync(async (req, res, next) => {
-  const { id } = req.body;
+  const { id } = req.params;
   const {
     formName,
     description,
@@ -141,16 +166,55 @@ export const updateOpenForm = handleAsync(async (req, res, next) => {
     data: form,
   });
 });
+
+//**VALIDATE USER DURING FORM USING */
+export const verifyOpenFormUser = handleAsync(async (req, res) => {
+  const { employeeCode } = req.body;
+
+  if (!employeeCode) {
+    throw new AppError("Employee code is required", 400);
+  }
+
+  const user = await User.findOne({
+    employeeCode: employeeCode,
+    isDeleted: false,
+    isActive: true,
+  }).select("_id name companyCode employeeCode department");
+
+  if (!user) {
+    throw new AppError("Invalid employee code", 404);
+  }
+
+  res.status(200).json({
+    success: true,
+    data: user,
+  });
+});
+
+//**SUBMIT OPEN FORM & TRIGGER INSTANCE */
 export const submitOpenForm = handleAsync(async (req, res, next) => {
-  const userId = req.cookies.userId || req.user?._id || null;
+  // const userId = req.cookies.userId || req.user?._id || null;
+  const { slug } = req.params;
+  const { employeeCode, submissionData } = req.body;
+  const employee = await User.findOne({
+    employeeCode,
+  });
+
+  if (!employee) {
+    return next(new AppError("Invalid employee code", 400));
+  }
+
+  // USE VERIFIED EMPLOYEE ID
+  const userId = employee._id;
 
   // =====================================================
   // 1. GET FORM
   // =====================================================
 
-  const form = await OpenForm.findById(req.params.id).populate(
-    "linkedTemplate",
-  );
+  const form = await OpenForm.findOne({
+    slug,
+    isActive: true,
+  }).populate("linkedTemplate");
 
   if (!form) {
     return next(new AppError("Form not found", 404));
@@ -167,8 +231,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   // =====================================================
   // 2. VALIDATE SUBMISSION DATA
   // =====================================================
-
-  const submissionData = req.body || {};
 
   for (const field of form.fields || []) {
     const value = submissionData[field.fieldId];
@@ -483,3 +545,56 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     },
   });
 });
+
+//**GET SUBMISSION RESPONSE AND RECORD */
+export const getFormSubmissions = async (req, res) => {
+  try {
+    const { formId } = req.params;
+
+    const submissions = await FormSubmission.find({
+      formId,
+    })
+      .populate("submittedBy", "name employeeCode")
+      .populate("triggeredInstance", "instanceId status")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: submissions.length,
+      data: submissions,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const getSubmissionDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const submission = await FormSubmission.findById(id)
+      .populate("submittedBy", "name employeeCode email")
+      .populate("formId")
+      .populate("triggeredInstance");
+
+    if (!submission) {
+      return res.status(404).json({
+        success: false,
+        message: "Submission not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: submission,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};

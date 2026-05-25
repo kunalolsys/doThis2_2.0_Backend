@@ -120,7 +120,7 @@ export const reopenTask = handleAsync(async (req, res, next) => {
     task.assignedTo?.email &&
     task.assignedTo._id.toString() !== reopenedBy?.toString()
   ) {
-    await sendEmail({
+     sendEmail({
       to: task.assignedTo.email,
       subject: `🔁 Task Reopened — ${task.TaskId}: ${task.title}`,
       html: taskReopenedEmail({ task, reopenReason, frontendUrl }),

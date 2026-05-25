@@ -132,6 +132,12 @@ const generateRecurringTasks = async () => {
         status: "Pending",
         isVisible: false, // 🔥 Cron visibility system
         attachmentFile: task.attachmentFile || [],
+
+        currentHolder: task.assignedTo,
+
+        distributionStatus: "Awaiting Distribution",
+
+        delegationFlowEnabled: true,
       });
 
       await newDelegation.save();

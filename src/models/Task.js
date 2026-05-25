@@ -165,6 +165,34 @@ const BaseTaskSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    delegationFlowEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
+    distributionStatus: {
+      type: String,
+      enum: ["Awaiting Distribution", "Distributed", "Assigned"],
+      default: "Assigned",
+    },
+
+    currentHolder: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    finalAssignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    delegationLevel: {
+      type: Number,
+      default: 0,
+    },
   },
   baseOptions,
 );
@@ -298,7 +326,6 @@ const RecurringTaskSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
-
 });
 
 // --- MIDDLEWARE: Ensure dueDate is null for Recurring Tasks ---

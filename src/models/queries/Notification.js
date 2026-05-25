@@ -13,7 +13,8 @@ const NotificationSchema = new mongoose.Schema(
         "MENTION",
         "QUERY_RAISED",
         "QUERY_REPLIED",
-        "TASK_REOPENED"
+        "TASK_REOPENED",
+        "TASK_COMPLETED",
       ],
     },
 

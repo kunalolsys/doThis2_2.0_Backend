@@ -43,6 +43,10 @@ import * as threadController from "./queries/thread.js";
 import Messages from "../models/queries/Message.js";
 import ModuleSetting from "../models/ModuleSetting.js";
 import WorkShift from "../models/WorkShift.js";
+import TaskDelegationFlow from "../models/TaskDelegationFlow.js";
+import Conversations from "../models/queries/Conversation.js";
+import { taskReopenedEmail } from "../services/templates/reopenTaskTemplate.js";
+import sendEmail from "../services/emailService.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -208,6 +212,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     isRecurrent,
     recurrenceFrequency,
     recurrenceEndDate,
+    // delegationFlowEnabled,
   } = req.body;
 
   // 1. Basic Validation
@@ -357,6 +362,13 @@ export const createTask = handleAsync(async (req, res, next) => {
       // dueDate: effectiveDueDate,
       departmentOfAssignToUser: deptId,
       checklist: parsedChecklist,
+      // currentHolder: delegationFlowEnabled ? assignedTo : assignedTo,
+
+      // delegationFlowEnabled,
+
+      // distributionStatus: delegationFlowEnabled
+      //   ? "Awaiting Distribution"
+      //   : "Assigned",
     };
 
     // 🔥 DEPENDENT PLANNED-TO-PLANNED (WorkShift Aware)
@@ -504,9 +516,17 @@ export const createTask = handleAsync(async (req, res, next) => {
 
     // 🔥 Set visibility: false initially (cron will enable at shift start)
     newTask.isVisible = false;
-
     // Save
     await newTask.save();
+    // if (delegationFlowEnabled) {
+    //   await TaskDelegationFlow.create({
+    //     taskId: newTask._id,
+    //     level: 1,
+    //     fromUser: userId,
+    //     toUser: assignedTo,
+    //     actionType: "Created",
+    //   });
+    // }
 
     await createLog({
       action: "CREATE",
@@ -3235,9 +3255,29 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   const { completeStatus } = req.body;
 
   // 🔥 1. GET OLD DATA FIRST
-  const existingTask = await Task.findById(id);
+  const existingTask = await Task.findById(id)
+    .populate("assignedTo", "name email assignShift")
+    .populate("assignedBy", "name email");
   if (!existingTask) return next(new AppError("Task not found", 404));
+  let conversation = null;
 
+  if (existingTask.conversationId) {
+    conversation = await Conversations.findById(existingTask.conversationId);
+  }
+  if (!conversation) {
+    conversation = await Conversations.create({
+      taskId: existingTask._id,
+      taskType: existingTask.taskType,
+      participants: [
+        // reopenedBy,
+        existingTask.assignedTo?._id,
+        existingTask.assignedBy?._id,
+      ].filter(Boolean),
+    });
+
+    existingTask.conversationId = conversation._id;
+    await existingTask.save();
+  }
   const oldData = existingTask.toObject();
 
   // 🔥 2. PREPARE UPDATE
@@ -3260,6 +3300,70 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
         });
       }
     }
+    const io = getIO();
+
+    // Send realtime notification to assigned user
+    if (
+      existingTask.assignedBy?._id &&
+      existingTask.assignedBy._id.toString() !==
+        existingTask.assignedTo?._id?.toString()
+    ) {
+      io.to(existingTask.assignedBy._id.toString()).emit("notification", {
+        type: "TASK_COMPLETED",
+        title: "Task Completed",
+        description: `Task "${existingTask.title}" completed.`,
+        taskId: existingTask._id,
+        TaskId: existingTask.TaskId,
+      });
+    }
+    // ======================================================
+    // EMAIL NOTIFICATION
+    // ======================================================
+
+    const frontendUrl = `${
+      process.env.BASE_URL
+    }/my-day/mytasks?taskId=${existingTask._id}`;
+
+    if (
+      existingTask.assignedBy?.email &&
+      existingTask.assignedBy._id.toString() !==
+        existingTask.assignedTo._id.toString()
+    ) {
+      sendEmail({
+        to: existingTask.assignedBy.email,
+        subject: `🔁 Task Reopened — ${existingTask.TaskId}: ${existingTask.title}`,
+        html: `
+        <p>Task completed successfully.</p>
+
+        <p><strong>Task:</strong> ${existingTask.title}</p>
+
+        <a href="${frontendUrl}">
+          View Task
+        </a>
+      `,
+      });
+    }
+    // ======================================================
+    // DATABASE NOTIFICATION
+    // ======================================================
+
+    if (
+      existingTask.assignedBy?._id &&
+      existingTask.assignedBy._id.toString() !==
+        existingTask.assignedTo._id.toString()
+    ) {
+      await Notifications.create({
+        user: existingTask.assignedBy._id,
+        fromUser: existingTask.assignedTo._id,
+        type: "TASK_COMPLETED",
+        title: "Task Completed",
+        description: `Task "${existingTask.title}" completed please check your email.`,
+        relatedId: existingTask._id,
+        taskId: existingTask._id,
+        conversationId: conversation._id,
+      });
+    }
+
     updateData.isReopen = false;
     updateData.reopenedBy = null;
     updateData.reopenedAt = null;
