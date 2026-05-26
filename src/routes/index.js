@@ -13,6 +13,8 @@ import threadRoutes from "./thread.js";
 import fmsReportRoutes from "./fmsReport.js";
 import companyProfileRoutes from "./CompanyRoutes.js";
 import openFormRoutes from "./openFormRoutes.js";
+import taskBucketsRoutes from "./taskBucketRoutes.js";
+import taskAudienceMastersRoutes from "./taskAudienceMasterRoutes.js";
 import { moduleGate } from "../middleware/moduleGate.js";
 
 const router = express.Router();
@@ -47,4 +49,7 @@ router.use("/company", moduleGate, companyProfileRoutes);
 
 router.use("/open-forms", openFormRoutes);
 
+router.use("/task-buckets", taskBucketsRoutes);
+
+router.use("/task-audience-masters", taskAudienceMastersRoutes);
 export default router;
