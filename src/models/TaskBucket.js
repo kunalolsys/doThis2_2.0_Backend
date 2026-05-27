@@ -23,7 +23,11 @@ const TaskBucketSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-
+    distributionStatus: {
+      type: String,
+      enum: ["Pending", "Partially Distributed", "Distributed"],
+      default: "Pending",
+    },
     // =====================================================
     // ASSIGNMENT MODE
     // =====================================================
@@ -180,6 +184,27 @@ const TaskBucketSchema = new mongoose.Schema(
         ref: "Task",
       },
     ],
+    status: {
+      type: String,
+      enum: ["Pending", "Completed"],
+      default: "Pending",
+    },
+    completedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+
+    remark: {
+      type: String,
+      default: "",
+      trim: true,
+    },
   },
   {
     timestamps: true,

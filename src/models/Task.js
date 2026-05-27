@@ -38,6 +38,11 @@ const BaseTaskSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    bucketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TaskBucket",
+      default: null,
+    },
     description: {
       type: String,
       required: true,
@@ -171,28 +176,28 @@ const BaseTaskSchema = new mongoose.Schema(
       default: false,
     },
 
-    distributionStatus: {
-      type: String,
-      enum: ["Awaiting Distribution", "Distributed", "Assigned"],
-      default: "Assigned",
-    },
+    // distributionStatus: {
+    //   type: String,
+    //   enum: ["Awaiting Distribution", "Distributed", "Assigned"],
+    //   default: "Assigned",
+    // },
 
-    currentHolder: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
+    // currentHolder: {
+    //   type: mongoose.Schema.Types.ObjectId,
+    //   ref: "User",
+    //   default: null,
+    // },
 
-    finalAssignedTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
+    // finalAssignedTo: {
+    //   type: mongoose.Schema.Types.ObjectId,
+    //   ref: "User",
+    //   default: null,
+    // },
 
-    delegationLevel: {
-      type: Number,
-      default: 0,
-    },
+    // delegationLevel: {
+    //   type: Number,
+    //   default: 0,
+    // },
   },
   baseOptions,
 );
