@@ -9,6 +9,7 @@ import {
   distributeTaskBucket,
   deleteTaskBucket,
   getBucketReportingUsers,
+  completeTaskBucket,
 } from "../controllers/taskBucketController.js";
 
 import { authenticateJWT } from "../middleware/authMiddleware.js";
@@ -29,5 +30,6 @@ router.get("/:id", authenticateJWT, getSingleTaskBucket);
 router.post("/:id/distribute", authenticateJWT, distributeTaskBucket);
 
 router.delete("/:id", authenticateJWT, deleteTaskBucket);
+router.patch("/:id/complete", authenticateJWT, completeTaskBucket);
 router.get("/:id/reporting-users", authenticateJWT, getBucketReportingUsers);
 export default router;

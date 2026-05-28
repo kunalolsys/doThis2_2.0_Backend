@@ -47,6 +47,7 @@ import TaskDelegationFlow from "../models/TaskDelegationFlow.js";
 import Conversations from "../models/queries/Conversation.js";
 import { taskReopenedEmail } from "../services/templates/reopenTaskTemplate.js";
 import sendEmail from "../services/emailService.js";
+import { taskCompletedTemplate } from "../services/templates/taskCompleteTemp.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -518,6 +519,73 @@ export const createTask = handleAsync(async (req, res, next) => {
     newTask.isVisible = false;
     // Save
     await newTask.save();
+    sendEmail({
+      to: assignedUser.email,
+
+      subject: `📌 New Task Assigned - ${newTask.TaskId}`,
+
+      html: `
+      <div style="font-family:Arial,sans-serif;padding:20px;">
+        <h2 style="color:#2563eb;">New Task Assigned</h2>
+
+        <p>Hello ${assignedUser.name},</p>
+
+        <p>You have been assigned a new task.</p>
+
+        <table cellpadding="8" cellspacing="0" border="0">
+          <tr>
+            <td><b>Task ID</b></td>
+            <td>${newTask.TaskId}</td>
+          </tr>
+
+          <tr>
+            <td><b>Title</b></td>
+            <td>${newTask.title}</td>
+          </tr>
+
+          <tr>
+            <td><b>Description</b></td>
+            <td>${newTask.description}</td>
+          </tr>
+
+          <tr>
+            <td><b>Start Date</b></td>
+            <td>
+              ${
+                newTask.startDate
+                  ? new Date(newTask.startDate).toLocaleString("en-IN")
+                  : "-"
+              }
+            </td>
+          </tr>
+
+          <tr>
+            <td><b>Due Date</b></td>
+            <td>
+              ${
+                newTask.dueDate
+                  ? new Date(newTask.dueDate).toLocaleString("en-IN")
+                  : "-"
+              }
+            </td>
+          </tr>
+
+          <tr>
+            <td><b>Priority</b></td>
+            <td>${newTask.priority || "Normal"}</td>
+          </tr>
+        </table>
+
+        <br/>
+
+        <p>Please login to the system to review the task.</p>
+
+        <br/>
+
+        <p>Thanks,<br/>Task Management System</p>
+      </div>
+    `,
+    });
     // if (delegationFlowEnabled) {
     //   await TaskDelegationFlow.create({
     //     taskId: newTask._id,
@@ -3320,28 +3388,48 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     // EMAIL NOTIFICATION
     // ======================================================
 
-    const frontendUrl = `${
-      process.env.BASE_URL
-    }/my-day/mytasks?taskId=${existingTask._id}`;
+    const frontendUrl = `${process.env.BASE_URL}/my-day/view`;
 
     if (
       existingTask.assignedBy?.email &&
       existingTask.assignedBy._id.toString() !==
         existingTask.assignedTo._id.toString()
     ) {
+      const emailTemplate = taskCompletedTemplate({
+        assignedByName: existingTask.assignedBy?.name || "Manager",
+
+        completedBy: existingTask.assignedTo?.name || "User",
+
+        taskId: existingTask.TaskId,
+
+        title: existingTask.title,
+
+        remark: existingTask.remark || "",
+        completedAt: existingTask.completedAt || "",
+
+        frontendUrl,
+      });
+
       sendEmail({
         to: existingTask.assignedBy.email,
-        subject: `🔁 Task Reopened — ${existingTask.TaskId}: ${existingTask.title}`,
-        html: `
-        <p>Task completed successfully.</p>
 
-        <p><strong>Task:</strong> ${existingTask.title}</p>
+        subject: emailTemplate.subject,
 
-        <a href="${frontendUrl}">
-          View Task
-        </a>
-      `,
+        html: emailTemplate.html,
       });
+      // sendEmail({
+      //   to: existingTask.assignedBy.email,
+      //   subject: `🔁 Task Reopened — ${existingTask.TaskId}: ${existingTask.title}`,
+      //   html: `
+      //   <p>Task completed successfully.</p>
+
+      //   <p><strong>Task:</strong> ${existingTask.title}</p>
+
+      //   <a href="${frontendUrl}">
+      //     View Task
+      //   </a>
+      // `,
+      // });
     }
     // ======================================================
     // DATABASE NOTIFICATION

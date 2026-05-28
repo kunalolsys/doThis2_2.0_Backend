@@ -54,6 +54,8 @@ async function main() {
     "FmsEngine",
     "Module Management",
     "Task Reassigning",
+    "My Bucket",
+    "Bucket",
   ];
 
   const superRole = await ensureRole({

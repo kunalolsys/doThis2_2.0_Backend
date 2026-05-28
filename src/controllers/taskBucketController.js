@@ -6,6 +6,13 @@ import {
   addWorkingDaysHoliday,
   nextWorkingShiftDate,
 } from "../utils/dateCalculator.js";
+import Conversations from "../models/queries/Conversation.js";
+import { getIO } from "../socket.js";
+import Notifications from "../models/queries/Notification.js";
+import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js";
+import sendEmail from "../services/emailService.js";
+import { bucketCompletedTemplate } from "../services/templates/bucketCompletedTemplate.js";
+import { taskBucketAssignedTemplate } from "../services/templates/taskBucketAssignedTemp.js";
 
 // =======================================================
 // CREATE BUCKET TASK
@@ -313,6 +320,126 @@ export const createTaskBucket = async (req, res) => {
 
       attachmentFile: uploadedFiles,
     });
+    // =====================================================
+    // POPULATE USERS
+    // =====================================================
+
+    await bucket.populate([
+      {
+        path: "createdBy",
+        select: "name email",
+      },
+      {
+        path: "targetUsers",
+        select: "name email",
+      },
+      {
+        path: "targetRole",
+        select: "name",
+      },
+    ]);
+
+    // =====================================================
+    // FINAL TARGET USERS
+    // =====================================================
+
+    let finalUsers = [];
+
+    if (assignmentMode === "Users") {
+      finalUsers = bucket.targetUsers || [];
+    }
+
+    if (assignmentMode === "Role") {
+      finalUsers = await User.find({
+        role: targetRole,
+      }).select("_id name email");
+    }
+
+    // =====================================================
+    // SOCKET IO
+    // =====================================================
+
+    const io = getIO();
+
+    // =====================================================
+    // SEND NOTIFICATION + EMAIL
+    // =====================================================
+
+    for (const user of finalUsers) {
+      // ===================================================
+      // REALTIME NOTIFICATION
+      // ===================================================
+
+      io.to(String(user._id)).emit("notification", {
+        type: "TASK_BUCKET_CREATED",
+
+        title: "New Task Bucket Assigned",
+
+        description: `A new task bucket "${bucket.title}" has been assigned to you.`,
+
+        bucketId: bucket._id,
+      });
+
+      // ===================================================
+      // DATABASE NOTIFICATION
+      // ===================================================
+
+      await Notifications.create({
+        user: user._id,
+
+        fromUser: req.cookies.userId || req.user._id,
+
+        type: "BUCKET_TASK_ASSIGNED",
+
+        title: "New Task Bucket Assigned",
+
+        description: `A new task bucket "${bucket.title}" has been assigned to you.`,
+
+        relatedId: bucket._id,
+      });
+
+      // ===================================================
+      // EMAIL
+      // ===================================================
+
+      if (user?.email) {
+        const frontendUrl = `${
+          process.env.BASE_URL
+        }/task-buckets/${bucket._id}`;
+
+        const emailTemplate = taskBucketAssignedTemplate({
+          userName: user.name,
+
+          bucketId: bucket.bucketId,
+
+          bucketTitle: bucket.title,
+
+          description: bucket.description,
+
+          // assignmentMode: bucket.assignmentMode,
+
+          createdAt: bucket.createdAt
+            ? new Date(bucket.createdAt).toLocaleDateString("en-IN", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })
+            : "-",
+
+          createdBy: req.user?.name || "Manager",
+
+          // frontendUrl: `${process.env.BASE_URL}/task-buckets/${bucket._id}`,
+        });
+
+        sendEmail({
+          to: user.email,
+
+          subject: emailTemplate.subject,
+
+          html: emailTemplate.html,
+        });
+      }
+    }
 
     return res.status(201).json({
       success: true,
@@ -596,10 +723,130 @@ export const distributeTaskBucket = async (req, res) => {
         });
       }
 
+      // =====================================================
+      // CREATE CONVERSATION
+      // =====================================================
+
+      const conversation = await Conversations.create({
+        taskId: task._id,
+        taskType: task.taskType,
+        participants: [assignedUser?._id, userId].filter(Boolean),
+      });
+
+      // attach conversation
+      task.conversationId = conversation._id;
+
       await task.save();
-      bucket.generatedTasks.push(task._id);
+
+      // =====================================================
+      // REALTIME NOTIFICATION
+      // =====================================================
+
+      const io = getIO();
+
+      io.to(String(assignedUser._id)).emit("notification", {
+        type: "TASK_ASSIGNED",
+        title: "New Task Assigned",
+        description: `You received a new task "${task.title}"`,
+        taskId: task._id,
+        TaskId: task.TaskId,
+      });
+
+      // =====================================================
+      // DATABASE NOTIFICATION
+      // =====================================================
+
+      await Notifications.create({
+        user: assignedUser._id,
+        fromUser: userId,
+
+        type: "TASK_ASSIGNED",
+
+        title: "New Task Assigned",
+
+        description: `You received a new task "${task.title}"`,
+
+        relatedId: task._id,
+        taskId: task._id,
+        conversationId: conversation._id,
+      });
+
+      // =====================================================
+      // EMAIL
+      // =====================================================
+
+      if (assignedUser?.email) {
+        const frontendUrl = `${
+          process.env.BASE_URL
+        }/my-day/mytasks?taskId=${task._id}`;
+
+        const emailTemplate = taskAssignedTemplate({
+          userName: assignedUser.name,
+          taskId: task.TaskId,
+          title: task.title,
+          description: task.description,
+          assignedBy: req.user?.name || "Manager",
+          dueDate: task.dueDate
+            ? new Date(task.dueDate).toLocaleDateString("en-IN", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })
+            : "N/A",
+          frontendUrl,
+        });
+
+        sendEmail({
+          to: assignedUser.email,
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
+        });
+      }
       createdTasks.push(task._id);
     }
+    // =====================================================
+    // UPDATE GENERATED TASKS
+    // =====================================================
+
+    bucket.generatedTasks.push(...createdTasks);
+
+    // =====================================================
+    // CHECK DISTRIBUTION STATUS
+    // =====================================================
+
+    // all reporting users under current manager
+    const reportingUsers = await User.find({
+      reportingManager: userId,
+    }).select("_id");
+
+    const reportingUserIds = reportingUsers.map((u) => String(u._id));
+
+    // users who received this bucket task
+    const distributedTasks = await Task.find({
+      bucketId: bucket._id,
+      assignedTo: { $in: reportingUserIds },
+    }).select("assignedTo");
+
+    const distributedUserSet = new Set(
+      distributedTasks.map((t) => String(t.assignedTo)),
+    );
+
+    const totalUsers = reportingUserIds.length;
+
+    const distributedCount = distributedUserSet.size;
+
+    // =====================================================
+    // FINAL STATUS
+    // =====================================================
+
+    if (distributedCount === 0) {
+      bucket.distributionStatus = "Pending";
+    } else if (distributedCount < totalUsers) {
+      bucket.distributionStatus = "Partially Distributed";
+    } else {
+      bucket.distributionStatus = "Distributed";
+    }
+
     await bucket.save();
     // for (const user of usersToAssign) {
     //   const basePayload = {
@@ -706,39 +953,117 @@ export const deleteTaskBucket = async (req, res) => {
 // GET REPORTING USERS OF BUCKET TARGET USERS
 // =======================================================
 
+// export const getBucketReportingUsers = async (req, res) => {
+//   try {
+//     const userId = req.cookies.userId || req.user._id;
+
+//     const users = await User.find({
+//       reportingManager: userId,
+//     })
+//       .populate("role", "name")
+//       .populate("reportingManager", "name")
+//       .select("name email role reportingManager");
+
+//     return res.status(200).json({
+//       success: true,
+//       data: users,
+//     });
+//   } catch (err) {
+//     console.log(err);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: err.message,
+//     });
+//   }
+// };
 export const getBucketReportingUsers = async (req, res) => {
   try {
-    const userId = req.cookies.userId || req.user._id;
+    const managerId = req.cookies.userId || req.user._id;
+    const { id } = req.params;
 
+    // =====================================================
+    // 1. GET REPORTING USERS
+    // =====================================================
     const users = await User.find({
-      reportingManager: userId,
+      reportingManager: managerId,
     })
       .populate("role", "name")
       .populate("reportingManager", "name")
       .select("name email role reportingManager");
 
+    const userIds = users.map((u) => u._id);
+
+    // =====================================================
+    // 2. CHECK TASKS EXISTENCE (ONLY FLAG PURPOSE)
+    // =====================================================
+    const tasks = await Task.find({
+      bucketId: id,
+      assignedTo: { $in: userIds },
+    }).select("assignedTo bucketId status completedAt");
+
+    // build map: userId -> has bucket task
+    const bucketTaskMap = new Map();
+
+    for (const task of tasks) {
+      const userId = String(task.assignedTo);
+      // if multiple bucket tasks exist,
+      // keep latest completed info
+      if (!bucketTaskMap.has(userId)) {
+        bucketTaskMap.set(userId, {
+          hasBucketTask: true,
+          completedStatus: task.status || "Pending",
+          completedAt: task.completedAt || null,
+        });
+      }
+    }
+    // =====================================================
+    // 3. ATTACH ONLY ONE FIELD TO USER
+    // =====================================================
+    const result = users.map((user) => {
+      const obj = user.toObject();
+      const taskInfo = bucketTaskMap.get(String(user._id));
+      obj.hasBucketTask = bucketTaskMap.has(String(user._id)) ? true : false;
+      obj.completedStatus = taskInfo ? taskInfo.completedStatus : "No Task";
+
+      obj.completedAt = taskInfo ? taskInfo.completedAt : null;
+
+      return obj;
+    });
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
     return res.status(200).json({
       success: true,
-      data: users,
+      count: result.length,
+      data: result,
     });
   } catch (err) {
-    console.log(err);
+    console.error(err);
 
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: err.message || "Failed to fetch reporting users",
     });
   }
 };
-
 export const completeTaskBucket = async (req, res) => {
   try {
     const { id } = req.params;
+
     const { remark } = req.body;
 
     const userId = req.cookies.userId || req.user._id;
 
-    const bucket = await TaskBucket.findById(id);
+    // =====================================================
+    // GET BUCKET
+    // =====================================================
+
+    const bucket = await TaskBucket.findById(id).populate(
+      "createdBy",
+      "name email",
+    );
 
     if (!bucket) {
       return res.status(404).json({
@@ -748,8 +1073,9 @@ export const completeTaskBucket = async (req, res) => {
     }
 
     // =====================================================
-    // ALREADY COMPLETED CHECK
+    // ALREADY COMPLETED
     // =====================================================
+
     if (bucket.status === "Completed") {
       return res.status(400).json({
         success: false,
@@ -758,31 +1084,71 @@ export const completeTaskBucket = async (req, res) => {
     }
 
     // =====================================================
-    // OPTIONAL: close all generated tasks
+    // GET ALL RELATED TASKS
     // =====================================================
-    if (bucket.generatedTasks?.length) {
-      await Task.updateMany(
-        { bucketId: bucket._id },
-        {
-          $set: {
-            status: "Completed",
-            completedAt: new Date(),
-          },
-        },
-      );
+
+    const relatedTasks = await Task.find({
+      bucketId: bucket._id,
+    }).select("assignedTo status completedAt title");
+
+    // =====================================================
+    // CHECK ALL TASKS COMPLETED
+    // =====================================================
+
+    const incompleteTasks = relatedTasks.filter(
+      (task) => task.status !== "Completed",
+    );
+
+    if (incompleteTasks.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "All reporting user tasks must be completed first",
+      });
     }
 
     // =====================================================
-    // UPDATE BUCKET
+    // COMPLETE BUCKET
     // =====================================================
+
     bucket.status = "Completed";
-    bucket.distributionStatus = "Distributed"; // optional keep for history
 
     bucket.completedBy = userId;
+
     bucket.completedAt = new Date();
+
     bucket.remark = remark || "";
 
     await bucket.save();
+
+    // =====================================================
+    // COMPLETED USER
+    // =====================================================
+
+    const completedUser = await User.findById(userId).select("name email");
+
+    // =====================================================
+    // SEND EMAIL
+    // =====================================================
+
+    if (bucket.createdBy?.email) {
+      const emailTemplate = bucketCompletedTemplate({
+        bucketId: bucket.bucketId,
+        bucketTitle: bucket.title,
+        completedBy: completedUser?.name,
+        completedAt: new Date(bucket.completedAt).toLocaleString("en-IN"),
+        remark,
+      });
+
+      sendEmail({
+        to: bucket.createdBy.email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+      });
+    }
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
 
     return res.status(200).json({
       success: true,
@@ -794,7 +1160,7 @@ export const completeTaskBucket = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: err.message || "Failed to complete bucket",
     });
   }
 };

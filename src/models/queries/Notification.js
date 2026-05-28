@@ -15,6 +15,8 @@ const NotificationSchema = new mongoose.Schema(
         "QUERY_REPLIED",
         "TASK_REOPENED",
         "TASK_COMPLETED",
+        "TASK_ASSIGNED",
+        "BUCKET_TASK_ASSIGNED",
       ],
     },
 

@@ -1,49 +1,61 @@
-import mongoose from 'mongoose';
-
+import mongoose from "mongoose";
 
 const PERMISSIONS = [
-   'Setup','Reports','Delegation Task', 'FmsEngine','Module Management',"Company Setup" ,"Task Reassigning"
+  "Setup",
+  "Reports",
+  "Delegation Task",
+  "FmsEngine",
+  "Module Management",
+  "Company Setup",
+  "Task Reassigning",
+  "My Bucket",
+  "Bucket",
 ];
 
 const FIXED_ROLES = [
   {
-    name: 'Admin',
+    name: "Admin",
     canDelete: false,
   },
   {
-    name: 'Sr. Manager',
+    name: "Sr. Manager",
     canDelete: false,
   },
   {
-    name: 'Manager',
+    name: "Manager",
     canDelete: false,
   },
   {
-    name: 'Owner',
+    name: "Owner",
     canDelete: false,
   },
   {
-    name: 'Member',
+    name: "Member",
     canDelete: false,
   },
 ];
 
-const roleSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true
+const roleSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+    },
+    permissions: [
+      {
+        type: String,
+        enum: PERMISSIONS,
+      },
+    ],
+    canDelete: {
+      type: Boolean,
+      default: true,
+    },
   },
-  permissions: [{
-    type: String,
-    enum: PERMISSIONS
-  }],
-  canDelete: {
-    type: Boolean,
-    default: true
-  }
-}, { timestamps: true });
+  { timestamps: true },
+);
 
 // Create fixed roles if they don't exist
 roleSchema.statics.initializeFixedRoles = async function () {
@@ -52,12 +64,12 @@ roleSchema.statics.initializeFixedRoles = async function () {
       { name: fixedRole.name },
       {
         ...fixedRole,
-        canDelete: false
+        canDelete: false,
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
   }
 };
 
-const Role = mongoose.model('Role', roleSchema);
+const Role = mongoose.model("Role", roleSchema);
 export default Role;

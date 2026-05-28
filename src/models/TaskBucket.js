@@ -5,7 +5,11 @@ const TaskBucketSchema = new mongoose.Schema(
     // =====================================================
     // BASIC
     // =====================================================
-
+    bucketId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
     title: {
       type: String,
       required: true,
@@ -210,5 +214,67 @@ const TaskBucketSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+TaskBucketSchema.pre("save", async function (next) {
+  try {
+    if (!this.isNew || this.bucketId) {
+      return next();
+    }
 
+    // =====================================================
+    // DATE PART
+    // FORMAT: YYMMDD
+    // =====================================================
+
+    const now = new Date();
+
+    const year = String(now.getFullYear()).slice(-2);
+
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+
+    const day = String(now.getDate()).padStart(2, "0");
+
+    const datePrefix = `${year}${month}${day}`;
+
+    // =====================================================
+    // TODAY COUNT
+    // =====================================================
+
+    const startOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+
+    const endOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+    );
+
+    const todayCount = await mongoose.models.TaskBucket.countDocuments({
+      createdAt: {
+        $gte: startOfDay,
+        $lt: endOfDay,
+      },
+    });
+
+    // =====================================================
+    // DAILY SEQUENCE
+    // =====================================================
+
+    const sequence = String(todayCount + 1).padStart(2, "0");
+
+    // =====================================================
+    // FINAL ID
+    // FORMAT:
+    // B-26052701
+    // =====================================================
+
+    this.bucketId = `B-${datePrefix}${sequence}`;
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 export default mongoose.model("TaskBucket", TaskBucketSchema);
