@@ -55,12 +55,17 @@ const isTaskDueToday = (task) => {
 };
 
 // 🔥 Main Job - WORKSHIFT AWARE
-const generateRecurringTasks = async () => {
+export const generateRecurringTasks = async (recurringTaskId = null) => {
   console.log("⏳ Cron: WorkShift-Aware Recurring Tasks...");
 
   try {
     const now = new Date();
-    const recurringTasks = await RecurringTask.find({});
+    // const recurringTasks = await RecurringTask.find({});
+    const recurringTasks = recurringTaskId
+      ? await RecurringTask.find({
+          _id: recurringTaskId,
+        })
+      : await RecurringTask.find({});
     let createdCount = 0;
 
     for (const task of recurringTasks) {
@@ -158,7 +163,7 @@ const generateRecurringTasks = async () => {
 
 // Schedule: Daily at shift start time? Or keep 00:01 for batching
 const startCronJobs = () => {
-  cron.schedule("*/5 * * * * *", generateRecurringTasks, {
+  cron.schedule("0 9 * * *", generateRecurringTasks, {
     // cron.schedule("*/50 * * * * *", generateRecurringTasks, {
     timezone: "Asia/Kolkata",
   });

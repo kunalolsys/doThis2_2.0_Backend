@@ -113,7 +113,7 @@ export const generateRecurringFmsTasks = async () => {
             fmsInstanceId: instance._id,
             fmsTaskId: task._id,
             // createdAt: todayRange,
-            recurrenceKey
+            recurrenceKey,
           })
         ) {
           console.log(`⚠️ Duplicate: ${task.taskId}`);
@@ -152,7 +152,7 @@ export const generateRecurringFmsTasks = async () => {
           checklist: task.checklist || [],
           createdForm: task.createdForm || [],
           recurrenceKey,
-          triggerKey: `RECURRENCE:${instance._id}:${task._id}:${recurrenceKey}`
+          triggerKey: `RECURRENCE:${instance._id}:${task._id}:${recurrenceKey}`,
         }).save();
 
         createdCount++;
@@ -175,8 +175,8 @@ const startRecurringFmsTaskJob = () => {
   // });
   console.log("🔄 FMS Cron: Every 30s (TEST)");
 
-  // Production: Daily 01:00
-  cron.schedule("*/5 * * * * *", generateRecurringFmsTasks, {
+  //This runs every day at 9:00 AM IST.
+  cron.schedule("0 9 * * *", generateRecurringFmsTasks, {
     timezone: "Asia/Kolkata",
   });
 };

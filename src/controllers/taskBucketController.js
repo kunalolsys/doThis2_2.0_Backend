@@ -466,18 +466,58 @@ export const getTaskBuckets = async (req, res) => {
 
     // current logged in user
     const currentUser = await User.findById(userId).select("role");
+    // =====================================================
+    // QUERY PARAMS
+    // =====================================================
+
+    const search = req.query.search?.trim() || "";
+
+    const status = req.query.status || "";
+
+    const sortBy = req.query.sortBy || "newest";
 
     // =====================================================
-    // GET BUCKETS
+    // SORT CONFIG
     // =====================================================
 
-    const buckets = await TaskBucket.find({
+    let sortConfig = { createdAt: -1 };
+
+    switch (sortBy) {
+      case "oldest":
+        sortConfig = { createdAt: 1 };
+        break;
+
+      case "title_asc":
+        sortConfig = { title: 1 };
+        break;
+
+      case "title_desc":
+        sortConfig = { title: -1 };
+        break;
+
+      case "status":
+        sortConfig = { status: 1 };
+        break;
+
+      case "newest":
+      default:
+        sortConfig = { createdAt: -1 };
+        break;
+    }
+    const sortOrder = req.query.sortOrder === "asc" ? 1 : -1;
+    // =====================================================
+    // FILTER
+    // =====================================================
+
+    const filter = {
+      isDeleted: false,
       $or: [
         // =================================================
         // USER BASED BUCKETS
         // =================================================
         {
           assignmentMode: "Users",
+
           targetUserDistribution: {
             $elemMatch: {
               user: userId,
@@ -491,14 +531,72 @@ export const getTaskBuckets = async (req, res) => {
         // =================================================
         {
           assignmentMode: "Role",
+
           targetRole: currentUser?.role,
         },
       ],
-    })
+    };
+
+    // =====================================================
+    // SEARCH FILTER
+    // =====================================================
+
+    if (search) {
+      filter.$and = [
+        {
+          $or: [
+            {
+              title: {
+                $regex: search,
+                $options: "i",
+              },
+            },
+
+            {
+              description: {
+                $regex: search,
+                $options: "i",
+              },
+            },
+
+            {
+              bucketId: {
+                $regex: search,
+                $options: "i",
+              },
+            },
+          ],
+        },
+      ];
+    }
+
+    // =====================================================
+    // STATUS FILTER
+    // =====================================================
+
+    if (status && status !== "all") {
+      if (!filter.$and) {
+        filter.$and = [];
+      }
+
+      filter.$and.push({
+        status,
+      });
+    }
+
+    // =====================================================
+    // GET BUCKETS
+    // =====================================================
+
+    const buckets = await TaskBucket.find(filter)
       .populate("targetRole", "name")
       .populate("targetUsers", "name email")
+      .populate("assignedTargetUsers", "name email")
       .populate("createdBy", "name email")
-      .sort({ createdAt: -1 });
+      .populate("completedBy", "name email")
+      .populate("targetUserDistribution.user", "name email")
+      .sort(sortConfig)
+      .lean();
 
     return res.status(200).json({
       success: true,
@@ -848,58 +946,6 @@ export const distributeTaskBucket = async (req, res) => {
     }
 
     await bucket.save();
-    // for (const user of usersToAssign) {
-    //   const basePayload = {
-    //     bucketId: bucket._id,
-
-    //     title: bucket.title,
-    //     description: bucket.description,
-
-    //     assignedTo: user._id,
-    //     finalAssignedTo: user._id,
-    //     currentHolder: user._id,
-
-    //     assignedBy: userId,
-    //     createdBy: userId,
-    //     updatedBy: userId,
-
-    //     departmentOfAssignToUser: user?.department?.[0] || null,
-
-    //     startDate: bucket.startDate,
-    //     taskEndDays: bucket.taskEndDays,
-
-    //     checklist: bucket.checklist,
-
-    //     isDependent: bucket.isDependent,
-    //     dependencyConfig: bucket.dependencyConfig,
-
-    //     delegationFlowEnabled: true,
-    //     distributionStatus: "Assigned",
-    //     status: "Pending",
-    //   };
-
-    //   let task;
-
-    //   if (bucket.isRecurrent) {
-    //     task = new RecurringTask({
-    //       ...basePayload,
-    //       frequency: bucket.frequency,
-    //       weekDays: bucket.weekDays,
-    //       endDate: bucket.endDate,
-    //       attachmentFile: bucket.attachmentFile,
-    //     });
-
-    //     await task.save();
-    //   } else {
-    //     task = await DelegationTask.create({
-    //       ...basePayload,
-    //       attachmentFile: bucket.attachmentFile,
-    //     });
-    //     await task.save();
-    //   }
-
-    //   createdTasks.push(task._id);
-    // }
 
     // =====================================================
     // RESPONSE
@@ -921,10 +967,23 @@ export const distributeTaskBucket = async (req, res) => {
 // =======================================================
 // DELETE BUCKET
 // =======================================================
-
 export const deleteTaskBucket = async (req, res) => {
   try {
-    const bucket = await TaskBucket.findById(req.params.id);
+    const { remark } = req.body;
+    const bucketId = req.params.id;
+
+    const userId = req.cookies.userId || req.user._id;
+
+    // =====================================================
+    // FIND BUCKET
+    // =====================================================
+
+    const bucket = await TaskBucket.findOne({
+      _id: bucketId,
+      isDeleted: {
+        $ne: true,
+      },
+    });
 
     if (!bucket) {
       return res.status(404).json({
@@ -933,7 +992,54 @@ export const deleteTaskBucket = async (req, res) => {
       });
     }
 
-    await bucket.deleteOne();
+    // =====================================================
+    // ONLY PENDING BUCKET CAN DELETE
+    // =====================================================
+
+    if (bucket.status !== "Pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Only pending buckets can be deleted",
+      });
+    }
+
+    // =====================================================
+    // CHECK GENERATED TASKS
+    // =====================================================
+
+    const completedTaskExists = await Task.exists({
+      _id: {
+        $in: bucket.generatedTasks || [],
+      },
+
+      status: "Completed",
+    });
+
+    if (completedTaskExists) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Some generated tasks are completed. Please delete those tasks first.",
+      });
+    }
+
+    // =====================================================
+    // SOFT DELETE
+    // =====================================================
+
+    bucket.isDeleted = true;
+
+    bucket.deletedBy = userId;
+
+    bucket.deleteRemark = remark;
+
+    bucket.deletedAt = new Date();
+
+    await bucket.save();
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
 
     return res.status(200).json({
       success: true,
@@ -944,47 +1050,19 @@ export const deleteTaskBucket = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to delete bucket",
+      message: err.message || "Failed to delete bucket",
     });
   }
 };
 
-// =======================================================
-// GET REPORTING USERS OF BUCKET TARGET USERS
-// =======================================================
-
-// export const getBucketReportingUsers = async (req, res) => {
-//   try {
-//     const userId = req.cookies.userId || req.user._id;
-
-//     const users = await User.find({
-//       reportingManager: userId,
-//     })
-//       .populate("role", "name")
-//       .populate("reportingManager", "name")
-//       .select("name email role reportingManager");
-
-//     return res.status(200).json({
-//       success: true,
-//       data: users,
-//     });
-//   } catch (err) {
-//     console.log(err);
-
-//     return res.status(500).json({
-//       success: false,
-//       message: err.message,
-//     });
-//   }
-// };
+// =====================================================
+//  GET REPORTING USERS
+// =====================================================
 export const getBucketReportingUsers = async (req, res) => {
   try {
     const managerId = req.cookies.userId || req.user._id;
     const { id } = req.params;
-
-    // =====================================================
-    // 1. GET REPORTING USERS
-    // =====================================================
+    const bucket = await TaskBucket.findById(id);
     const users = await User.find({
       reportingManager: managerId,
     })
@@ -1038,6 +1116,7 @@ export const getBucketReportingUsers = async (req, res) => {
       success: true,
       count: result.length,
       data: result,
+      isBucketComplete: bucket.status == "Completed" || false,
     });
   } catch (err) {
     console.error(err);
@@ -1161,6 +1240,470 @@ export const completeTaskBucket = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: err.message || "Failed to complete bucket",
+    });
+  }
+};
+
+export const getAllTaskBuckets = async (req, res) => {
+  try {
+    // =====================================================
+    // QUERY PARAMS
+    // =====================================================
+
+    const page = Math.max(Number(req.query.page) || 1, 1);
+
+    const limit = Math.max(Number(req.query.limit) || 10, 1);
+
+    const skip = (page - 1) * limit;
+
+    const search = req.query.search?.trim() || "";
+
+    const status = req.query.status?.trim() || "";
+
+    // =====================================================
+    // FILTER
+    // =====================================================
+
+    const filter = { isDeleted: false };
+
+    // SEARCH
+    if (search) {
+      filter.$or = [
+        {
+          title: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+
+        {
+          description: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+
+        {
+          bucketId: {
+            $regex: search,
+            $options: "i",
+          },
+        },
+      ];
+    }
+
+    // STATUS FILTER
+    if (status && status !== "all") {
+      filter.status = status;
+    }
+
+    // =====================================================
+    // TOTAL COUNT
+    // =====================================================
+
+    const total = await TaskBucket.countDocuments(filter);
+
+    // =====================================================
+    // FETCH DATA
+    // =====================================================
+
+    const buckets = await TaskBucket.find(filter)
+      // CREATED BY
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+
+      // ROLE
+      .populate({
+        path: "targetRole",
+        select: "name",
+      })
+
+      // TARGET USERS
+      .populate({
+        path: "targetUsers",
+        select: "name email employeeId",
+      })
+
+      // ASSIGNED TARGET USERS
+      .populate({
+        path: "assignedTargetUsers",
+        select: "name email employeeId",
+      })
+
+      // TARGET USER DISTRIBUTION USERS
+      .populate({
+        path: "targetUserDistribution.user",
+        select: "name email employeeId",
+      })
+
+      // GENERATED TASKS
+      .populate({
+        path: "generatedTasks",
+        select: "taskId title status assignedTo createdAt completedAt dueDate",
+        populate: {
+          path: "assignedTo",
+          select: "name email employeeId",
+        },
+      })
+
+      // COMPLETED BY
+      .populate({
+        path: "completedBy",
+        select: "name email employeeId",
+      })
+
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // =====================================================
+    // EXTRA FORMATTED DATA
+    // =====================================================
+
+    const formattedBuckets = buckets.map((bucket) => {
+      const totalUsers =
+        bucket.assignmentMode === "Users"
+          ? bucket.targetUsers?.length || 0
+          : bucket.assignedTargetUsers?.length || 0;
+
+      const distributedUsers =
+        bucket.targetUserDistribution?.filter((u) => u.status === "Distributed")
+          .length || 0;
+
+      return {
+        ...bucket,
+
+        totalUsers,
+
+        distributedUsers,
+
+        pendingUsers: totalUsers - distributedUsers,
+      };
+    });
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Task buckets fetched successfully",
+
+      pagination: {
+        total,
+
+        page,
+
+        limit,
+
+        totalPages: Math.ceil(total / limit),
+
+        hasNextPage: page * limit < total,
+
+        hasPrevPage: page > 1,
+      },
+
+      data: formattedBuckets,
+    });
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      success: false,
+
+      message: err.message || "Failed to fetch task buckets",
+    });
+  }
+};
+export const updateTaskBucket = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // =====================================================
+    // FIND BUCKET
+    // =====================================================
+
+    const existingBucket = await TaskBucket.findById(id);
+
+    if (!existingBucket) {
+      return res.status(404).json({
+        success: false,
+        message: "Task bucket not found",
+      });
+    }
+
+    // =====================================================
+    // BLOCK UPDATE IF COMPLETED
+    // =====================================================
+
+    if (existingBucket.status === "Completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Completed bucket cannot be updated",
+      });
+    }
+
+    // =====================================================
+    // BODY
+    // =====================================================
+
+    const {
+      title,
+      description,
+
+      assignmentMode,
+
+      targetRole,
+      targetUsers,
+
+      startDate,
+      taskEndDays,
+
+      checklist,
+
+      // dependency
+      isDependent,
+      taskDependent,
+      startTimeSetting,
+      isDependentFrequency,
+      xValue,
+
+      // recurrence
+      isRecurrent,
+      frequency,
+      weekDays,
+      endDate,
+
+      remark,
+    } = req.body;
+
+    // =====================================================
+    // BOOLEAN FIX
+    // =====================================================
+
+    const dependentEnabled = String(isDependent) === "true";
+
+    const recurrentEnabled = String(isRecurrent) === "true";
+
+    // =====================================================
+    // VALIDATION
+    // =====================================================
+
+    if (!title?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Title required",
+      });
+    }
+
+    if (!description?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Description required",
+      });
+    }
+
+    // =====================================================
+    // USERS
+    // =====================================================
+
+    let parsedUsers = [];
+
+    if (assignmentMode === "Users") {
+      parsedUsers =
+        typeof targetUsers === "string"
+          ? JSON.parse(targetUsers)
+          : targetUsers;
+
+      if (!Array.isArray(parsedUsers) || parsedUsers.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Please select users",
+        });
+      }
+    }
+
+    // =====================================================
+    // FILES
+    // =====================================================
+
+    let uploadedFiles = existingBucket.attachmentFile || [];
+
+    if (req.files?.length > 0) {
+      const newFiles = req.files.map(
+        (file) => `${req.uploadFolder}/${file.filename}`,
+      );
+
+      uploadedFiles = [...uploadedFiles, ...newFiles];
+    }
+
+    // =====================================================
+    // DISTRIBUTION USERS
+    // =====================================================
+
+    let distributionUsers = [];
+
+    let assignedUsers = [];
+
+    if (assignmentMode === "Users") {
+      distributionUsers = parsedUsers.map((u) => ({
+        user: u,
+        status: "Pending",
+        distributedAt: null,
+      }));
+
+      assignedUsers = parsedUsers;
+    }
+
+    if (assignmentMode === "Role") {
+      const roleUsers = await User.find({
+        role: targetRole,
+      }).select("_id");
+
+      assignedUsers = roleUsers.map((u) => u._id);
+
+      distributionUsers = roleUsers.map((u) => ({
+        user: u._id,
+        status: "Pending",
+        distributedAt: null,
+      }));
+    }
+
+    // =====================================================
+    // UPDATE DATA
+    // =====================================================
+
+    existingBucket.title = title.trim();
+
+    existingBucket.description = description.trim();
+
+    existingBucket.assignmentMode = assignmentMode;
+
+    existingBucket.targetRole =
+      assignmentMode === "Role" ? targetRole : null;
+
+    existingBucket.targetUsers =
+      assignmentMode === "Users" ? parsedUsers : [];
+
+    existingBucket.assignedTargetUsers = assignedUsers;
+
+    existingBucket.targetUserDistribution = distributionUsers;
+
+    existingBucket.startDate =
+      !dependentEnabled && startDate ? startDate : null;
+
+    existingBucket.taskEndDays =
+      !recurrentEnabled && taskEndDays
+        ? Number(taskEndDays)
+        : null;
+
+    existingBucket.checklist = checklist
+      ? JSON.parse(checklist)
+      : [];
+
+    // =====================================================
+    // DEPENDENCY
+    // =====================================================
+
+    existingBucket.isDependent = dependentEnabled;
+
+    existingBucket.dependencyConfig = dependentEnabled
+      ? {
+          taskDependent,
+
+          startTimeSetting,
+
+          isDependentFrequency,
+
+          xValue: Number(xValue),
+        }
+      : {
+          taskDependent: null,
+          startTimeSetting: null,
+          isDependentFrequency: null,
+          xValue: null,
+        };
+
+    // =====================================================
+    // RECURRENCE
+    // =====================================================
+
+    existingBucket.isRecurrent = recurrentEnabled;
+
+    existingBucket.frequency = recurrentEnabled
+      ? frequency
+      : null;
+
+    existingBucket.weekDays =
+      recurrentEnabled && weekDays
+        ? JSON.parse(weekDays)
+        : [];
+
+    existingBucket.endDate =
+      recurrentEnabled && endDate ? endDate : null;
+
+    // =====================================================
+    // FILES
+    // =====================================================
+
+    existingBucket.attachmentFile = uploadedFiles;
+
+    // =====================================================
+    // REMARK
+    // =====================================================
+
+    existingBucket.remark = remark || "";
+
+    // =====================================================
+    // RESET STATUS
+    // =====================================================
+
+    existingBucket.distributionStatus = "Pending";
+
+    // =====================================================
+    // SAVE
+    // =====================================================
+
+    await existingBucket.save();
+
+    // =====================================================
+    // POPULATE
+    // =====================================================
+
+    await existingBucket.populate([
+      {
+        path: "createdBy",
+        select: "name email",
+      },
+      {
+        path: "targetUsers",
+        select: "name email",
+      },
+      {
+        path: "targetRole",
+        select: "name",
+      },
+    ]);
+
+    // =====================================================
+    // RESPONSE
+    // =====================================================
+
+    return res.status(200).json({
+      success: true,
+      message: "Task bucket updated successfully",
+      data: existingBucket,
+    });
+  } catch (err) {
+    console.log(err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to update task bucket",
     });
   }
 };

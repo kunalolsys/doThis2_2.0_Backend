@@ -48,6 +48,9 @@ import Conversations from "../models/queries/Conversation.js";
 import { taskReopenedEmail } from "../services/templates/reopenTaskTemplate.js";
 import sendEmail from "../services/emailService.js";
 import { taskCompletedTemplate } from "../services/templates/taskCompleteTemp.js";
+import TaskBucket from "../models/TaskBucket.js";
+import { generateRecurringTasks } from "../cron/assignRecurringTask.js";
+import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -519,72 +522,26 @@ export const createTask = handleAsync(async (req, res, next) => {
     newTask.isVisible = false;
     // Save
     await newTask.save();
+    await generateRecurringTasks(newTask._id);
+    const emailTemplate = taskAssignedTemplate({
+      userName: assignedUser.name,
+
+      taskId: newTask.TaskId,
+
+      title: newTask.title,
+
+      description: newTask.description,
+
+      dueDate: newTask.dueDate
+        ? new Date(newTask.dueDate).toLocaleString("en-IN")
+        : "N/A",
+
+      assignedBy:req.user?.name
+    });
     sendEmail({
       to: assignedUser.email,
-
-      subject: `📌 New Task Assigned - ${newTask.TaskId}`,
-
-      html: `
-      <div style="font-family:Arial,sans-serif;padding:20px;">
-        <h2 style="color:#2563eb;">New Task Assigned</h2>
-
-        <p>Hello ${assignedUser.name},</p>
-
-        <p>You have been assigned a new task.</p>
-
-        <table cellpadding="8" cellspacing="0" border="0">
-          <tr>
-            <td><b>Task ID</b></td>
-            <td>${newTask.TaskId}</td>
-          </tr>
-
-          <tr>
-            <td><b>Title</b></td>
-            <td>${newTask.title}</td>
-          </tr>
-
-          <tr>
-            <td><b>Description</b></td>
-            <td>${newTask.description}</td>
-          </tr>
-
-          <tr>
-            <td><b>Start Date</b></td>
-            <td>
-              ${
-                newTask.startDate
-                  ? new Date(newTask.startDate).toLocaleString("en-IN")
-                  : "-"
-              }
-            </td>
-          </tr>
-
-          <tr>
-            <td><b>Due Date</b></td>
-            <td>
-              ${
-                newTask.dueDate
-                  ? new Date(newTask.dueDate).toLocaleString("en-IN")
-                  : "-"
-              }
-            </td>
-          </tr>
-
-          <tr>
-            <td><b>Priority</b></td>
-            <td>${newTask.priority || "Normal"}</td>
-          </tr>
-        </table>
-
-        <br/>
-
-        <p>Please login to the system to review the task.</p>
-
-        <br/>
-
-        <p>Thanks,<br/>Task Management System</p>
-      </div>
-    `,
+      subject: emailTemplate.subject,
+      html: emailTemplate.html,
     });
     // if (delegationFlowEnabled) {
     //   await TaskDelegationFlow.create({
@@ -3588,6 +3545,13 @@ export const deleteTask = handleAsync(async (req, res, next) => {
       return next(new AppError("Task not found", 404));
     }
 
+    if (task.bucketId) {
+      await TaskBucket.findByIdAndUpdate(task.bucketId, {
+        $pull: {
+          generatedTasks: task._id,
+        },
+      });
+    }
     // Delete task
     await Task.deleteOne({ _id: id });
 

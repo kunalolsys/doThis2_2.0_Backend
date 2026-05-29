@@ -12,7 +12,10 @@ import { startOfDay } from "date-fns";
 
 // 🔥 FMS Instance Task Visibility Cron (separate from regular tasks)
 const makeFmsTasksVisible = async () => {
-  console.log("👁️  [FMS TASK VISIBILITY] Checking...", new Date().toISOString());
+  console.log(
+    "👁️  [FMS TASK VISIBILITY] Checking...",
+    new Date().toISOString(),
+  );
 
   try {
     const now = new Date();
@@ -40,7 +43,7 @@ const makeFmsTasksVisible = async () => {
         const fmsTasksToCheck = await FmsInstanceTask.find({
           assignedTo: user._id,
           isVisible: { $ne: true },
-          status: { $in: ['Upcoming', 'Pending', 'Delayed', 'Overdue'] },
+          status: { $in: ["Upcoming", "Pending", "Delayed", "Overdue"] },
           $or: [
             {
               plannedStartDate: {
@@ -58,7 +61,7 @@ const makeFmsTasksVisible = async () => {
         for (const task of fmsTasksToCheck) {
           const taskDate = startOfDay(new Date(task.plannedStartDate));
           const isTaskHoliday = await isHoliday(taskDate);
-          
+
           if (!isTaskHoliday && isWorkingDay(taskDate, workShift)) {
             await FmsInstanceTask.findByIdAndUpdate(task._id, {
               isVisible: true,
@@ -71,12 +74,16 @@ const makeFmsTasksVisible = async () => {
 
         updatedCount += validTasks;
         if (validTasks > 0) {
-          console.log(`✅ FMS: Made ${validTasks} tasks VISIBLE for ${user.name}`);
+          console.log(
+            `✅ FMS: Made ${validTasks} tasks VISIBLE for ${user.name}`,
+          );
         }
       }
     }
 
-    console.log(`📊 [FMS VISIBILITY] ${processedUsers} users | ${updatedCount} tasks | ${new Date().toISOString()}`);
+    console.log(
+      `📊 [FMS VISIBILITY] ${processedUsers} users | ${updatedCount} tasks | ${new Date().toISOString()}`,
+    );
   } catch (error) {
     console.error("❌ FMS Visibility Cron Error:", error);
   }
@@ -85,7 +92,7 @@ const makeFmsTasksVisible = async () => {
 // Hide FMS tasks after shift
 const hideFmsCompletedShiftTasks = async () => {
   console.log("🔒 [FMS HIDE CRON] Overnight cleanup...");
-  
+
   try {
     const now = new Date();
 
@@ -128,18 +135,16 @@ const hideFmsCompletedShiftTasks = async () => {
 const startFmsVisibilityCron = () => {
   // Same schedule as main cron
   // cron.schedule('*/5 9-18 * * 1-5', makeFmsTasksVisible, {
-  cron.schedule("*/3 * * * * *", makeFmsTasksVisible, {
-
+  cron.schedule("*/5 9-18 * * 1-5", makeFmsTasksVisible, {
     timezone: "Asia/Kolkata",
   });
 
-//   // Hide at night
-//   cron.schedule('0 18 * * *', hideFmsCompletedShiftTasks, {
-//     timezone: "Asia/Kolkata"
-//   });
-  
+  //   // Hide at night
+  //   cron.schedule('0 18 * * *', hideFmsCompletedShiftTasks, {
+  //     timezone: "Asia/Kolkata"
+  //   });
+
   console.log("👁️  FMS Instance Task Visibility Cron Started ✅");
 };
 
 export default startFmsVisibilityCron;
-

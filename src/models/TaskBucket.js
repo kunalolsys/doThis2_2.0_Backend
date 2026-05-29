@@ -209,6 +209,23 @@ const TaskBucketSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deleteRemark: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
