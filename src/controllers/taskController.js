@@ -66,34 +66,26 @@ function parseDateIST(dateStr) {
   }
 
   if (typeof dateStr === "string") {
-    // Attempt to parse DD-MM-YYYY
     const ddMMyyyyMatch = dateStr.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+
     if (ddMMyyyyMatch) {
-      const [_, day, month, year] = ddMMyyyyMatch;
-      const utcDate = new Date(
-        Date.UTC(Number(year), Number(month) - 1, Number(day)),
-      );
-      return new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
+      const [, day, month, year] = ddMMyyyyMatch;
+
+      return new Date(Number(year), Number(month) - 1, Number(day));
     }
 
-    // Attempt to parse YYYY-MM-DD
     const yyyyMMddMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
     if (yyyyMMddMatch) {
-      const [_, year, month, day] = yyyyMMddMatch;
-      const utcDate = new Date(
-        Date.UTC(Number(year), Number(month) - 1, Number(day)),
-      );
-      return new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
+      const [, year, month, day] = yyyyMMddMatch;
+
+      return new Date(Number(year), Number(month) - 1, Number(day));
     }
   }
 
-  // Fallback to native Date parsing, might still fail for some ambiguous formats
-  const nativeParsedDate = new Date(dateStr);
-  if (!isNaN(nativeParsedDate.getTime())) {
-    return new Date(nativeParsedDate.getTime() + 5.5 * 60 * 60 * 1000); // Add IST offset
-  }
+  const parsed = new Date(dateStr);
 
-  return null; // Return null if unable to parse
+  return isNaN(parsed.getTime()) ? null : parsed;
 }
 
 // Helper: Clean "null"/"undefined" strings from FormData
@@ -4650,17 +4642,39 @@ export const updateTask = handleAsync(async (req, res, next) => {
   }
 
   // Handle date updates (Your original parsing logic)
-  if (startDate !== undefined) {
-    task.startDate = cleanField(startDate) ? parseDateIST(startDate) : null;
-    shouldRecalculateStatus = true;
+  if (startDate !== undefined && cleanField(startDate)) {
+    const oldStartDate = task.startDate; // existing DB value
+
+    const newDate = new Date(startDate);
+
+    if (oldStartDate) {
+      newDate.setHours(
+        oldStartDate.getHours(),
+        oldStartDate.getMinutes(),
+        oldStartDate.getSeconds(),
+        oldStartDate.getMilliseconds(),
+      );
+    }
+
+    task.startDate = newDate;
   }
-  if (dueDate !== undefined) {
-    task.dueDate = cleanField(dueDate) ? parseDateIST(dueDate) : null;
-    shouldRecalculateStatus = true;
+  if (dueDate !== undefined && cleanField(dueDate)) {
+    const oldDueDate = task.dueDate;
+
+    const newDate = new Date(dueDate);
+
+    if (oldDueDate) {
+      newDate.setHours(
+        oldDueDate.getHours(),
+        oldDueDate.getMinutes(),
+        oldDueDate.getSeconds(),
+        oldDueDate.getMilliseconds(),
+      );
+    }
+
+    task.dueDate = newDate;
   }
-  let effectiveStartDate = cleanField(startDate)
-    ? parseDateIST(startDate)
-    : null;
+  let effectiveStartDate = task.startDate;
   if (taskEndDays !== null && taskEndDays > 0 && task.assignedTo) {
     task.taskEndDays = Number(taskEndDays);
     const user = await User.findById(task.assignedTo).populate("assignShift");
@@ -4758,19 +4772,62 @@ export const updateTask = handleAsync(async (req, res, next) => {
 
         let newStartDate;
 
-        // ✅ HANDLE HOURS
-        if (freq.includes("hour")) {
-          baseDate.setHours(baseDate.getHours() + x);
+        // ======================
+        // HOURS
+        // ======================
+        if (freqStr.includes("hour")) {
+          let calculatedDate = new Date(baseDate);
 
-          newStartDate = await nextWorkingShiftDate(baseDate, workShift._id);
+          calculatedDate.setHours(calculatedDate.getHours() + x);
+
+          const shiftStart = snapToShiftTime(calculatedDate, workShift, true);
+
+          const shiftEnd = snapToShiftTime(calculatedDate, workShift, false);
+
+          if (calculatedDate < shiftStart) {
+            newStartDate = shiftStart;
+          } else if (calculatedDate >= shiftEnd) {
+            const nextDay = new Date(calculatedDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            newStartDate = await nextWorkingShiftDate(nextDay, workShift._id);
+          } else {
+            newStartDate = calculatedDate;
+          }
         }
-        // ✅ HANDLE DAYS (WITH HOLIDAY + SHIFT)
+
+        // ======================
+        // DAYS
+        // ======================
         else {
-          newStartDate = await addWorkingDaysHoliday(
+          let plannedDate = await addWorkingDaysHoliday(
             baseDate,
             x,
             workShift._id,
           );
+
+          // preserve actual completion time
+          plannedDate.setHours(
+            baseDate.getHours(),
+            baseDate.getMinutes(),
+            baseDate.getSeconds(),
+            baseDate.getMilliseconds(),
+          );
+
+          const shiftStart = snapToShiftTime(plannedDate, workShift, true);
+
+          const shiftEnd = snapToShiftTime(plannedDate, workShift, false);
+
+          if (plannedDate < shiftStart) {
+            plannedDate = shiftStart;
+          } else if (plannedDate >= shiftEnd) {
+            const nextDay = new Date(plannedDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            plannedDate = await nextWorkingShiftDate(nextDay, workShift._id);
+          }
+
+          newStartDate = plannedDate;
         }
 
         let newDueDate = null;
@@ -4795,15 +4852,13 @@ export const updateTask = handleAsync(async (req, res, next) => {
         const taskDays = Number(depTask.taskEndDays);
 
         if (!isNaN(taskDays) && taskDays > 0) {
-          // ✅ FIXED
           newDueDate = await addWorkingDaysHoliday(
             newStartDate,
             taskDays,
             workShift._id,
           );
-          console.log(`✅ Due: ${newDueDate}`);
-        } else {
-          console.log(`⚠️ Skip dueDate: invalid taskEndDays (${taskDays})`);
+
+          newDueDate = snapToShiftTime(newDueDate, workShift, false);
         }
 
         // ✅ FIXED: Use populate + direct save for discriminator
