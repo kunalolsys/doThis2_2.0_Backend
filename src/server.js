@@ -19,6 +19,7 @@ import startRecurringFmsTaskJob from "./cron/assignRecurringFmsTask.js";
 import { initSocket } from "./socket.js";
 import "../scripts/seedSuperRolesAndUser.js";
 import ModuleSetting from "./models/ModuleSetting.js";
+import "./services/telegram/telegramBOT.js";
 dotenv.config();
 
 const server = http.createServer(app);

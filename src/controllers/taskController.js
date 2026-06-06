@@ -32,6 +32,7 @@ import {
   addWorkingDays,
   addWorkingDaysHoliday,
   isHoliday,
+  snapToShiftTime,
 } from "../utils/dateCalculator.js";
 import { createLog } from "./logController.js";
 import ScheduleHolidayTask from "../models/ScheduleHolidayTask.js";
@@ -51,6 +52,7 @@ import { taskCompletedTemplate } from "../services/templates/taskCompleteTemp.js
 import TaskBucket from "../models/TaskBucket.js";
 import { generateRecurringTasks } from "../cron/assignRecurringTask.js";
 import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 
 // Helper: Parse Date to IST safely handling strings
 function parseDateIST(dateStr) {
@@ -403,29 +405,70 @@ export const createTask = handleAsync(async (req, res, next) => {
           ).toLowerCase();
 
           // 🔹 Step 1: Use only parent DATE
-          let baseDate = new Date(parentEnd);
-          baseDate.setHours(0, 0, 0, 0); // zero time
+          // 🔹 Step 1: Use parent planned end date WITH TIME
+          const parentDate = new Date(parentEnd);
 
-          // 🔹 Step 2: Determine start date based on frequency type
-          let childStart;
+          let newStartDate;
+
+          // ======================
+          // HOURS
+          // ======================
           if (freqStr.includes("hour")) {
-            // Hour-based: shift start + X hours
-            const shiftStart = await nextWorkingShiftDate(
-              baseDate,
-              workShift._id,
-            );
-            childStart = new Date(shiftStart);
-            childStart.setHours(childStart.getHours() + x);
-          } else {
-            // Day-based: add X working days → shift start of that day
-            childStart = await addWorkingDaysHoliday(
-              baseDate,
+            let calculatedDate = new Date(parentDate);
+
+            calculatedDate.setHours(calculatedDate.getHours() + x);
+
+            const shiftStart = snapToShiftTime(calculatedDate, workShift, true);
+
+            const shiftEnd = snapToShiftTime(calculatedDate, workShift, false);
+
+            if (calculatedDate < shiftStart) {
+              newStartDate = shiftStart;
+            } else if (calculatedDate >= shiftEnd) {
+              const nextDay = new Date(calculatedDate);
+              nextDay.setDate(nextDay.getDate() + 1);
+
+              newStartDate = await nextWorkingShiftDate(nextDay, workShift._id);
+            } else {
+              newStartDate = calculatedDate;
+            }
+          }
+
+          // ======================
+          // DAYS
+          // ======================
+          else {
+            let plannedDate = await addWorkingDaysHoliday(
+              parentDate,
               x,
               workShift._id,
             );
+
+            // preserve parent's time
+            plannedDate.setHours(
+              parentDate.getHours(),
+              parentDate.getMinutes(),
+              parentDate.getSeconds(),
+              parentDate.getMilliseconds(),
+            );
+
+            const shiftStart = snapToShiftTime(plannedDate, workShift, true);
+
+            const shiftEnd = snapToShiftTime(plannedDate, workShift, false);
+
+            if (plannedDate < shiftStart) {
+              plannedDate = shiftStart;
+            } else if (plannedDate >= shiftEnd) {
+              const nextDay = new Date(plannedDate);
+              nextDay.setDate(nextDay.getDate() + 1);
+
+              plannedDate = await nextWorkingShiftDate(nextDay, workShift._id);
+            }
+
+            newStartDate = plannedDate;
           }
 
-          commonFields.startDate = childStart;
+          commonFields.startDate = newStartDate;
 
           // 🔹 Step 3: Compute dueDate if taskEndDays exist
           if (parsedTaskEndDays) {
@@ -433,6 +476,12 @@ export const createTask = handleAsync(async (req, res, next) => {
               commonFields.startDate,
               parsedTaskEndDays,
               workShift._id,
+            );
+
+            commonFields.dueDate = snapToShiftTime(
+              commonFields.dueDate,
+              workShift,
+              false,
             );
           }
         } else {
@@ -536,13 +585,20 @@ export const createTask = handleAsync(async (req, res, next) => {
         ? new Date(newTask.dueDate).toLocaleString("en-IN")
         : "N/A",
 
-      assignedBy:req.user?.name
+      assignedBy: req.user?.name,
     });
     sendEmail({
       to: assignedUser.email,
       subject: emailTemplate.subject,
       html: emailTemplate.html,
     });
+    if (newTask.taskType === "DelegationTask" && !newTask.isDependent) {
+      sendNotification({
+        type: "TASK_ASSIGNED",
+        task: newTask,
+        actor: req.user,
+      });
+    }
     // if (delegationFlowEnabled) {
     //   await TaskDelegationFlow.create({
     //     taskId: newTask._id,
@@ -3388,6 +3444,12 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
       // `,
       // });
     }
+    sendNotification({
+      type: "TASK_COMPLETED",
+      task: existingTask,
+      actor: req.user,
+      userId: existingTask.assignedBy._id,
+    });
     // ======================================================
     // DATABASE NOTIFICATION
     // ======================================================
@@ -3473,38 +3535,80 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
           depTask.dependencyConfig.isDependentFrequency || ""
         ).toLowerCase();
 
-        // 🔹 Step 1: Base date = parent dueDate (or completedAt) → only DATE part
-        let baseDate = updatedTask.dueDate
-          ? new Date(updatedTask.dueDate)
-          : updatedTask.completedAt
-            ? new Date(updatedTask.completedAt)
-            : new Date();
-        baseDate.setHours(0, 0, 0, 0);
+        // 🔹 Use ACTUAL completion date WITH TIME
+        const parentDate = new Date(updatedTask.completedAt);
 
-        // 🔹 Step 2: Compute child start date based on hours or days
         let childStart;
+
+        // ======================
+        // HOURS
+        // ======================
         if (freqStr.includes("hour")) {
-          // Hour-based: shift start + X hours
-          const shiftStart = await nextWorkingShiftDate(
-            baseDate,
-            workShift._id,
-          );
-          childStart = new Date(shiftStart);
-          childStart.setHours(childStart.getHours() + x);
-        } else {
-          // Day-based: add X working days → shift start of that day
-          childStart = await addWorkingDaysHoliday(baseDate, x, workShift._id);
+          let calculatedDate = new Date(parentDate);
+
+          calculatedDate.setHours(calculatedDate.getHours() + x);
+
+          const shiftStart = snapToShiftTime(calculatedDate, workShift, true);
+
+          const shiftEnd = snapToShiftTime(calculatedDate, workShift, false);
+
+          if (calculatedDate < shiftStart) {
+            childStart = shiftStart;
+          } else if (calculatedDate >= shiftEnd) {
+            const nextDay = new Date(calculatedDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            childStart = await nextWorkingShiftDate(nextDay, workShift._id);
+          } else {
+            childStart = calculatedDate;
+          }
         }
 
-        // 🔹 Step 3: Compute child due date if taskEndDays exist
+        // ======================
+        // DAYS
+        // ======================
+        else {
+          let plannedDate = await addWorkingDaysHoliday(
+            parentDate,
+            x,
+            workShift._id,
+          );
+
+          // preserve actual completion time
+          plannedDate.setHours(
+            parentDate.getHours(),
+            parentDate.getMinutes(),
+            parentDate.getSeconds(),
+            parentDate.getMilliseconds(),
+          );
+
+          const shiftStart = snapToShiftTime(plannedDate, workShift, true);
+
+          const shiftEnd = snapToShiftTime(plannedDate, workShift, false);
+
+          if (plannedDate < shiftStart) {
+            plannedDate = shiftStart;
+          } else if (plannedDate >= shiftEnd) {
+            const nextDay = new Date(plannedDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            plannedDate = await nextWorkingShiftDate(nextDay, workShift._id);
+          }
+
+          childStart = plannedDate;
+        }
+
         let childDue = null;
         const taskDays = Number(depTask.taskEndDays || 0);
+
         if (!isNaN(taskDays) && taskDays > 0) {
           childDue = await addWorkingDaysHoliday(
             childStart,
             taskDays,
             workShift._id,
           );
+
+          childDue = snapToShiftTime(childDue, workShift, false);
         }
 
         // 🔹 Step 4: Update child task

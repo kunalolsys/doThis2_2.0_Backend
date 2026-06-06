@@ -9,6 +9,7 @@ import Conversations from "../models/queries/Conversation.js";
 import Messages from "../models/queries/Message.js";
 import sendEmail from "../services/emailService.js";
 import { taskReopenedEmail } from "../services/templates/reopenTaskTemplate.js";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 
 // Reopen task: uses isReopen, reopenedBy, reopenedAt
 // Also resets status back to Pending (and clears completedAt/taskDoneBy) as confirmed by user.
@@ -120,12 +121,19 @@ export const reopenTask = handleAsync(async (req, res, next) => {
     task.assignedTo?.email &&
     task.assignedTo._id.toString() !== reopenedBy?.toString()
   ) {
-     sendEmail({
+    sendEmail({
       to: task.assignedTo.email,
       subject: `Task Reopened — ${task.TaskId}: ${task.title}`,
       html: taskReopenedEmail({ task, reopenReason, frontendUrl }),
     });
   }
+  sendNotification({
+    type: "TASK_REOPENED",
+    task: task,
+    actor: req.user,
+    userId: task.assignedTo._id,
+    remark:reopenReason
+  });
   // ======================================================
   // DATABASE NOTIFICATION
   // ======================================================

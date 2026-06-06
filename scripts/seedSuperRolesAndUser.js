@@ -6,15 +6,77 @@ import User from "../src/models/User.js";
 
 import ModuleSetting from "../src/models/ModuleSetting.js";
 import WorkShift from "../src/models/WorkShift.js";
+import Department from "../src/models/Department.js";
+import WorkingWeek from "../src/models/WorkingWeek.js";
 
 dotenv.config();
 
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
-}
+// function must(name) {
+//   const v = process.env[name];
+//   if (!v) throw new Error(`Missing env var: ${name}`);
+//   return v;
+// }
+async function ensureDefaultModules() {
+  const modules = ["DO_THIS2", "FMS_ENGINE", "COMPANY_SETUP"];
 
+  for (const moduleKey of modules) {
+    await ModuleSetting.findOneAndUpdate(
+      { moduleKey },
+      {
+        $setOnInsert: {
+          moduleKey,
+          isEnabled: true,
+          updatedBy: null,
+        },
+      },
+      {
+        upsert: true,
+      },
+    );
+  }
+
+  console.log("Default module settings ensured.");
+}
+async function ensureDefaultWorkingWeek() {
+  let workingWeek = await WorkingWeek.findOne({
+    isDefault: true,
+  });
+
+  if (!workingWeek) {
+    workingWeek = await WorkingWeek.create({
+      workingDays: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: false,
+      },
+      isDefault: true,
+    });
+
+    console.log("Default working week created.");
+  }
+
+  return workingWeek;
+}
+async function ensureOpenDepartment() {
+  let department = await Department.findOne({
+    name: "Open Department",
+    isDeleted: false,
+  });
+
+  if (!department) {
+    department = await Department.create({
+      name: "Open Department",
+    });
+
+    console.log("Open Department created.");
+  }
+
+  return department;
+}
 async function ensureRole({ name, permissions }) {
   const role = await Role.findOne({ name });
   if (!role) {
@@ -32,7 +94,76 @@ async function ensureRole({ name, permissions }) {
   await role.save();
   return role;
 }
+async function ensureDefaultShift() {
+  let shift = await WorkShift.findOne({
+    name: "General Shift",
+    isDeleted: false,
+  });
 
+  if (!shift) {
+    shift = await WorkShift.create({
+      name: "General Shift",
+      startTime: "09:00",
+      endTime: "18:00",
+      workingDays: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true,
+      },
+    });
+
+    console.log("Default shift created.");
+  }
+
+  return shift;
+}
+async function ensureUser({
+  employeeCode,
+  name,
+  email,
+  phone,
+  password,
+  roleId,
+  assignShift,
+  departmentIds,
+}) {
+  const existing = await User.findOne({
+    $or: [{ email: email.toLowerCase() }, { employeeCode }],
+    isDeleted: false,
+  });
+
+  if (existing) {
+    console.log(
+      `User already exists (${existing.email} | ${existing.employeeCode}). Skipping.`,
+    );
+    return existing;
+  }
+
+  const user = await User.create({
+    name,
+    email: email.toLowerCase(),
+    phone,
+    employeeCode,
+    companyCode: "",
+    department: departmentIds,
+    role: roleId,
+    reportingManager: null,
+    assignShift,
+    password,
+    isActive: true,
+    isEmailNotificationEnabled: false,
+    mainEmailType: "email",
+    secondaryEmail: "",
+    refreshToken: null,
+  });
+
+  console.log(`${name} created.`);
+  return user;
+}
 async function main() {
   const MONGODB_URI =
     process.env.MONGODB_URI ||
@@ -40,12 +171,12 @@ async function main() {
     "mongodb://localhost:27017/dothis2";
 
   await mongoose.connect(MONGODB_URI);
-
   // Ensure fixed roles exist (your Role model has initializeFixedRoles)
   if (typeof Role.initializeFixedRoles === "function") {
     await Role.initializeFixedRoles();
   }
 
+  await ensureDefaultModules();
   // 1) Create SUPER role (single role that contains all permissions)
   const allPermissions = [
     "Setup",
@@ -53,84 +184,107 @@ async function main() {
     "Delegation Task",
     "FmsEngine",
     "Module Management",
+    "Company Setup",
     "Task Reassigning",
     "My Bucket",
     "Bucket",
   ];
-
+  const mgSmgPermissions = [
+    "Setup",
+    "Reports",
+    "Delegation Task",
+    "FmsEngine",
+    "Module Management",
+    "Company Setup",
+    "Task Reassigning",
+    "My Bucket",
+    // "Bucket",
+  ];
   const superRole = await ensureRole({
     name: "Super",
     permissions: allPermissions,
   });
 
+  const adminRole = await ensureRole({
+    name: "Admin",
+    permissions: allPermissions,
+  });
+
+  const srManagerRole = await ensureRole({
+    name: "Sr. Manager",
+    permissions: mgSmgPermissions,
+  });
+  const managerRole = await ensureRole({
+    name: "Manager",
+    permissions: mgSmgPermissions,
+  });
+
   // 2) Create/update super user
-  const SUPERUSER_EMAIL = must("SUPERUSER_EMAIL").toLowerCase().trim();
-  const SUPERUSER_PASSWORD = must("SUPERUSER_PASSWORD");
+  const SUPERUSER_EMAIL = process.env.SUPERUSER_EMAIL || "super@gmail.com";
+  const SUPERUSER_PASSWORD = process.env.SUPERUSER_PASSWORD || "Super@123";
 
   const SUPERUSER_PHONE = process.env.SUPERUSER_PHONE || "9999999999";
   const SUPERUSER_NAME = process.env.SUPERUSER_NAME || "Super User";
 
   // Your User schema requires assignShift (WorkShift id).
   // For simplicity, pick the first WorkShift record if env is not provided.
-  let assignShift = process.env.SUPERUSER_ASSIGNSHIFT_ID;
+  // let assignShift = process.env.SUPERUSER_ASSIGNSHIFT_ID;
+  const defaultShift = await ensureDefaultShift();
+  const openDepartment = await ensureOpenDepartment();
+  await ensureDefaultWorkingWeek();
+  let assignShift = defaultShift._id.toString();
+  const departmentIds = [openDepartment._id];
+  // if (!assignShift) {
+  //   const firstShift = await WorkShift.findOne({});
+  //   if (!firstShift)
+  //     throw new Error(
+  //       "No WorkShift records found in DB to set SUPER user assignShift",
+  //     );
+  //   assignShift = firstShift._id.toString();
+  // }
 
-  if (!assignShift) {
-    const firstShift = await WorkShift.findOne({});
-    if (!firstShift)
-      throw new Error(
-        "No WorkShift records found in DB to set SUPER user assignShift",
-      );
-    assignShift = firstShift._id.toString();
-  }
-
-  const existing = await User.findOne({
-    email: SUPERUSER_EMAIL,
-    isDeleted: false,
+  await ensureUser({
+    employeeCode: "SUPER001",
+    name: "Super User",
+    email: process.env.SUPERUSER_EMAIL || "super@gmail.com",
+    phone: "1234567890",
+    password: process.env.SUPERUSER_PASSWORD || "Super@123",
+    roleId: superRole._id,
+    assignShift,
+    departmentIds,
   });
 
-  if (!existing) {
-    await User.create({
-      srNo: 0,
-      name: SUPERUSER_NAME,
-      email: SUPERUSER_EMAIL,
-      phone: SUPERUSER_PHONE,
-      employeeCode: "",
-      companyCode: "",
-      department: [],
-      role: superRole._id,
-      reportingManager: null,
-      assignShift,
-      password: SUPERUSER_PASSWORD,
-      isActive: true,
-      isEmailNotificationEnabled: false,
-      mainEmailType: "email",
-      secondaryEmail: "",
-      refreshToken: null,
-    });
-    console.log("Super user created.");
-  } else {
-    let changed = false;
-    if (existing.role?.toString() !== superRole._id.toString()) {
-      existing.role = superRole._id;
-      changed = true;
-    }
+  await ensureUser({
+    employeeCode: "ADMIN001",
+    name: "Admin",
+    email: "admin@dothis2.com",
+    phone: "1234567810",
+    password: "Admin@123",
+    roleId: adminRole._id,
+    assignShift,
+    departmentIds,
+  });
 
-    // update password always (schema will hash on save)
-    existing.password = SUPERUSER_PASSWORD;
-    existing.isActive = true;
-    existing.phone = SUPERUSER_PHONE;
-    existing.name = SUPERUSER_NAME;
-    existing.assignShift = assignShift;
-
-    if (changed) {
-      await existing.save();
-    } else {
-      // still save to apply password hash
-      await existing.save();
-    }
-
-    console.log("Super user ensured (updated).");
-  }
+  await ensureUser({
+    employeeCode: "SRMANAGER001",
+    name: "Sr Manager",
+    email: "srmanager@dothis2.com",
+    phone: "1224567890",
+    password: "SrManager@123",
+    roleId: srManagerRole._id,
+    assignShift,
+    departmentIds,
+  });
+  await ensureUser({
+    employeeCode: "MANAGER001",
+    name: "Manager",
+    email: "manager@dothis2.com",
+    phone: "1234562290",
+    password: "Manager@123",
+    roleId: managerRole._id,
+    assignShift,
+    departmentIds,
+  });
 
   // 3) Ensure ModuleSetting rows exist for known module keys
   const defaultModules = ["DO_THIS2", "FMS_ENGINE", "COMPANY_SETUP"];

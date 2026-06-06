@@ -29,7 +29,7 @@ const userSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: true,
+      // required: true,
       // unique: true,
       trim: true,
       lowercase: true,
@@ -114,6 +114,18 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    telegramChatId: {
+      type: String,
+      default: null,
+    },
+    telegramUserName: {
+      type: String,
+      default: null,
+    },
+    telegramNotificationsEnabled: {
+      type: Boolean,
+      default: true,
+    },
     // isMailReceived: {
     //     type: Boolean,
     //     default: false,
@@ -151,8 +163,12 @@ userSchema.pre("save", async function (next) {
   }
   next();
 });
+// userSchema.index(
+//   { email: 1 },
+//   { unique: true, partialFilterExpression: { isDeleted: false } },
+// );
 userSchema.index(
-  { email: 1 },
+  { phone: 1 },
   { unique: true, partialFilterExpression: { isDeleted: false } },
 );
 

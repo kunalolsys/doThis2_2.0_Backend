@@ -9,17 +9,21 @@ import {
 import { handleAsync } from "../utils/handleAsync.js";
 
 export const login = handleAsync(async (req, res, next) => {
-  const { email, password } = req.body;
+  const { loginId, password } = req.body;
 
-  if (!email || !password) {
-    return next(new AppError("Email and password required", 400));
+  if (!loginId || !password) {
+    return next(new AppError("Email/Mobile and password required", 400));
   }
 
-  const emailNormalized = String(email).trim().toLowerCase();
+  const loginValue = String(loginId).trim().toLowerCase();
 
   // 🔍 Find user (primary + secondary email)
   const user = await User.findOne({
-    $or: [{ email: emailNormalized }, { secondaryEmail: emailNormalized }],
+    $or: [
+      { email: loginValue },
+      // { secondaryEmail: loginValue },
+      { phone: loginId },
+    ],
     isDeleted: false,
   })
     .select("+password +refreshToken")

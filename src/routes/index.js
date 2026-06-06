@@ -15,6 +15,7 @@ import companyProfileRoutes from "./CompanyRoutes.js";
 import openFormRoutes from "./openFormRoutes.js";
 import taskBucketsRoutes from "./taskBucketRoutes.js";
 import taskAudienceMastersRoutes from "./taskAudienceMasterRoutes.js";
+import emailRoutes from "./emailRoutes.js";
 import { moduleGate } from "../middleware/moduleGate.js";
 
 const router = express.Router();
@@ -52,4 +53,6 @@ router.use("/open-forms", openFormRoutes);
 router.use("/task-buckets", taskBucketsRoutes);
 
 router.use("/task-audience-masters", taskAudienceMastersRoutes);
+
+router.use("/email", emailRoutes);
 export default router;

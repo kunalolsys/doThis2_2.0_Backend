@@ -10,6 +10,7 @@ import {
   isHoliday,
 } from "../utils/dateCalculator.js";
 import { format } from "date-fns";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 
 // Helper: Check if today matches the frequency criteria
 const isTaskDueToday = (task) => {
@@ -56,6 +57,7 @@ const isTaskDueToday = (task) => {
 
 // 🔥 Main Job - WORKSHIFT AWARE
 export const generateRecurringTasks = async (recurringTaskId = null) => {
+  console.log("recurringTaskId", recurringTaskId);
   console.log("⏳ Cron: WorkShift-Aware Recurring Tasks...");
 
   try {
@@ -118,7 +120,9 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
       const shiftDueEnd = task.taskEndDays
         ? await addWorkingDays(todayShiftStart, task.taskEndDays, workShift._id)
         : snapToShiftTime(todayShiftStart, workShift, false); // End of shift
-
+      const assignedByUser = await User.findById(task.assignedBy).select(
+        "name email",
+      );
       // 🔥 3. CREATE DELEGATION INSTANCE
       const newDelegation = new DelegationTask({
         title: task.title,
@@ -147,6 +151,11 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
       await newDelegation.save();
       createdCount++;
+      sendNotification({
+        type: "TASK_ASSIGNED",
+        task: newDelegation,
+        actor: assignedByUser,
+      });
 
       console.log(
         `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "HH:mm")} to ${format(shiftDueEnd, "HH:mm")}`,
@@ -163,10 +172,16 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
 // Schedule: Daily at shift start time? Or keep 00:01 for batching
 const startCronJobs = () => {
-  cron.schedule("0 9 * * *", generateRecurringTasks, {
-    // cron.schedule("*/50 * * * * *", generateRecurringTasks, {
-    timezone: "Asia/Kolkata",
-  });
+  // cron.schedule("0 9 * * *", generateRecurringTasks, {
+  cron.schedule(
+    "*/5 * * * * *",
+    () => {
+      generateRecurringTasks(null);
+    },
+    {
+      timezone: "Asia/Kolkata",
+    },
+  );
   console.log("🔄 Recurring Cron scheduled: Daily 00:01 IST (WorkShift Aware)");
 };
 

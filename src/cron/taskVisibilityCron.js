@@ -129,9 +129,19 @@ const makeTasksVisible = async () => {
            * - delayed visibility recovery
            */
 
-          const withinVisibleWindow =
-            today >= firstVisibleDay && (!dueDay || today <= dueDay);
+          // const withinVisibleWindow =
+          //   today >= firstVisibleDay && (!dueDay || today <= dueDay);
+          let withinVisibleWindow = false;
 
+          if (task.isDependent) {
+            withinVisibleWindow =
+              task.startDate &&
+              now >= new Date(task.startDate) &&
+              (!task.dueDate || now <= new Date(task.dueDate));
+          } else {
+            withinVisibleWindow =
+              today >= firstVisibleDay && (!dueDay || today <= dueDay);
+          }
           if (!withinVisibleWindow) {
             continue;
           }
@@ -237,7 +247,7 @@ const hideCompletedShiftTasks = async () => {
 const startVisibilityCron = () => {
   // Check every 5 minutes during 9AM-6PM IST
   // cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
-  cron.schedule("*/5 9-18 * * 1-5", makeTasksVisible, {
+  cron.schedule("*/10 * * * * *", makeTasksVisible, {
     // cron.schedule("*/3 * * * * *", makeTasksVisible, {
     timezone: "Asia/Kolkata",
   });

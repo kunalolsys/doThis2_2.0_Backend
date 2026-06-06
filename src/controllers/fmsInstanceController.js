@@ -177,7 +177,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       `✅ ${instanceTask.taskId} → start=${dates.startDate?.toISOString()} due=${dates.dueDate?.toISOString()}`,
     );
   }
-  await generateRecurringFmsTasks();
+  await generateRecurringFmsTasks(instance._id);
   //**Set islaunched true for FMS template */
   await FmsTemplate.findByIdAndUpdate(templateId, {
     isLaunched: true,

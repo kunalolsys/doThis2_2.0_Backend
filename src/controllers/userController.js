@@ -268,6 +268,7 @@ export const createUser = handleAsync(async (req, res, next) => {
     name,
     email,
     phone,
+    telegramUserName,
     department,
     role,
     reportingManager,
@@ -277,6 +278,7 @@ export const createUser = handleAsync(async (req, res, next) => {
     secondaryEmail,
     mainEmailType,
     isEmailNotificationEnabled,
+    telegramNotificationsEnabled,
   } = req.body;
 
   if (!name || !email || !phone || !password) {
@@ -306,6 +308,8 @@ export const createUser = handleAsync(async (req, res, next) => {
     name,
     email,
     phone,
+    telegramUserName,
+    telegramNotificationsEnabled,
     employeeCode,
     department:
       Array.isArray(department) && department.length > 0
@@ -355,6 +359,8 @@ export const updateUser = handleAsync(async (req, res, next) => {
     name,
     email,
     phone,
+    telegramUserName,
+    telegramNotificationsEnabled,
     password,
     department,
     role,
@@ -377,8 +383,19 @@ export const updateUser = handleAsync(async (req, res, next) => {
       new AppError("Secondary email required when selected as main", 400),
     );
   }
-  if (name) user.name = name;
-  if (email) user.email = email;
+  // console.log("email@@@@",typeof email)
+  if (name !== undefined) user.name = name;
+  if (telegramUserName !== undefined) user.telegramUserName = telegramUserName;
+  if (telegramNotificationsEnabled !== undefined) user.telegramNotificationsEnabled = telegramNotificationsEnabled;
+  if (email !== undefined) {
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail) {
+      user.email = undefined; // or reject
+    } else {
+      user.email = cleanEmail.toLowerCase();
+    }
+  }
   if (isEmailNotificationEnabled !== undefined) {
     user.isEmailNotificationEnabled = isEmailNotificationEnabled;
   }
@@ -386,7 +403,7 @@ export const updateUser = handleAsync(async (req, res, next) => {
   if (mainEmailType) {
     user.mainEmailType = mainEmailType || "email";
   }
-  if (phone) user.phone = phone;
+  if (phone !== undefined) user.phone = phone;
   if (employeeCode !== undefined) {
     const codeTrim = String(employeeCode).trim();
     if (codeTrim) {

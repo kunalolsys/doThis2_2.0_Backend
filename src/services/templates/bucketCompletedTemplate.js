@@ -4,6 +4,7 @@ export const bucketCompletedTemplate = ({
   completedBy,
   completedAt,
   remark,
+  frontendUrl,
 }) => {
   return {
     subject: `Bucket Completed • ${bucketId} ${bucketTitle}`,
@@ -179,7 +180,21 @@ export const bucketCompletedTemplate = ({
                 </tr>
 
               </table>
+              </div>
+              ${
+                frontendUrl
+                  ? `
+            <div style="margin-top:35px;text-align:center;">
+              <a
+                href="${frontendUrl}"
+                style="display:inline-block;background:#16a34a;color:white;text-decoration:none;padding:14px 24px;border-radius:12px;font-size:14px;font-weight:700;"
+              >
+                View Bucket
+              </a>
             </div>
+          `
+                  : ""
+              }
 
             <!-- SUCCESS BADGE -->
             <div style="
@@ -195,7 +210,7 @@ export const bucketCompletedTemplate = ({
               font-size:13px;
               font-weight:700;
             ">
-              ✅ Bucket Status: Completed
+              Bucket Status: Completed
             </div>
 
           </div>

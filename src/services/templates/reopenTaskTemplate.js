@@ -201,7 +201,7 @@ export const taskReopenedEmail = ({ task, reopenReason, frontendUrl }) => {
               <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:16px 20px;">
                 <div style="font-size:12px;font-weight:700;color:#059669;text-transform:uppercase;
                   letter-spacing:0.6px;margin-bottom:8px;">
-                  ✅ What to do next
+                  What to do next
                 </div>
                 <ul style="margin:0;padding-left:18px;color:#065F46;font-size:13px;line-height:1.8;">
                   <li>Open the task and review the reopen reason</li>

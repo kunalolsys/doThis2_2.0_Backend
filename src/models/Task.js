@@ -175,7 +175,14 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-
+    plannedStartDate: {
+      type: Date,
+      default: null,
+    },
+    plannedDueDate: {
+      type: Date,
+      default: null,
+    },
     // distributionStatus: {
     //   type: String,
     //   enum: ["Awaiting Distribution", "Distributed", "Assigned"],

@@ -9,6 +9,7 @@ import Counter from "../models/Counter.js";
 import AppError from "../utils/AppError.js";
 import fmsDateCalculator from "../utils/fmsDateCalculator.js";
 import User from "../models/User.js";
+import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 
 const generateSlug = (text) => {
   return text
@@ -508,6 +509,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   submission.status = "Triggered";
 
   await submission.save();
+  await generateRecurringFmsTasks(instance._id);
 
   // =====================================================
   // 9. FINAL RESPONSE

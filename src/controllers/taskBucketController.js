@@ -13,6 +13,7 @@ import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js"
 import sendEmail from "../services/emailService.js";
 import { bucketCompletedTemplate } from "../services/templates/bucketCompletedTemplate.js";
 import { taskBucketAssignedTemplate } from "../services/templates/taskBucketAssignedTemp.js";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 
 // =======================================================
 // CREATE BUCKET TASK
@@ -403,9 +404,7 @@ export const createTaskBucket = async (req, res) => {
       // ===================================================
 
       if (user?.email) {
-        const frontendUrl = `${
-          process.env.BASE_URL
-        }/task-buckets/${bucket._id}`;
+        const frontendUrl = `${process.env.BASE_URL}/bucket/my-bucket`;
 
         const emailTemplate = taskBucketAssignedTemplate({
           userName: user.name,
@@ -428,7 +427,7 @@ export const createTaskBucket = async (req, res) => {
 
           createdBy: req.user?.name || "Manager",
 
-          // frontendUrl: `${process.env.BASE_URL}/task-buckets/${bucket._id}`,
+          frontendUrl,
         });
 
         sendEmail({
@@ -439,6 +438,12 @@ export const createTaskBucket = async (req, res) => {
           html: emailTemplate.html,
         });
       }
+      sendNotification({
+        type: "TASK_BUCKET_ASSIGNED",
+        task: bucket,
+        actor: req.user,
+        userId: user._id,
+      });
     }
 
     return res.status(201).json({
@@ -900,6 +905,12 @@ export const distributeTaskBucket = async (req, res) => {
           html: emailTemplate.html,
         });
       }
+      sendNotification({
+        type: "TASK_ASSIGNED",
+        task: task,
+        actor: req.user,
+        userId: assignedUser._id,
+      });
       createdTasks.push(task._id);
     }
     // =====================================================
@@ -1210,12 +1221,14 @@ export const completeTaskBucket = async (req, res) => {
     // =====================================================
 
     if (bucket.createdBy?.email) {
+      const frontendUrl = `${process.env.BASE_URL}/delegate/bucket-view`;
       const emailTemplate = bucketCompletedTemplate({
         bucketId: bucket.bucketId,
         bucketTitle: bucket.title,
         completedBy: completedUser?.name,
         completedAt: new Date(bucket.completedAt).toLocaleString("en-IN"),
         remark,
+        frontendUrl,
       });
 
       sendEmail({
@@ -1224,6 +1237,12 @@ export const completeTaskBucket = async (req, res) => {
         html: emailTemplate.html,
       });
     }
+      sendNotification({
+        type: "BUCKET_COMPLETED",
+        task: bucket,
+        actor: completedUser,
+        userId:bucket.createdBy._id
+      });
 
     // =====================================================
     // RESPONSE
@@ -1515,9 +1534,7 @@ export const updateTaskBucket = async (req, res) => {
 
     if (assignmentMode === "Users") {
       parsedUsers =
-        typeof targetUsers === "string"
-          ? JSON.parse(targetUsers)
-          : targetUsers;
+        typeof targetUsers === "string" ? JSON.parse(targetUsers) : targetUsers;
 
       if (!Array.isArray(parsedUsers) || parsedUsers.length === 0) {
         return res.status(400).json({
@@ -1583,11 +1600,9 @@ export const updateTaskBucket = async (req, res) => {
 
     existingBucket.assignmentMode = assignmentMode;
 
-    existingBucket.targetRole =
-      assignmentMode === "Role" ? targetRole : null;
+    existingBucket.targetRole = assignmentMode === "Role" ? targetRole : null;
 
-    existingBucket.targetUsers =
-      assignmentMode === "Users" ? parsedUsers : [];
+    existingBucket.targetUsers = assignmentMode === "Users" ? parsedUsers : [];
 
     existingBucket.assignedTargetUsers = assignedUsers;
 
@@ -1597,13 +1612,9 @@ export const updateTaskBucket = async (req, res) => {
       !dependentEnabled && startDate ? startDate : null;
 
     existingBucket.taskEndDays =
-      !recurrentEnabled && taskEndDays
-        ? Number(taskEndDays)
-        : null;
+      !recurrentEnabled && taskEndDays ? Number(taskEndDays) : null;
 
-    existingBucket.checklist = checklist
-      ? JSON.parse(checklist)
-      : [];
+    existingBucket.checklist = checklist ? JSON.parse(checklist) : [];
 
     // =====================================================
     // DEPENDENCY
@@ -1634,17 +1645,12 @@ export const updateTaskBucket = async (req, res) => {
 
     existingBucket.isRecurrent = recurrentEnabled;
 
-    existingBucket.frequency = recurrentEnabled
-      ? frequency
-      : null;
+    existingBucket.frequency = recurrentEnabled ? frequency : null;
 
     existingBucket.weekDays =
-      recurrentEnabled && weekDays
-        ? JSON.parse(weekDays)
-        : [];
+      recurrentEnabled && weekDays ? JSON.parse(weekDays) : [];
 
-    existingBucket.endDate =
-      recurrentEnabled && endDate ? endDate : null;
+    existingBucket.endDate = recurrentEnabled && endDate ? endDate : null;
 
     // =====================================================
     // FILES

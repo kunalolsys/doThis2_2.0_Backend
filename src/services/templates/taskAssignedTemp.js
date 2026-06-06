@@ -74,6 +74,21 @@ export const taskAssignedTemplate = ({
                 </tr>
               </table>
             </div>
+              ${
+              frontendUrl
+                ? `
+              <div style="margin-top:35px;text-align:center;">
+                <a
+                  href="${frontendUrl}"
+                  style="display:inline-block;background:#16a34a;color:white;text-decoration:none;padding:14px 24px;border-radius:12px;font-size:14px;font-weight:700;"
+                >
+                  View Task
+                </a>
+              </div>
+            `
+                : ""
+            }
+
           </div>
 
           <div style="padding:20px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#64748b;">

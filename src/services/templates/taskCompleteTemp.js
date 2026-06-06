@@ -70,17 +70,7 @@ export const taskCompletedTemplate = ({
                   </td>
 
                   <td style="padding:8px 0;font-size:14px;font-weight:600;color:#0f172a;">
-                    ${
-                      completedAt
-                        ? new Date(completedAt).toLocaleString("en-IN", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
-                        : "N/A"
-                    }
+                    ${completedAt}
                   </td>
                 </tr>
 

@@ -5,7 +5,7 @@ const sendEmail = async ({ to, subject, html }) => {
   try {
     // ✅ find user from primary or secondary email
     const user = await User.findOne({
-      $or: [{ email: to }, { secondaryEmail: to }],
+      $or: [{ email: to }],
     }).select("email secondaryEmail mainEmailType isEmailNotificationEnabled");
 
     // ✅ don't send if notifications disabled
@@ -30,16 +30,24 @@ const sendEmail = async ({ to, subject, html }) => {
       return null;
     }
 
+    //   const transporter = nodemailer.createTransport({
+    //       service: "gmail",
+    //       auth: {
+    //         user: process.env.SMTP_EMAIL,
+    //         pass: process.env.SMTP_PASS,
+    //       },
+    //     });
     const transporter = nodemailer.createTransport({
-      service: "gmail",
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: Number(process.env.SMTP_PORT) === 465,
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: process.env.SMTP_EMAIL,
+        pass: process.env.SMTP_PASS,
       },
     });
-
     const mailOptions = {
-      from: `"DoThis Task Manager" <${process.env.EMAIL_USER}>`,
+      from: `"DoThis2" <${process.env.SMTP_EMAIL}>`,
       to: sendTo,
       subject,
       html,
