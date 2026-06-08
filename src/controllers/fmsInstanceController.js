@@ -129,52 +129,118 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       "assignShift",
     );
 
-    const dates = await fmsDateCalculator.calculateFmsTaskDates(
-      tmplTask.toObject(),
-      launchDate,
-      instanceEnd,
-      doer.assignShift?._id,
-      prevTasks.map((t) => ({
-        taskId: t.taskId,
-        plannedDueDate: t.plannedDueDate,
-        plannedStartDate: t.plannedStartDate,
-      })),
-    );
+    let dates = {
+      startDate: null,
+      dueDate: null,
+    };
+
+    // ======================================================
+    // NO DEPENDENCY
+    // ======================================================
+
+    if (!tmplTask.isDependent) {
+      dates = await fmsDateCalculator.calculateFmsTaskDates(
+        tmplTask.toObject(),
+        launchDate,
+        instanceEnd,
+        doer.assignShift?._id,
+        prevTasks.map((t) => ({
+          taskId: t.taskId,
+          plannedDueDate: t.plannedDueDate,
+          plannedStartDate: t.plannedStartDate,
+        })),
+      );
+    }
+
+    // ======================================================
+    // PLANNED TO PLANNED
+    // ======================================================
+    else if (tmplTask.startTimeSetting === "planned-to-planned") {
+      dates = await fmsDateCalculator.calculateFmsTaskDates(
+        tmplTask.toObject(),
+        launchDate,
+        instanceEnd,
+        doer.assignShift?._id,
+        prevTasks.map((t) => ({
+          taskId: t.taskId,
+          plannedDueDate: t.plannedDueDate,
+          plannedStartDate: t.plannedStartDate,
+        })),
+      );
+    }
+
+    // ======================================================
+    // ACTUAL TO PLANNED
+    // ======================================================
+    else if (tmplTask.startTimeSetting === "actual-to-planned") {
+      dates = {
+        startDate: null,
+        dueDate: null,
+      };
+    }
 
     const instanceTaskData = {
       fmsInstanceId: instance._id,
       fmsTaskId: tmplTask._id,
+
       taskId: tmplTask.taskId,
       description: tmplTask.description,
+
       departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
+
       assignedTo: tmplTask.assignedTo,
       assignedBy: tmplTask.assignedBy,
+
       frequency: tmplTask.frequency,
+
       xValue: tmplTask.xValue,
+
       isDependent: tmplTask.isDependent,
       dependentOn: tmplTask.dependentOn,
       startTimeSetting: tmplTask.startTimeSetting,
+
       decisionStep: tmplTask.decisionStep,
       ifTrueStep: tmplTask.ifTrueStep,
       elseStep: tmplTask.elseStep,
+
       taskEndDays: tmplTask.taskEndDays || 0,
+
       plannedStartDate: dates.startDate,
       plannedDueDate: dates.dueDate,
-      status: calculateTaskStatus(dates.startDate, dates.dueDate),
-      isVisible: false, // Cron taskVisibilityCron.js handles
+
+      status:
+        tmplTask.startTimeSetting === "actual-to-planned"
+          ? "Upcoming"
+          : calculateTaskStatus(dates.startDate, dates.dueDate),
+
+      isVisible: false,
+
       updatedBy: userId,
+
       checklist: tmplTask.checklist || [],
+
       createdForm: tmplTask.createdForm || [],
     };
-    if (tmplTask.startTimeSetting === "actual-to-planned") {
+
+    // ======================================================
+    // WAIT FOR PARENT
+    // ======================================================
+
+    if (
+      tmplTask.isDependent &&
+      tmplTask.startTimeSetting === "actual-to-planned"
+    ) {
       instanceTaskData.waitingForParent = true;
     }
+
     const instanceTask = new FmsInstanceTask(instanceTaskData);
+
     await instanceTask.save();
+
     instanceTasks.push(instanceTask);
 
     console.log(
-      `✅ ${instanceTask.taskId} → start=${dates.startDate?.toISOString()} due=${dates.dueDate?.toISOString()}`,
+      `✅ ${instanceTask.taskId} -> start=${instanceTask.plannedStartDate} due=${instanceTask.plannedDueDate}`,
     );
   }
   await generateRecurringFmsTasks(instance._id);
@@ -654,9 +720,10 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     instanceId,
     instanceName,
   } = req.body;
+  const userId = req.cookies.userId || req.user?._id;
 
   // Build query
-  const query = {};
+  const query = {createdBy: userId };
 
   // Search by instanceId OR instanceName
   if (search) {

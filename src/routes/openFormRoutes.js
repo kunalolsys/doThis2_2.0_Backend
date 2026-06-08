@@ -2,6 +2,7 @@ import express from "express";
 import { authenticateJWT } from "../middleware/authMiddleware.js";
 import {
   createOpenForm,
+  deleteOpenForm,
   getAllOpenForms,
   getFormSubmissions,
   getOpenForm,
@@ -24,6 +25,7 @@ router.post("/:slug/submit", submitOpenForm);
 
 //**GET FORM SUBMISSION */
 router.get("/:formId/submissions", authenticateJWT, getFormSubmissions);
+router.delete("/:formId", authenticateJWT, deleteOpenForm);
 
 router.get("/submission/:id", authenticateJWT, getSubmissionDetails);
 export default router;

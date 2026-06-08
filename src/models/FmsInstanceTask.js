@@ -135,6 +135,9 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "OpenForm",
     },
+    submissionData: {
+      type: mongoose.Schema.Types.Mixed,
+    },
     // instanceCode: String,
 
     // Idempotency keys for “every trigger should generate tasks”

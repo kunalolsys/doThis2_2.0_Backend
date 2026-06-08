@@ -19,7 +19,10 @@ export const createTemplate = handleAsync(async (req, res, next) => {
   const userId = req.cookies.userId || req.user._id || null;
 
   // Check duplicate templateName (Mongo unique will catch but custom msg better)
-  const existing = await FmsTemplate.findOne({ templateName });
+  const existing = await FmsTemplate.findOne({
+    templateName,
+    isDeleted: false,
+  });
   if (existing) {
     return next(new AppError(`Template "${templateName}" already exists`, 400));
   }
@@ -196,8 +199,9 @@ export const importFmsTemplates = handleAsync(async (req, res, next) => {
 export const getTemplates = handleAsync(async (req, res) => {
   const { page = 1, limit = 10, search, managerId, fmsDuration } = req.body;
   const skip = (parseInt(page) - 1) * parseInt(limit);
+  const userId = req.cookies.userId || req.user?._id;
 
-  const filter = { isDeleted: false };
+  const filter = { isDeleted: false, user: userId };
   if (search) {
     filter.templateName = { $regex: search, $options: "i" };
   }
@@ -229,7 +233,10 @@ export const getTemplates = handleAsync(async (req, res) => {
   });
 });
 export const getTemplatesForDropdown = handleAsync(async (req, res) => {
-  const templates = await FmsTemplate.find({ isDeleted: false })
+  const userId = req.cookies.userId || req.user?._id;
+
+  // const filter = { isDeleted: false, user: userId };
+  const templates = await FmsTemplate.find({ isDeleted: false, user: userId })
     .select("_id templateName fmsId description fmsDuration endDate isLaunched")
     .populate("manager", "name email")
     .populate("srManager", "name email")

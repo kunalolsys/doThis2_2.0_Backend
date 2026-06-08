@@ -149,7 +149,19 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
   if (!task) {
     return next(new AppError(`FMS Task ${taskId} not found in template`, 404));
   }
+  const childTask = await FmsTask.findOne({
+    fmsTemplateId: templateId,
+    dependentOn: task.taskId,
+  });
 
+  if (childTask) {
+    return next(
+      new AppError(
+        `Cannot delete task "${task.taskId}". Dependent task "${childTask.taskId}" exists.`,
+        400,
+      ),
+    );
+  }
   // Remove from template's tasks array
   await FmsTemplate.findByIdAndUpdate(templateId, {
     $pull: { tasks: task._id },

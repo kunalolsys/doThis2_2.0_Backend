@@ -76,9 +76,12 @@ const OpenFormSchema = new mongoose.Schema(
     },
     slug: {
       type: String,
-      unique: true,
       required: true,
+      trim: true,
     },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -88,5 +91,13 @@ const OpenFormSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
-
+OpenFormSchema.index(
+  { slug: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isDeleted: false,
+    },
+  },
+);
 export default mongoose.model("OpenForm", OpenFormSchema);

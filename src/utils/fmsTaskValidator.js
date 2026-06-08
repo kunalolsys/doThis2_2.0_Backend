@@ -1,6 +1,6 @@
 export const isFmsTaskFullyComplete = (task) => {
-  const checklist = task.checklist || [];
-  const createdForm = task.createdForm || [];
+  const checklist = Array.isArray(task?.checklist) ? task.checklist : [];
+  const createdForm = Array.isArray(task?.createdForm) ? task.createdForm : [];
   if (checklist.length === 0 && createdForm.length === 0) {
     return false;
   }

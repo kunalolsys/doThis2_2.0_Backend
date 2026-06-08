@@ -16,7 +16,18 @@ import {
 
 import { authenticateJWT } from "../middleware/authMiddleware.js";
 import upload from "../middleware/upload.js";
+import {
+  downloadBucketImportTemplate,
+  importTaskBuckets,
+} from "../services/imports/importBucket.js";
 const router = express.Router();
+router.post(
+  "/import",
+  authenticateJWT,
+  upload.single("file"),
+  importTaskBuckets,
+);
+router.get("/downloadTemp", authenticateJWT, downloadBucketImportTemplate);
 
 router.post(
   "/",

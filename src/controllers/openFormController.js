@@ -20,9 +20,19 @@ const generateSlug = (text) => {
 };
 
 //**CREATE OPEN FORM */
-export const createOpenForm = handleAsync(async (req, res) => {
+export const createOpenForm = handleAsync(async (req, res, next) => {
   const baseUrl = process.env.BASE_URL;
   const { formName } = req.body;
+
+  const existingForm = await OpenForm.findOne({
+    formName: formName.trim(),
+    isDeleted: false,
+  });
+
+  if (existingForm) {
+    return next(new AppError(`Open Form "${formName}" already exists`, 400));
+  }
+
   const slug = generateSlug(formName);
 
   const form = await OpenForm.create({
@@ -41,8 +51,8 @@ export const createOpenForm = handleAsync(async (req, res) => {
 //**GET ALL FORMS */
 export const getAllOpenForms = handleAsync(async (req, res) => {
   const { search, isActive } = req.query;
-
-  const query = {};
+  const userId = req.cookies.userId || req.user?._id;
+  const query = { isDeleted: false, createdBy: userId };
 
   // Search by form name
   if (search) {
@@ -431,7 +441,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
       formId: form._id,
 
       submissionId: submission._id,
-
+      submissionData: submission.submissionData,
       //   instanceCode,
 
       // TASK IDS
@@ -600,3 +610,31 @@ export const getSubmissionDetails = async (req, res) => {
     });
   }
 };
+
+//**DELETE OPEN FORM */
+export const deleteOpenForm = handleAsync(async (req, res) => {
+  const { formId } = req.params;
+
+  const form = await OpenForm.findOne({
+    _id: formId,
+    isDeleted: false,
+  });
+
+  if (!form) {
+    return res.status(404).json({
+      success: false,
+      message: "Open form not found",
+    });
+  }
+
+  form.isDeleted = true;
+  form.deletedAt = new Date();
+  form.deletedBy = req.cookies.userId || req.user?._id || null;
+
+  await form.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Open form deleted successfully",
+  });
+});

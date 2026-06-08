@@ -148,6 +148,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         await new FmsInstanceTask({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
+          formId: instance.formId || null,
+          submissionId: instance.submissionId || null,
+          submissionData: instance.runtimeContext || {},
           taskId: instanceTaskId,
           description: task.description,
           departmentOfAssignToUser: task.departmentOfAssignToUser,
