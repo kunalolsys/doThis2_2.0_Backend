@@ -67,45 +67,45 @@ export async function calculateFmsTaskDates(
     }
   }
   // CASE 2-3 Start
-  else if (freq.startsWith("start")) {
-    const shiftBase = await nextWorkingShiftDate(fmsStart, workShiftId);
-    if (freq.includes("hour")) {
-      const isNegative = freq.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-      dueDate = new Date(
-        shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
-      );
-    } else {
-      const isNegative = freq.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-      dueDate = await addWorkingDaysHoliday(
-        fmsStart,
-        xValue * multiplier,
-        workShiftId,
-      );
-    }
-  }
-  // CASE 5 Event
-  else if (freq.startsWith("event") && fmsEnd) {
-    const shiftBase = await nextWorkingShiftDate(fmsEnd, workShiftId);
-    if (freq.includes("hour")) {
-      const isNegative = freq.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-      dueDate = new Date(
-        shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
-      );
-    } else {
-      const isNegative = freq.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-      // console.log(fmsEnd,xValue,dueDate)
-      dueDate = await addWorkingDaysHoliday(
-        fmsEnd,
-        xValue * multiplier,
-        workShiftId,
-      );
-      // console.log(dueDate)
-    }
-  }
+  // else if (freq.startsWith("start")) {
+  //   const shiftBase = await nextWorkingShiftDate(fmsStart, workShiftId);
+  //   if (freq.includes("hour")) {
+  //     const isNegative = freq.includes("-");
+  //     const multiplier = isNegative ? -1 : 1;
+  //     dueDate = new Date(
+  //       shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
+  //     );
+  //   } else {
+  //     const isNegative = freq.includes("-");
+  //     const multiplier = isNegative ? -1 : 1;
+  //     dueDate = await addWorkingDaysHoliday(
+  //       fmsStart,
+  //       xValue * multiplier,
+  //       workShiftId,
+  //     );
+  //   }
+  // }
+  // // CASE 5 Event
+  // else if (freq.startsWith("event") && fmsEnd) {
+  //   const shiftBase = await nextWorkingShiftDate(fmsEnd, workShiftId);
+  //   if (freq.includes("hour")) {
+  //     const isNegative = freq.includes("-");
+  //     const multiplier = isNegative ? -1 : 1;
+  //     dueDate = new Date(
+  //       shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
+  //     );
+  //   } else {
+  //     const isNegative = freq.includes("-");
+  //     const multiplier = isNegative ? -1 : 1;
+  //     // console.log(fmsEnd,xValue,dueDate)
+  //     dueDate = await addWorkingDaysHoliday(
+  //       fmsEnd,
+  //       xValue * multiplier,
+  //       workShiftId,
+  //     );
+  //     // console.log(dueDate)
+  //   }
+  // }
 
   // taskEndDays OVERRIDE
   if (taskEndDays > 0) {

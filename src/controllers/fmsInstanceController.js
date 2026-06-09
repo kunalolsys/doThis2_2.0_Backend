@@ -12,12 +12,13 @@ import {
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
-const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Anytime"];
+const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly"];
 import { isFmsTaskFullyComplete } from "../utils/fmsTaskValidator.js";
 import { createLog } from "./logController.js";
 import { updateTaskStatuses } from "../cron/taskStatusUpdate.js";
 import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
 import Counter from "../models/Counter.js";
+import { addDays } from "date-fns";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -87,13 +88,32 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   );
 
   const sequence = String(counter.seq).padStart(5, "0");
+  const managerUser = await User.findById(template.manager._id).populate(
+    "assignShift",
+  );
+  let instanceStartDate = launchDate;
+  let instanceEndDate = endDate ? new Date(endDate) : instanceEnd;
 
+  if (managerUser?.assignShift) {
+    instanceStartDate = await nextWorkingShiftDate(
+      launchDate,
+      managerUser.assignShift._id,
+    );
+
+    if (instanceEndDate) {
+      instanceEndDate = snapToShiftTime(
+        instanceEndDate,
+        managerUser.assignShift,
+        false, // shift end time
+      );
+    }
+  }
   // const instanceCode = `FMS-${new Date().getFullYear()}-${sequence}`;
   const instance = await FmsInstance.create({
     fmsTemplateId: template._id,
     instanceName: `${template.templateName}`,
-    startDate: launchDate,
-    endDate: endDate ? endDate : instanceEnd,
+    startDate: instanceStartDate,
+    endDate: instanceEndDate,
     manager: template.manager._id,
     srManager: template.srManager?._id || null,
     createdBy: userId,
@@ -133,16 +153,216 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       startDate: null,
       dueDate: null,
     };
+    const freq = (tmplTask.frequency || "").trim().toLowerCase();
 
+    if (freq === "anytime") {
+      const shiftStart = doer.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate = parsedEndDate;
+
+      if (parsedEndDate && doer.assignShift) {
+        dueDate = snapToShiftTime(
+          parsedEndDate,
+          doer.assignShift,
+          false, // shift end
+        );
+      }
+
+      dates = {
+        startDate: shiftStart,
+        dueDate,
+      };
+    } else if (!tmplTask.isDependent && freq.startsWith("start")) {
+      const shiftStart = doer.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate = shiftStart;
+
+      if (freq.includes("hour")) {
+        dueDate = new Date(
+          shiftStart.getTime() + (tmplTask.xValue || 0) * 60 * 60 * 1000,
+        );
+      } else {
+        const targetDate = addDays(shiftStart, tmplTask.xValue || 0);
+
+        dueDate = doer.assignShift
+          ? await nextWorkingShiftDate(targetDate, doer.assignShift._id)
+          : targetDate;
+      }
+
+      dates = {
+        startDate: shiftStart,
+        dueDate,
+      };
+    } else if (!tmplTask.isDependent && freq.startsWith("event")) {
+      if (!parsedEndDate) {
+        throw new Error(
+          `Event based task "${tmplTask.taskId}" requires FMS End Date`,
+        );
+      }
+
+      const shiftStart = doer.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate;
+
+      const isNegative = freq.includes("-");
+      const multiplier = isNegative ? -1 : 1;
+
+      // EVENT HOURS
+      if (freq.includes("hour")) {
+        const base = new Date(
+          parsedEndDate.getTime() +
+            Math.abs(tmplTask.xValue || 0) * 60 * 60 * 1000 * multiplier,
+        );
+
+        dueDate = doer.assignShift
+          ? snapToShiftTime(
+              await nextWorkingShiftDate(base, doer.assignShift._id),
+              doer.assignShift,
+              false,
+            )
+          : base;
+      }
+
+      // EVENT DAYS
+      else {
+        const targetDate = addDays(
+          parsedEndDate,
+          Math.abs(tmplTask.xValue || 0) * multiplier,
+        );
+
+        dueDate = doer.assignShift
+          ? snapToShiftTime(
+              await nextWorkingShiftDate(targetDate, doer.assignShift._id),
+              doer.assignShift,
+              false,
+            )
+          : targetDate;
+      }
+
+      dates = {
+        startDate: shiftStart,
+        dueDate,
+      };
+    }
+    // ======================================================
+    // PLANNED TO PLANNED (FIXED)
+    // ======================================================
+    else if (
+      tmplTask.startTimeSetting === "planned-to-planned" &&
+      tmplTask.isDependent
+    ) {
+      let parent =
+        prevTasks.find((t) => t.taskId === tmplTask.dependentOn) ||
+        templateTasks.find((t) => t.taskId === tmplTask.dependentOn) ||
+        (await FmsTask.findOne({ taskId: tmplTask.dependentOn }));
+
+      if (!parent) {
+        console.log(`❌ Parent not found for ${tmplTask.taskId}`);
+        continue; // IMPORTANT: avoid crash
+      }
+
+      const parentDateRaw =
+        parent.plannedDueDate || parent.plannedStartDate || launchDate;
+
+      if (!parentDateRaw || isNaN(new Date(parentDateRaw).getTime())) {
+        console.log(`❌ Invalid parent date for ${tmplTask.taskId}`);
+        continue;
+      }
+
+      const parentDate = new Date(parentDateRaw);
+
+      const x = Number(tmplTask.xValue || 0);
+      const freq = (tmplTask.frequency || "").toLowerCase();
+      const isNegative = freq.includes("-") ? -1 : 1;
+
+      let childStart;
+
+      // =========================
+      // HOURS (SAFE + FIXED)
+      // =========================
+      if (freq.includes("hour")) {
+        childStart = new Date(
+          parentDate.getTime() + x * 60 * 60 * 1000 * isNegative,
+        );
+      }
+
+      // =========================
+      // DAYS (SAFE + FIXED)
+      // =========================
+      else {
+        childStart = addDays(parentDate, x * isNegative);
+
+        // preserve time
+        childStart.setHours(
+          parentDate.getHours(),
+          parentDate.getMinutes(),
+          parentDate.getSeconds(),
+          parentDate.getMilliseconds(),
+        );
+      }
+
+      let startDate = childStart;
+      let dueDate = null;
+
+      // =========================
+      // SHIFT SAFETY (NO INVALID DATE)
+      // =========================
+      if (doer.assignShift && startDate instanceof Date && !isNaN(startDate)) {
+        const shiftStart = snapToShiftTime(startDate, doer.assignShift, true);
+        const shiftEnd = snapToShiftTime(startDate, doer.assignShift, false);
+
+        if (startDate < shiftStart) {
+          startDate = shiftStart;
+        }
+
+        if (startDate >= shiftEnd) {
+          const next = new Date(startDate);
+          next.setDate(next.getDate() + 1);
+
+          startDate = await nextWorkingShiftDate(next, doer.assignShift._id);
+        }
+      }
+
+      // =========================
+      // FORCE SAME-DAY SHIFT END DUE DATE
+      // =========================
+      // let dueDate = null;
+
+      if (doer.assignShift && startDate) {
+        // Take shift end of SAME DAY as startDate
+        dueDate = snapToShiftTime(startDate, doer.assignShift, false);
+
+        // Safety: ensure same calendar day
+        const startDay = new Date(startDate);
+        const dueDay = new Date(dueDate);
+
+        if (startDay.toDateString() !== dueDay.toDateString()) {
+          // if shift end pushed to next day (edge case), clamp it back
+          dueDate = new Date(startDay);
+          const [h, m] = doer.assignShift.endTime.split(":").map(Number);
+          dueDate.setHours(h, m, 0, 0);
+        }
+      }
+
+      dates = {
+        startDate,
+        dueDate: dueDate || null,
+      };
+    }
     // ======================================================
     // NO DEPENDENCY
     // ======================================================
-
-    if (!tmplTask.isDependent) {
+    else if (!tmplTask.isDependent) {
       dates = await fmsDateCalculator.calculateFmsTaskDates(
         tmplTask.toObject(),
         launchDate,
-        instanceEnd,
+        parsedEndDate,
         doer.assignShift?._id,
         prevTasks.map((t) => ({
           taskId: t.taskId,
@@ -155,19 +375,19 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     // ======================================================
     // PLANNED TO PLANNED
     // ======================================================
-    else if (tmplTask.startTimeSetting === "planned-to-planned") {
-      dates = await fmsDateCalculator.calculateFmsTaskDates(
-        tmplTask.toObject(),
-        launchDate,
-        instanceEnd,
-        doer.assignShift?._id,
-        prevTasks.map((t) => ({
-          taskId: t.taskId,
-          plannedDueDate: t.plannedDueDate,
-          plannedStartDate: t.plannedStartDate,
-        })),
-      );
-    }
+    // else if (tmplTask.startTimeSetting === "planned-to-planned") {
+    //   dates = await fmsDateCalculator.calculateFmsTaskDates(
+    //     tmplTask.toObject(),
+    //     launchDate,
+    //     parsedEndDate,
+    //     doer.assignShift?._id,
+    //     prevTasks.map((t) => ({
+    //       taskId: t.taskId,
+    //       plannedDueDate: t.plannedDueDate,
+    //       plannedStartDate: t.plannedStartDate,
+    //     })),
+    //   );
+    // }
 
     // ======================================================
     // ACTUAL TO PLANNED
@@ -227,6 +447,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     // ======================================================
 
     if (
+      freq !== "anytime" &&
       tmplTask.isDependent &&
       tmplTask.startTimeSetting === "actual-to-planned"
     ) {
@@ -368,11 +589,11 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   if (!task) return next(new AppError("Task not found", 404));
 
   // Mark complete
-  if (!isFmsTaskFullyComplete(task)) {
-    return res
-      .status(400)
-      .json({ error: "Complete checklist and mandatory forms first" });
-  }
+  // if (!isFmsTaskFullyComplete(task)) {
+  //   return res
+  //     .status(400)
+  //     .json({ error: "Complete checklist and mandatory forms first" });
+  // }
   task.actualCompleteDate = new Date();
   task.status = "Completed";
   task.updatedBy = req.cookies.userId || req.user._id || null;
@@ -383,58 +604,104 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     fmsInstanceId: instanceId,
     startTimeSetting: "actual-to-planned",
     waitingForParent: true,
-    dependentOn: task.taskId, // ← CHILDREN dependentOn = THIS parent.taskId
+    // dependentOn: task.taskId,
+  }).populate({
+    path: "assignedTo",
+    populate: { path: "assignShift" },
   });
-  // .populate('assignedTo assignShift');
-
-  console.log(
-    `FOUND ${children.length} A-T-P children waiting for ${task.taskId}`,
-  );
-
-  for (const child of children) {
-    const parentDue = task.plannedDueDate; // parent.plannedDueDate
-    const user = await User.findOne({ _id: child.assignedTo }).populate(
-      "assignShift",
-    );
-    const workShift = user.assignShift;
+ for (const child of children) {
+  try {
+    const workShift = child.assignedTo?.assignShift;
     if (!workShift) continue;
 
-    let childStart = new Date(parentDue); // copy parent due
+    const parentDate = new Date(task.actualCompleteDate);
+    if (!parentDate || isNaN(parentDate.getTime())) continue;
 
-    // ± x hr/days to parent due → child start
-    if (child.frequency.includes("hour")) {
-      const isNegative = child.frequency.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-      const shiftStart = await nextWorkingShiftDate(childStart, workShift._id);
-      childStart = new Date(shiftStart);
-      childStart.setHours(childStart.getHours() + child.xValue * multiplier);
-    } else {
-      const isNegative = child.frequency.includes("-");
-      const multiplier = isNegative ? -1 : 1;
+    const x = Number(child.xValue || 0);
+    const freq = (child.frequency || "").toLowerCase();
 
-      // DAYS
-      // 1. Get target DAY from parentDue + x days
-      const targetDay = await addWorkingDaysHoliday(
-        parentDue,
-        child.xValue * multiplier,
-        workShift._id,
+    const isNegative = freq.includes("-");
+    const multiplier = isNegative ? -1 : 1;
+
+    // ======================================================
+    // 1. BASE = RAW COMPLETION TIME
+    // ======================================================
+    let base = new Date(parentDate);
+
+    // ======================================================
+    // 2. APPLY OFFSET FIRST (VERY IMPORTANT)
+    // ======================================================
+    if (freq.includes("hour")) {
+      base = new Date(
+        base.getTime() + x * 60 * 60 * 1000 * multiplier
       );
-
-      // 2. SNAP to shift START time (same day)
-      childStart = snapToShiftTime(targetDay, workShift, true); // true=START
     }
 
-    // child.due = childStart same day → shift END
-    const childDue = snapToShiftTime(childStart, workShift, false); // shift end same day
+    else if (freq.includes("day")) {
+      base = await addWorkingDaysHoliday(
+        base,
+        x * multiplier,
+        workShift._id
+      );
 
-    // Update
-    child.plannedStartDate = childStart;
-    child.plannedDueDate = childDue;
-    child.actualStartDate = childStart;
+      // preserve completion time
+      base.setHours(
+        parentDate.getHours(),
+        parentDate.getMinutes(),
+        parentDate.getSeconds(),
+        parentDate.getMilliseconds()
+      );
+    }
+
+    // ======================================================
+    // 3. SHIFT ALIGNMENT (ONLY AFTER OFFSET)
+    // ======================================================
+    let start = snapToShiftTime(base, workShift, true);
+    if (!start || isNaN(start.getTime())) continue;
+
+    const shiftEnd = snapToShiftTime(start, workShift, false);
+
+    if (base >= shiftEnd) {
+      const next = new Date(base);
+      next.setDate(next.getDate() + 1);
+
+      start = await nextWorkingShiftDate(next, workShift._id);
+    }
+
+    // ======================================================
+    // 4. SAME DAY DUE = SHIFT END
+    // ======================================================
+    let due = snapToShiftTime(start, workShift, false);
+
+    if (!due || isNaN(due.getTime())) {
+      due = start;
+    }
+
+    // safety clamp
+    if (due < start) {
+      const fallback = new Date(start);
+      const [h, m] = workShift.endTime.split(":").map(Number);
+      fallback.setHours(h, m, 0, 0);
+      due = fallback;
+    }
+
+    // ======================================================
+    // 5. SAVE
+    // ======================================================
+    child.plannedStartDate = start;
+    child.plannedDueDate = due;
+    child.actualStartDate = start;
     child.waitingForParent = false;
-    child.status = calculateTaskStatus(childStart, childDue);
+    child.status = calculateTaskStatus(start, due);
+
     await child.save();
+
+    console.log("UPDATED:", child.taskId, start, due);
+
+  } catch (err) {
+    console.error("FAILED CHILD:", child.taskId, err);
   }
+}
 
   res.json({
     success: true,
@@ -723,7 +990,7 @@ export const getFmsInstances = handleAsync(async (req, res) => {
   const userId = req.cookies.userId || req.user?._id;
 
   // Build query
-  const query = {createdBy: userId };
+  const query = { createdBy: userId };
 
   // Search by instanceId OR instanceName
   if (search) {

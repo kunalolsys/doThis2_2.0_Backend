@@ -104,7 +104,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
 
       const tasks = await FmsTask.find({
         fmsTemplateId: instance.fmsTemplateId._id,
-        frequency: { $in: ["Daily", "Weekly", "Monthly", "Anytime"] },
+        frequency: { $in: ["Daily", "Weekly", "Monthly",] },
       }).lean();
 
       for (const task of tasks) {
