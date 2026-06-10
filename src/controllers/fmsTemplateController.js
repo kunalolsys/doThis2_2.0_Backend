@@ -6,6 +6,7 @@ import AppError from "../utils/AppError.js";
 import { createLog } from "./logController.js";
 import FmsInstance from "../models/FmsInstance.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
+import { snapToShiftTime } from "../utils/dateCalculator.js";
 
 export const createTemplate = handleAsync(async (req, res, next) => {
   const {
@@ -28,7 +29,9 @@ export const createTemplate = handleAsync(async (req, res, next) => {
   }
 
   // Role validation (BRD)
-  const managerUser = await User.findById(manager).populate("role");
+  const managerUser = await User.findById(manager)
+    .populate("role")
+    .populate("assignShift");
   if (!managerUser || managerUser.role.name !== "Manager") {
     return next(new AppError("Manager must have Manager role", 400));
   }
@@ -38,12 +41,20 @@ export const createTemplate = handleAsync(async (req, res, next) => {
       return next(new AppError("Sr Manager must have Sr Manager role", 400));
     }
   }
+  let templateEndDate = endDate;
 
+  if (fmsDuration === "Fixed Period" && endDate && managerUser.assignShift) {
+    templateEndDate = snapToShiftTime(
+      new Date(endDate),
+      managerUser.assignShift,
+      false, // false = shift end time
+    );
+  }
   const template = await FmsTemplate.create({
     templateName,
     description: description || "",
     fmsDuration,
-    endDate: fmsDuration === "Fixed Period" ? endDate : undefined,
+    endDate: fmsDuration === "Fixed Period" ? templateEndDate : undefined,
     manager: managerUser._id,
     srManager: srManager || undefined,
     user: userId,

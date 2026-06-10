@@ -47,6 +47,7 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
 
     // ACTUAL progress
     actualStartDate: Date,
+    actualDueDate: Date,
     actualCompleteDate: Date,
     status: {
       type: String,

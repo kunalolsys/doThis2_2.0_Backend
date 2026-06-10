@@ -10,7 +10,7 @@ import {
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 
 const isWorkingDay = (today, weekDays) => {
   const dayLower = today.format("dddd").toLowerCase();
@@ -61,7 +61,108 @@ const isTaskDueToday = (task, instance, weekDays) => {
   console.log(due ? "✅ DUE" : "⏭️ SKIP");
   return due;
 };
+export const generateDependentChildren = async (
+  instance,
+  parentInstanceTask,
+  parentTemplateTask,
+) => {
+  const children = await FmsTask.find({
+    dependentOn: parentTemplateTask.taskId,
+    // startTimeSetting: "planned-to-planned",
+    isDependent: true,
+  });
 
+  for (const childTemplate of children) {
+    const alreadyExists = await FmsInstanceTask.findOne({
+      fmsInstanceId: instance._id,
+      fmsTaskId: childTemplate._id,
+      dependentOn: parentInstanceTask.taskId,
+      recurrenceKey: parentInstanceTask.recurrenceKey,
+    });
+
+    if (alreadyExists) continue;
+
+    const doer = await User.findById(childTemplate.assignedTo).populate(
+      "assignShift",
+    );
+
+    const parentDate =
+      parentInstanceTask.plannedDueDate || parentInstanceTask.plannedStartDate;
+
+    if (!parentDate) continue;
+
+    const freq = childTemplate.frequency.toLowerCase();
+
+    let startDate = new Date(parentDate);
+
+    const x = Number(childTemplate.xValue || 0);
+
+    if (freq.includes("hour")) {
+      if (freq.includes("task+x")) {
+        startDate = new Date(parentDate.getTime() + x * 60 * 60 * 1000);
+      } else {
+        startDate = new Date(parentDate.getTime() - x * 60 * 60 * 1000);
+      }
+    } else {
+      if (freq.includes("task+x")) {
+        startDate = addDays(parentDate, x);
+      } else {
+        startDate = addDays(parentDate, -x);
+      }
+    }
+
+    let dueDate = startDate;
+
+    if (doer?.assignShift) {
+      dueDate = snapToShiftTime(startDate, doer.assignShift, false);
+    }
+
+    const childInstanceTask = await FmsInstanceTask.create({
+      fmsInstanceId: instance._id,
+
+      fmsTaskId: childTemplate._id,
+
+      taskId: childTemplate.taskId,
+
+      description: childTemplate.description,
+
+      departmentOfAssignToUser: childTemplate.departmentOfAssignToUser,
+
+      assignedTo: childTemplate.assignedTo,
+
+      assignedBy: childTemplate.assignedBy,
+
+      frequency: childTemplate.frequency,
+
+      xValue: childTemplate.xValue,
+
+      isDependent: true,
+
+      dependentOn: parentInstanceTask.taskId,
+
+      startTimeSetting: childTemplate.startTimeSetting,
+
+      plannedStartDate:
+        childTemplate.startTimeSetting === "actual-to-planned"
+          ? null
+          : startDate,
+
+      plannedDueDate:
+        childTemplate.startTimeSetting === "actual-to-planned" ? null : dueDate,
+
+      status: "Pending",
+
+      checklist: childTemplate.checklist || [],
+
+      createdForm: childTemplate.createdForm || [],
+    });
+
+    console.log(`✅ Generated child ${childInstanceTask.taskId}`);
+
+    // recursive support (child -> grandchild)
+    await generateDependentChildren(instance, childInstanceTask, childTemplate);
+  }
+};
 export const generateRecurringFmsTasks = async (instanceId = null) => {
   console.log("\n🚀 FMS CRON -", new Date().toLocaleString("en-IN"));
 
@@ -104,7 +205,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
 
       const tasks = await FmsTask.find({
         fmsTemplateId: instance.fmsTemplateId._id,
-        frequency: { $in: ["Daily", "Weekly", "Monthly",] },
+        frequency: { $in: ["Daily", "Weekly", "Monthly"] },
       }).lean();
 
       for (const task of tasks) {
@@ -145,7 +246,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           fmsTaskId: task._id,
         });
         const instanceTaskId = `${instance.instanceId}-${task.taskId}-R${count + 1}`;
-        await new FmsInstanceTask({
+        const parentInstanceTask = await new FmsInstanceTask({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
           formId: instance.formId || null,
@@ -166,7 +267,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           recurrenceKey,
           triggerKey: `RECURRENCE:${instance._id}:${task._id}:${recurrenceKey}`,
         }).save();
-
+        await generateDependentChildren(instance, parentInstanceTask, task);
         createdCount++;
         console.log(
           `✅ ${task.taskId} | ${format(shiftStart, "HH:mm dd-MM")}→${format(shiftEnd, "HH:mm")}`,
