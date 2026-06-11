@@ -631,12 +631,10 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   });
   // .populate('assignedTo assignShift');
 
-  console.log("asdasd@@@:", task.taskId);
-
   if (!task) return next(new AppError("Task not found", 404));
 
   // Mark complete
-  // if (!isFmsTaskFullyComplete(task)) {
+  // if (isFmsTaskFullyComplete(task) == true) {
   //   return res
   //     .status(400)
   //     .json({ error: "Complete checklist and mandatory forms first" });
@@ -656,7 +654,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     path: "assignedTo",
     populate: { path: "assignShift" },
   });
-  console.log("object@@@",children)
   for (const child of children) {
     try {
       const workShift = await User.findById(child.assignedTo).populate(
@@ -935,7 +932,6 @@ export const holdFmsInstance = handleAsync(async (req, res) => {
   if (!instance) {
     return res.status(404).json({ message: "Instance not found" });
   }
-  console.log(instance);
   instance.status = "Onhold";
   instance.isStopped = true;
 

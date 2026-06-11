@@ -5,10 +5,11 @@ let io;
 export const initSocket = (server) => {
   io = new Server(server, {
     cors: {
-      origin: "http://localhost:5174",
+      origin: "https://v2.dothis2.com",
       methods: ["GET", "POST"],
-       credentials: true,
+      credentials: true,
     },
+    transports: ["polling"], // Yahan bhi sirf polling set karein
   });
 
   io.on("connection", (socket) => {

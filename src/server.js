@@ -16,11 +16,13 @@ import User from "./models/User.js";
 import ServerLog from "./models/ServerLog.js";
 import startFMSProgressCronJobs from "./cron/fmsInstanceTaskProgressCron.js";
 import startRecurringFmsTaskJob from "./cron/assignRecurringFmsTask.js";
+import startFmsUpcomingInstancesCron from "./cron/fmsUpcomingInstancesCron.js";
 import { initSocket } from "./socket.js";
 import "../scripts/seedSuperRolesAndUser.js";
 import ModuleSetting from "./models/ModuleSetting.js";
 import "./services/telegram/telegramBOT.js";
 dotenv.config();
+
 
 const server = http.createServer(app);
 
@@ -107,7 +109,9 @@ mongoose
           startFMSProgressCronJobs();
           startFmsVisibilityCron();
           startRecurringFmsTaskJob();
+          startFmsUpcomingInstancesCron();
         }
+
       } catch (err) {
         console.error("Failed to start crons", err);
       }
