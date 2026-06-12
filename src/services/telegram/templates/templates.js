@@ -9,17 +9,22 @@ const formatDate = (date) => {
 export const TELEGRAM_TEMPLATES = {
   TASK_ASSIGNED: ({ task, actor }) => `
 🔔 <b>Task Assignment Notification</b>
-
 A new task has been assigned to you.
 
-<b>Task ID:</b> ${task.TaskId}
-<b>Title:</b> ${task.title}
+<b>Task ID:</b> ${task.TaskId || task.taskId}
+<b>Title:</b> ${task.title || task.description}
 
 <b>Assigned By:</b> ${actor?.name || "-"}
 
-<b>Start Date:</b> ${formatDate(task.startDate)}
-<b>Due Date:</b> ${formatDate(task.dueDate)}
+<b>Start Date:</b> ${
+    task.startDate
+      ? formatDate(task.startDate)
+      : formatDate(task.plannedStartDate)
+  }
 
+<b>Due Date:</b> ${
+    task.dueDate ? formatDate(task.dueDate) : formatDate(task.plannedDueDate)
+  }
 Please review and initiate the task as per schedule.
 
 <i>Dothis2</i>

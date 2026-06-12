@@ -45,28 +45,28 @@ export const updateInstanceProgress = async () => {
     }
 
     // 1. Auto-complete ready tasks
-    let autoCompletedCount = 0;
-    for (const task of allTasks) {
-      if (instance.status === "Onhold" || instance.status === "Stopped") {
-        continue; // ❌ DO NOTHING
-      }
-      if (
-        task.status !== "Completed" &&
-        task.status !== "Cancelled" &&
-        isFmsTaskFullyComplete(task)
-      ) {
-        task.status = "Completed";
-        task.actualCompleteDate = new Date();
-        await task.save();
-        console.log(`✅ Auto-completed ${instance.instanceId}/${task.taskId}`);
-        autoCompletedCount++;
-      }
-    }
-    if (autoCompletedCount > 0) {
-      console.log(
-        `🎉 ${instance.instanceId}: Auto-completed ${autoCompletedCount} tasks`,
-      );
-    }
+    // let autoCompletedCount = 0;
+    // for (const task of allTasks) {
+    //   if (instance.status === "Onhold" || instance.status === "Stopped") {
+    //     continue; // ❌ DO NOTHING
+    //   }
+    //   if (
+    //     task.status !== "Completed" &&
+    //     task.status !== "Cancelled" &&
+    //     isFmsTaskFullyComplete(task)
+    //   ) {
+    //     task.status = "Completed";
+    //     task.actualCompleteDate = new Date();
+    //     await task.save();
+    //     console.log(`✅ Auto-completed ${instance.instanceId}/${task.taskId}`);
+    //     autoCompletedCount++;
+    //   }
+    // }
+    // if (autoCompletedCount > 0) {
+    //   console.log(
+    //     `🎉 ${instance.instanceId}: Auto-completed ${autoCompletedCount} tasks`,
+    //   );
+    // }
 
     // 2. CORRECT progress calculation (after auto-complete)
     const completedTasks = allTasks.filter(

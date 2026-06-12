@@ -2,6 +2,9 @@ import TelegramBot from "node-telegram-bot-api";
 import dotenv from "dotenv";
 import User from "../../models/User.js";
 import { sendWelcomeMessage } from "./templates/greetingTemplate.js";
+import Task from "../../models/Task.js";
+import moment from "moment";
+import FmsInstanceTask from "../../models/FmsInstanceTask.js";
 
 dotenv.config();
 
@@ -12,7 +15,17 @@ if (!token) throw new Error("TELEGRAM_BOT_TOKEN is missing from environment");
 const bot = new TelegramBot(token, { polling: true });
 
 console.log("✅ Telegram Bot Started");
+function getStatusBadge(status) {
+  const s = status?.toLowerCase();
 
+  if (s === "completed") return "🟢 <b>Completed</b>";
+  if (s === "pending") return "🟡 <b>Pending</b>";
+  if (s === "delayed") return "🔴 <b>Delayed</b>";
+  if (s === "overdue") return "🔴 <b>Overdue</b>";
+
+  return `⚪ <b>${status}</b>`;
+}
+const ALLOWED_STATUSES = new Set(["pending", "delayed", "overdue", "upcoming"]);
 // ── Safe reply helper — never throws, logs on failure ────────────────────────
 const reply = async (chatId, text, options = {}) => {
   try {
@@ -40,10 +53,10 @@ const findUser = async (username) => {
     },
     isDeleted: false,
   });
-//   console.log("object", user);
+  //   console.log("object", user);
   // Case 2: username not in our database
   if (!user) {
-    return { user: null, reason: "not_registered" };
+    return reply(msg.chat.id, "❌ User not linked. Use /start first.");
   }
 
   // Case 3: user is registered but disabled Telegram notifications
@@ -210,7 +223,205 @@ bot.onText(/\/help/, async (msg) => {
     console.error("[/help] Error:", err);
   }
 });
+bot.onText(/\/tasks$/, async (msg) => {
+  const chatId = msg.chat.id;
 
+  try {
+    // const user = await User.findOne({
+    //   telegramUserName: msg.from.username,
+    // });
+    const { user, reason } = await findUser(msg.from.username);
+
+    if (reason === "no_username") {
+      return sendNoUsername(chatId);
+    }
+
+    if (reason === "not_registered") {
+      return sendNotRegistered(chatId, msg.from.username);
+    }
+
+    if (reason === "notifications_disabled") {
+      return reply(
+        chatId,
+        "🔕 Your Telegram account is disconnected. Send /start to reconnect.",
+      );
+    }
+    if (!user) {
+      return reply(chatId, "❌ User not linked. Use /start first.");
+    }
+
+    return bot.sendMessage(
+      chatId,
+      `<b>Select Task Status</b>\nChoose one option below:`,
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "Pending", callback_data: "tasks_pending" },
+              { text: "Delayed", callback_data: "tasks_delayed" },
+            ],
+            [
+              { text: "Overdue", callback_data: "tasks_overdue" },
+              { text: "Upcoming", callback_data: "tasks_upcoming" },
+            ],
+          ],
+        },
+      },
+    );
+  } catch (err) {
+    console.error("[/tasks] Error:", err);
+    return reply(chatId, "⚠️ Failed to load tasks menu.");
+  }
+});
+bot.on("callback_query", async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (!data.startsWith("tasks_")) return;
+
+  // ✅ STOP LOADING IMMEDIATELY
+  await bot.answerCallbackQuery(query.id, {
+    text: "Fetching tasks...",
+  });
+
+  try {
+    const inputStatus = data.replace("tasks_", "").toLowerCase();
+
+    if (!ALLOWED_STATUSES.has(inputStatus)) {
+      return bot.sendMessage(chatId, "❌ Invalid status selected.");
+    }
+
+    const user = await User.findOne({
+      telegramUserName: query.from.username,
+    });
+
+    if (!user) {
+      return bot.sendMessage(chatId, "❌ User not linked.");
+    }
+
+    const status = inputStatus.replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const [tasks, fmsTasks] = await Promise.all([
+      Task.find({
+        assignedTo: user._id,
+        status,
+      }),
+      FmsInstanceTask.find({
+        assignedTo: user._id,
+        status,
+      }),
+    ]);
+    const formattedTasks = [
+      ...tasks.map((t) => ({
+        title: t.title,
+        id: t.TaskId || t._id,
+        dueDate: t.dueDate,
+        status: t.status,
+        type: "Delgation",
+      })),
+
+      ...fmsTasks.map((t) => ({
+        title: t.description || "FMS Task",
+        id: t.taskId || t._id,
+        dueDate: t.plannedDueDate,
+        status: t.status,
+        type: "FMS",
+      })),
+    ];
+    if (!formattedTasks.length) {
+      return bot.sendMessage(chatId, `No ${inputStatus} tasks found.`);
+    }
+
+    const message = formattedTasks
+      .map((t, i) => {
+        return (
+          `${i + 1}. <b>${t.title}</b>\n` +
+          `━━━━━━━━━━━━━━\n` +
+          `🆔 <code>${t.id}</code>\n` +
+          `📌 <b>Type:</b> ${t.type}\n` +
+          `📅 <b>Due:</b> ${moment(t.dueDate).format("DD MMM YYYY, hh:mm A")}`
+        );
+      })
+      .join("\n\n");
+    return bot.sendMessage(
+      chatId,
+      `<b>${inputStatus.toUpperCase()} TASKS</b>\n\n${message}`,
+      { parse_mode: "HTML" },
+    );
+  } catch (err) {
+    console.error("[callback_query] Error:", err);
+
+    // ✅ ALSO STOP LOADING EVEN ON ERROR
+    await bot.answerCallbackQuery(query.id, {
+      text: "Error loading tasks",
+      show_alert: true,
+    });
+
+    return bot.sendMessage(chatId, "⚠️ Failed to fetch tasks.");
+  }
+});
+// bot.onText(/\/tasks(?: (.+))?/, async (msg, match) => {
+//   const chatId = msg.chat.id;
+
+//   try {
+//     const inputStatus = match[1]?.trim()?.toLowerCase();
+
+//     const user = await User.findOne({
+//       telegramUserName: msg.from.username,
+//     });
+
+//     if (!user) {
+//       return reply(chatId, "❌ User not linked. Use /start first.");
+//     }
+
+//     // ❌ If no status provided
+//     if (!inputStatus) {
+//       return reply(
+//         chatId,
+//         "⚠️ Please specify a valid status:\npending, delayed, overdue, upcoming",
+//       );
+//     }
+
+//     // ❌ Reject invalid status
+//     if (!ALLOWED_STATUSES.has(inputStatus)) {
+//       return reply(
+//         chatId,
+//         "❌ Invalid status.\nAllowed: pending, delayed, overdue, upcoming",
+//       );
+//     }
+
+//     const status = inputStatus.replace(/\b\w/g, (c) => c.toUpperCase()); // Pending, Delayed, etc.
+
+//     const tasks = await Task.find({
+//       assignedTo: user._id,
+//       status,
+//     });
+
+//     if (!tasks.length) {
+//       return reply(chatId, `No ${inputStatus} tasks found.`);
+//     }
+
+//     const message = tasks
+//       .map((t, i) => {
+//         return (
+//           `<b>${i + 1}. ${t.title}</b>\n` +
+//           `ID: <code>${t.TaskId || t._id}</code>\n` +
+//           `Due: <b>${moment(t.dueDate).format("DD MMM YYYY, hh:mm A")}</b>\n` +
+//           `Status: <b>${t.status}</b>`
+//         );
+//       })
+//       .join("\n\n");
+
+//     return reply(
+//       chatId,
+//       `<b>${inputStatus.toUpperCase()} TASKS</b>\n\n${message}`,
+//     );
+//   } catch (err) {
+//     console.error("[/tasks] Error:", err);
+//     return reply(chatId, "⚠️ Failed to fetch tasks. Try again later.");
+//   }
+// });
 // ════════════════════════════════════════════════════════════════════════════
 // ALL OTHER MESSAGES (text, stickers, photos, etc.)
 // ════════════════════════════════════════════════════════════════════════════

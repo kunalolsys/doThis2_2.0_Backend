@@ -19,6 +19,7 @@ import { updateTaskStatuses } from "../cron/taskStatusUpdate.js";
 import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
 import Counter from "../models/Counter.js";
 import { addDays } from "date-fns";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -505,6 +506,11 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
 
     await instanceTask.save();
 
+    sendNotification({
+      type: "TASK_ASSIGNED",
+      task: instanceTask,
+      actor: req.user,
+    });
     instanceTasks.push(instanceTask);
 
     console.log(
@@ -517,7 +523,6 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
     isLaunched: true,
   });
   await instance.populate(["manager", "srManager", "fmsTemplateId"]);
-
   // FIXED LOG - use valid enum
   // await createLog({
   //   action: 'CREATE',
@@ -634,11 +639,11 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   if (!task) return next(new AppError("Task not found", 404));
 
   // Mark complete
-  // if (isFmsTaskFullyComplete(task) == true) {
-  //   return res
-  //     .status(400)
-  //     .json({ error: "Complete checklist and mandatory forms first" });
-  // }
+  if (!isFmsTaskFullyComplete(task)) {
+    return res.status(400).json({
+      error: "Complete checklist and mandatory forms first",
+    });
+  }
   task.actualCompleteDate = new Date();
   task.status = "Completed";
   task.updatedBy = req.cookies.userId || req.user._id || null;

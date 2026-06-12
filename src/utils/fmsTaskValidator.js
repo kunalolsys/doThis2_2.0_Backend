@@ -1,50 +1,41 @@
 export const isFmsTaskFullyComplete = (task) => {
   const checklist = Array.isArray(task?.checklist) ? task.checklist : [];
   const createdForm = Array.isArray(task?.createdForm) ? task.createdForm : [];
+
+  // No checklist and no forms => nothing to validate
   if (checklist.length === 0 && createdForm.length === 0) {
-    return false;
+    return true;
   }
-  // ✅ 1. Checklist validation (strict like checkbox)
-  const allChecklistDone = Array.isArray(task.checklist)
-    ? task.checklist.every((item) => item?.completed === true)
-    : true; // no checklist = pass
 
-  // ✅ 2. Form validation (strict + type-safe)
-  const allMandatoryFormsFilled = Array.isArray(task.createdForm)
-    ? task.createdForm.every((field) => {
-        if (!field?.isMandatory) return true;
+  const allChecklistDone = checklist.every((item) => item?.completed === true);
 
-        const value = task.formData?.[field.fieldName];
+  const allMandatoryFormsFilled = createdForm.every((field) => {
+    if (!field?.isMandatory) return true;
 
-        // ❌ Missing values
-        if (value === undefined || value === null) return false;
+    const value = task.formData?.[field.fieldName];
 
-        // ❌ Empty string
-        if (typeof value === "string" && value.trim() === "") return false;
+    if (value === undefined || value === null) return false;
 
-        // ✅ File / Image validation
-        if (["file", "image"].includes(field.fieldType)) {
-          return typeof value === "object" && !!value?.path;
-        }
+    if (typeof value === "string" && value.trim() === "") return false;
 
-        // ✅ Date validation
-        if (["date", "datetime"].includes(field.fieldType)) {
-          return !isNaN(new Date(value).getTime());
-        }
+    if (["file", "image"].includes(field.fieldType)) {
+      return typeof value === "object" && !!value?.path;
+    }
 
-        // ✅ Number validation
-        if (field.fieldType === "number") {
-          return !isNaN(value);
-        }
+    if (["date", "datetime"].includes(field.fieldType)) {
+      return !isNaN(new Date(value).getTime());
+    }
 
-        // ✅ Boolean allowed
-        if (field.fieldType === "checkbox") {
-          return typeof value === "boolean";
-        }
+    if (field.fieldType === "number") {
+      return !isNaN(Number(value));
+    }
 
-        return true;
-      })
-    : true; // no form = pass
+    if (field.fieldType === "checkbox") {
+      return typeof value === "boolean";
+    }
+
+    return true;
+  });
 
   return allChecklistDone && allMandatoryFormsFilled;
 };

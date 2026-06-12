@@ -152,12 +152,12 @@ export const generateUpcomingFmsInstanceTasks = async () => {
   );
 
   const today = moment().startOf("day");
-// const today = moment("2026-06-12").startOf("day");
+  // const today = moment("2026-06-12").startOf("day");
   const weekDays = await WorkingWeek.findOne({ isDefault: true });
 
   const instances = await FmsInstance.find({
     status: {
-      $in: ["Upcoming", "Ongoing", "InProcess", "InProcess", "Upcoming"],
+      $in: ["Upcoming"],
     },
     isStopped: false,
     // also exclude stopped/onhold

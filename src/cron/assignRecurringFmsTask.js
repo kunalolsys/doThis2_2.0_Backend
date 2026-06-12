@@ -11,6 +11,7 @@ import {
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
 import { addDays, format } from "date-fns";
+import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 
 const isWorkingDay = (today, weekDays) => {
   const dayLower = today.format("dddd").toLowerCase();
@@ -158,7 +159,11 @@ export const generateDependentChildren = async (
     });
 
     console.log(`✅ Generated child ${childInstanceTask.taskId}`);
-
+    sendNotification({
+      type: "TASK_ASSIGNED",
+      task: childInstanceTask,
+      actor: childTemplate.assignedBy,
+    });
     // recursive support (child -> grandchild)
     await generateDependentChildren(instance, childInstanceTask, childTemplate);
   }
@@ -234,6 +239,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         const user = await User.findById(task.assignedTo).populate(
           "assignShift",
         );
+        const assignedByUser = await User.findById(task.assignedBy).select(
+          "name email",
+        );
         if (!user?.assignShift) continue;
 
         const shiftStart = await nextWorkingShiftDate(
@@ -269,6 +277,11 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         }).save();
         await generateDependentChildren(instance, parentInstanceTask, task);
         createdCount++;
+        sendNotification({
+          type: "TASK_ASSIGNED",
+          task: parentInstanceTask,
+          actor: assignedByUser,
+        });
         console.log(
           `✅ ${task.taskId} | ${format(shiftStart, "HH:mm dd-MM")}→${format(shiftEnd, "HH:mm")}`,
         );
