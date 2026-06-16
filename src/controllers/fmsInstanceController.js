@@ -422,93 +422,120 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
         console.log(`❌ Parent not found for ${tmplTask.taskId}`);
         continue;
       }
+      const assignedParentUser = await User.findById(
+        parent.assignedTo,
+      ).populate("assignShift");
+      if (!assignedParentUser) {
+        return next(
+          new AppError(`User with ID ${parent.assignedTo} not found`, 404),
+        );
+      }
 
+      const parentWorkShift = assignedParentUser.assignShift;
       const parentStart = parent.plannedStartDate;
       const parentDue = parent.plannedDueDate;
-
+      let startDate;
+      let dueDate;
       if (!parentStart || !parentDue) {
         console.log(`❌ Parent dates missing for ${tmplTask.taskId}`);
         continue;
       }
+      const isSameShift =
+        String(doer.assignShift?._id) === String(parentWorkShift?._id);
+      if (!isSameShift) {
+        console.log("⚠️ Shift mismatch → using child shift window only");
 
-      const x = Number(tmplTask.xValue || 0);
-      const freq = (tmplTask.frequency || "").toLowerCase();
+        const baseDate = new Date(parentStart);
 
-      // ====================================
-      // CHILD START = SAME AS PARENT START
-      // ====================================
-      const startDate = new Date(parentStart);
-
-      let dueDate = new Date(parentDue);
-
-      // ====================================
-      // HOURS
-      // ====================================
-      if (freq.includes("hour")) {
-        let calculatedDue = new Date(parentDue);
-
-        // Parent due + X hours
-        calculatedDue.setHours(calculatedDue.getHours() + x);
-
-        const shiftEnd = snapToShiftTime(parentDue, doer.assignShift, false);
-
-        if (calculatedDue < shiftEnd) {
-          dueDate = calculatedDue;
-        } else {
-          // overflow after shift end
-          const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-
-          let nextDay = new Date(parentDue);
-          nextDay.setDate(nextDay.getDate() + 1);
-
-          const nextWorkingDay = await nextWorkingShiftDate(
-            nextDay,
-            doer.assignShift._id,
-          );
-
-          const nextShiftStart = snapToShiftTime(
-            nextWorkingDay,
-            doer.assignShift,
-            true,
-          );
-
-          dueDate = new Date(nextShiftStart.getTime() + overflowMs);
-        }
-      }
-
-      // ====================================
-      // DAYS
-      // ====================================
-      else {
-        dueDate = await addWorkingDaysHoliday(
-          parentDue,
-          x,
+        const start = await nextWorkingShiftDate(
+          baseDate,
           doer.assignShift._id,
         );
 
-        dueDate.setHours(
-          parentDue.getHours(),
-          parentDue.getMinutes(),
-          parentDue.getSeconds(),
-          parentDue.getMilliseconds(),
-        );
+        startDate = snapToShiftTime(start, doer.assignShift, true);
+        dueDate = snapToShiftTime(start, doer.assignShift, false);
 
-        const shiftEnd = snapToShiftTime(dueDate, doer.assignShift, false);
+        // ❗ DO NOT return
+        // just skip dependency math
+      } else {
+        const x = Number(tmplTask.xValue || 0);
+        const freq = (tmplTask.frequency || "").toLowerCase();
 
-        if (dueDate >= shiftEnd) {
-          let nextDay = new Date(dueDate);
-          nextDay.setDate(nextDay.getDate() + 1);
+        // ====================================
+        // CHILD START = SAME AS PARENT START
+        // ====================================
+        startDate = new Date(parentStart);
 
-          const nextWorkingDay = await nextWorkingShiftDate(
-            nextDay,
+        dueDate = new Date(parentDue);
+
+        // ====================================
+        // HOURS
+        // ====================================
+        if (freq.includes("hour")) {
+          let calculatedDue = new Date(parentDue);
+
+          // Parent due + X hours
+          calculatedDue.setHours(calculatedDue.getHours() + x);
+
+          const shiftEnd = snapToShiftTime(parentDue, doer.assignShift, false);
+
+          if (calculatedDue < shiftEnd) {
+            dueDate = calculatedDue;
+          } else {
+            // overflow after shift end
+            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+
+            let nextDay = new Date(parentDue);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              doer.assignShift._id,
+            );
+
+            const nextShiftStart = snapToShiftTime(
+              nextWorkingDay,
+              doer.assignShift,
+              true,
+            );
+
+            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+          }
+        }
+
+        // ====================================
+        // DAYS
+        // ====================================
+        else {
+          dueDate = await addWorkingDaysHoliday(
+            parentDue,
+            x,
             doer.assignShift._id,
           );
 
-          // move to next working day shift END
-          dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
+          dueDate.setHours(
+            parentDue.getHours(),
+            parentDue.getMinutes(),
+            parentDue.getSeconds(),
+            parentDue.getMilliseconds(),
+          );
+
+          const shiftEnd = snapToShiftTime(dueDate, doer.assignShift, false);
+
+          if (dueDate >= shiftEnd) {
+            let nextDay = new Date(dueDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              doer.assignShift._id,
+            );
+
+            // move to next working day shift END
+            dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
+          }
         }
       }
-
       dates = {
         startDate,
         dueDate,
@@ -770,6 +797,14 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     path: "assignedTo",
     populate: { path: "assignShift" },
   });
+  const assignedParentUser = await User.findById(task.assignedTo).populate(
+    "assignShift",
+  );
+  if (!assignedParentUser) {
+    return next(new AppError(`User with ID ${task.assignedTo} not found`, 404));
+  }
+
+  const parentWorkShift = assignedParentUser.assignShift;
   //**GLOBAL CHANGES */
   // for (const child of children) {
   //   try {
@@ -877,71 +912,92 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
       const parentStart = task.plannedStartDate;
       const parentDue = task.plannedDueDate;
-
+      let startDate;
+      let dueDate;
       if (!parentStart || !parentDue) continue;
+      const isSameShift =
+        String(shift?._id) === String(parentWorkShift?._id);
+      if (!isSameShift) {
+        console.log("⚠️ Shift mismatch → using child shift window only");
 
-      const x = Number(child.xValue || 0);
-      const freq = (child.frequency || "").toLowerCase();
+        const baseDate = new Date(parentStart);
 
-      // ====================================
-      // START DATE = PARENT START DATE
-      // ====================================
-      const startDate = new Date(parentStart);
+        const start = await nextWorkingShiftDate(baseDate, shift._id);
 
-      let dueDate = new Date(parentDue);
+        startDate = snapToShiftTime(start, shift, true);
+        dueDate = snapToShiftTime(start, shift, false);
 
-      // ====================================
-      // HOURS
-      // ====================================
-      if (freq.includes("hour")) {
-        let calculatedDue = new Date(parentDue);
+        // ❗ DO NOT return
+        // just skip dependency math
+      } else {
+        const x = Number(child.xValue || 0);
+        const freq = (child.frequency || "").toLowerCase();
 
-        // parent due + x hours
-        calculatedDue.setHours(calculatedDue.getHours() + x);
+        // ====================================
+        // START DATE = PARENT START DATE
+        // ====================================
+        startDate = new Date(parentStart);
 
-        const shiftEnd = snapToShiftTime(parentDue, shift, false);
+        dueDate = new Date(parentDue);
 
-        if (calculatedDue < shiftEnd) {
-          dueDate = calculatedDue;
-        } else {
-          const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+        // ====================================
+        // HOURS
+        // ====================================
+        if (freq.includes("hour")) {
+          let calculatedDue = new Date(parentDue);
 
-          let nextDay = new Date(parentDue);
-          nextDay.setDate(nextDay.getDate() + 1);
+          // parent due + x hours
+          calculatedDue.setHours(calculatedDue.getHours() + x);
 
-          const nextWorkingDay = await nextWorkingShiftDate(nextDay, shift._id);
+          const shiftEnd = snapToShiftTime(parentDue, shift, false);
 
-          const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
+          if (calculatedDue < shiftEnd) {
+            dueDate = calculatedDue;
+          } else {
+            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
 
-          dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+            let nextDay = new Date(parentDue);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              shift._id,
+            );
+
+            const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
+
+            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+          }
+        }
+
+        // ====================================
+        // DAYS
+        // ====================================
+        else {
+          dueDate = await addWorkingDaysHoliday(parentDue, x, shift._id);
+
+          dueDate.setHours(
+            parentDue.getHours(),
+            parentDue.getMinutes(),
+            parentDue.getSeconds(),
+            parentDue.getMilliseconds(),
+          );
+
+          const shiftEnd = snapToShiftTime(dueDate, shift, false);
+
+          if (dueDate >= shiftEnd) {
+            let nextDay = new Date(dueDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              shift._id,
+            );
+
+            dueDate = snapToShiftTime(nextWorkingDay, shift, false);
+          }
         }
       }
-
-      // ====================================
-      // DAYS
-      // ====================================
-      else {
-        dueDate = await addWorkingDaysHoliday(parentDue, x, shift._id);
-
-        dueDate.setHours(
-          parentDue.getHours(),
-          parentDue.getMinutes(),
-          parentDue.getSeconds(),
-          parentDue.getMilliseconds(),
-        );
-
-        const shiftEnd = snapToShiftTime(dueDate, shift, false);
-
-        if (dueDate >= shiftEnd) {
-          let nextDay = new Date(dueDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-
-          const nextWorkingDay = await nextWorkingShiftDate(nextDay, shift._id);
-
-          dueDate = snapToShiftTime(nextWorkingDay, shift, false);
-        }
-      }
-
       // ====================================
       // UPDATE CHILD
       // ====================================
