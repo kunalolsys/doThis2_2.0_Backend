@@ -7,6 +7,7 @@ import FmsTask from "../models/FmsTask.js";
 import User from "../models/User.js";
 import WorkingWeek from "../models/WorkingWeek.js";
 import {
+  addWorkingDaysHoliday,
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
@@ -87,35 +88,86 @@ export const generateDependentChildren = async (
       "assignShift",
     );
 
-    const parentDate =
-      parentInstanceTask.plannedDueDate || parentInstanceTask.plannedStartDate;
+    const parentStart = parentInstanceTask.plannedStartDate;
+    const parentDue = parentInstanceTask.plannedDueDate;
 
-    if (!parentDate) continue;
+    if (!parentStart || !parentDue) continue;
 
-    const freq = childTemplate.frequency.toLowerCase();
+    // =====================================
+    // CHILD START = SAME AS PARENT START
+    // =====================================
+    let startDate = new Date(parentStart);
 
-    let startDate = new Date(parentDate);
+    let dueDate = new Date(parentDue);
 
     const x = Number(childTemplate.xValue || 0);
-
-    if (freq.includes("hour")) {
-      if (freq.includes("task+x")) {
-        startDate = new Date(parentDate.getTime() + x * 60 * 60 * 1000);
-      } else {
-        startDate = new Date(parentDate.getTime() - x * 60 * 60 * 1000);
-      }
-    } else {
-      if (freq.includes("task+x")) {
-        startDate = addDays(parentDate, x);
-      } else {
-        startDate = addDays(parentDate, -x);
-      }
-    }
-
-    let dueDate = startDate;
+    const freq = (childTemplate.frequency || "").toLowerCase();
 
     if (doer?.assignShift) {
-      dueDate = snapToShiftTime(startDate, doer.assignShift, false);
+      // =====================================
+      // HOURS
+      // =====================================
+      if (freq.includes("hour")) {
+        let calculatedDue = new Date(parentDue);
+
+        calculatedDue.setHours(calculatedDue.getHours() + x);
+
+        const shiftEnd = snapToShiftTime(parentDue, doer.assignShift, false);
+
+        if (calculatedDue < shiftEnd) {
+          dueDate = calculatedDue;
+        } else {
+          const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+
+          let nextDay = new Date(parentDue);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingDay = await nextWorkingShiftDate(
+            nextDay,
+            doer.assignShift._id,
+          );
+
+          const nextShiftStart = snapToShiftTime(
+            nextWorkingDay,
+            doer.assignShift,
+            true,
+          );
+
+          dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+        }
+      }
+
+      // =====================================
+      // DAYS
+      // =====================================
+      else {
+        dueDate = await addWorkingDaysHoliday(
+          parentDue,
+          x,
+          doer.assignShift._id,
+        );
+
+        dueDate.setHours(
+          parentDue.getHours(),
+          parentDue.getMinutes(),
+          parentDue.getSeconds(),
+          parentDue.getMilliseconds(),
+        );
+
+        const shiftEnd = snapToShiftTime(dueDate, doer.assignShift, false);
+
+        if (dueDate >= shiftEnd) {
+          let nextDay = new Date(dueDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingDay = await nextWorkingShiftDate(
+            nextDay,
+            doer.assignShift._id,
+          );
+
+          dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
+        }
+      }
     }
 
     const childInstanceTask = await FmsInstanceTask.create({

@@ -581,7 +581,7 @@ export const createTask = handleAsync(async (req, res, next) => {
                 workShift._id,
               );
 
-              dueDate = snapToShiftTime(nextWorkingDay, workShift, true);
+              dueDate = snapToShiftTime(nextWorkingDay, workShift, false);
             }
           }
 
@@ -3845,74 +3845,66 @@ export const deleteParentAndChildren = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   const { remark } = req.body || {};
 
-  if (!mongoose.Types.ObjectId.isValid(id))
+  if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(new AppError("Invalid ID", 400));
+  }
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const parent = await Task.findById(id).session(session);
-    if (!parent) {
-      await session.abortTransaction();
-      session.endSession();
-      return next(new AppError("Task not found", 404));
-    }
+  // 1. Find parent first
+  const parent = await Task.findById(id);
+  if (!parent) {
+    return next(new AppError("Task not found", 404));
+  }
 
-    // Collect all tasks to delete: parent + all tasks that (directly or indirectly) depend on it
-    const toDeleteIds = [parent._id];
-    let queue = [parent._id];
+  // 2. Collect parent + all dependent tasks
+  const toDeleteIds = [parent._id];
+  let queue = [parent._id];
 
-    while (queue.length > 0) {
-      const children = await Task.find({
-        "dependencyConfig.taskDependent": { $in: queue },
-      })
-        .session(session)
-        .select("_id");
-      if (!children || children.length === 0) break;
-      const childIds = children.map((c) => c._id);
-      // Filter new ones
-      const newIds = childIds.filter(
-        (cid) => !toDeleteIds.some((existing) => existing.equals(cid)),
-      );
-      if (newIds.length === 0) break;
-      toDeleteIds.push(...newIds);
-      queue = newIds;
-    }
+  while (queue.length > 0) {
+    const children = await Task.find({
+      "dependencyConfig.taskDependent": { $in: queue },
+    }).select("_id");
 
-    // Delete tasks
-    const deleteResult = await Task.deleteMany({
-      _id: { $in: toDeleteIds },
-    }).session(session);
+    if (!children.length) break;
 
-    // Record delete history
-    const historyDocs = await DeleteTaskHistory.create(
-      [
-        {
-          deleteParentTaskId: parent.TaskId || parent._id.toString(),
-          deletedBy: req.user && req.user._id ? req.user._id : null,
-          remark: remark || "",
-          deletedTasksCount: toDeleteIds.length,
-          deletedTaskIds: toDeleteIds,
-        },
-      ],
-      { session },
+    const childIds = children.map((c) => c._id);
+
+    const newIds = childIds.filter(
+      (cid) => !toDeleteIds.some((existing) => existing.equals(cid))
     );
 
-    await session.commitTransaction();
-    session.endSession();
+    if (!newIds.length) break;
 
-    res.status(200).json({
-      success: true,
-      message: `Parent task and ${toDeleteIds.length - 1} dependent task(s) deleted`,
-      deletedCount: toDeleteIds.length,
-      deletedTaskIds: toDeleteIds,
-      historyId: historyDocs && historyDocs[0] ? historyDocs[0]._id : null,
-    });
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    return next(err);
+    toDeleteIds.push(...newIds);
+    queue = newIds;
   }
+
+  // 3. Delete tasks first (important for consistency)
+  await Task.deleteMany({ _id: { $in: toDeleteIds } });
+
+  // 4. Update related data AFTER delete (avoids partial dependency issues)
+  if (parent.bucketId) {
+    await TaskBucket.updateOne(
+      { _id: parent.bucketId },
+      { $pull: { generatedTasks: { $in: toDeleteIds } } }
+    );
+  }
+
+  // 5. Save history LAST (so delete is already successful)
+  const historyDoc = await DeleteTaskHistory.create({
+    deleteParentTaskId: parent.TaskId || parent._id.toString(),
+    deletedBy: req.user?._id || null,
+    remark: remark || "",
+    deletedTasksCount: toDeleteIds.length,
+    deletedTaskIds: toDeleteIds,
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: `Parent task and ${toDeleteIds.length - 1} dependent task(s) deleted`,
+    deletedCount: toDeleteIds.length,
+    deletedTaskIds: toDeleteIds,
+    historyId: historyDoc?._id || null,
+  });
 });
 
 // ---------------------------------------------------------
