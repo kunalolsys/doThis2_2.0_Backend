@@ -102,6 +102,7 @@ const BaseTaskSchema = new mongoose.Schema(
       enum: [
         "Daily",
         "Weekly",
+        "Twice in a Week",
         "Fortnightly",
         "Monthly",
         "Quarterly",
@@ -306,6 +307,7 @@ const RecurringTaskSchema = new mongoose.Schema({
     enum: [
       "Daily",
       "Weekly",
+      "Twice in a Week",
       "Fortnightly",
       "Monthly",
       "Quarterly",
@@ -313,6 +315,10 @@ const RecurringTaskSchema = new mongoose.Schema({
       "Yearly",
     ],
     required: true,
+  },
+  weekStartDay: {
+    type: String,
+    default: null,
   },
   weekDays: [
     {

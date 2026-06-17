@@ -210,6 +210,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     isRecurrent,
     recurrenceFrequency,
     recurrenceEndDate,
+    weekStartDay,
     // delegationFlowEnabled,
   } = req.body;
 
@@ -523,28 +524,90 @@ export const createTask = handleAsync(async (req, res, next) => {
             return;
           }
           if (!isSameShift) {
-            console.log("⚠️ Shift mismatch → using child shift window only");
+            console.log("⚠️ Shift mismatch → using child shift calendar");
 
-            const baseDate = new Date(parentStart);
-
-            const childStart = await nextWorkingShiftDate(
-              baseDate,
+            const childStartDay = await nextWorkingShiftDate(
+              parentStart,
               workShift._id,
             );
 
-            commonFields.startDate = snapToShiftTime(
-              childStart,
-              workShift,
-              true,
-            );
-            commonFields.dueDate = snapToShiftTime(
-              childStart,
-              workShift,
-              false,
-            );
+            const childStart = snapToShiftTime(childStartDay, workShift, true);
 
-            // ❗ DO NOT return
-            // just skip dependency math
+            commonFields.startDate = childStart;
+
+            let dueDate = new Date(childStart);
+
+            const x = Number(dependencyData.xValue) || 0;
+            const freqStr = (
+              dependencyData.isDependentFrequency || ""
+            ).toLowerCase();
+
+            // ======================
+            // HOURS
+            // ======================
+            if (freqStr.includes("hour")) {
+              let calculatedDue = new Date(childStart);
+
+              // add x hours from child shift start
+              calculatedDue.setHours(calculatedDue.getHours() + x);
+
+              const shiftEnd = snapToShiftTime(childStart, workShift, false);
+
+              if (calculatedDue < shiftEnd) {
+                dueDate = calculatedDue;
+              } else {
+                const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+
+                let nextDay = new Date(childStart);
+                nextDay.setDate(nextDay.getDate() + 1);
+
+                let nextWorkingDay = await nextWorkingShiftDate(
+                  nextDay,
+                  workShift._id,
+                );
+
+                const nextShiftStart = snapToShiftTime(
+                  nextWorkingDay,
+                  workShift,
+                  true,
+                );
+
+                dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+              }
+            }
+
+            // ======================
+            // DAYS
+            // ======================
+            else {
+              dueDate = await addWorkingDaysHoliday(
+                childStart,
+                x,
+                workShift._id,
+              );
+
+              const shiftEnd = snapToShiftTime(dueDate, workShift, false);
+              dueDate.setHours(
+                shiftEnd.getHours(),
+                shiftEnd.getMinutes(),
+                shiftEnd.getSeconds(),
+                shiftEnd.getMilliseconds(),
+              );
+
+              if (dueDate >= shiftEnd) {
+                let nextDay = new Date(dueDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+
+                let nextWorkingDay = await nextWorkingShiftDate(
+                  nextDay,
+                  workShift._id,
+                );
+
+                dueDate = snapToShiftTime(nextWorkingDay, workShift, false);
+              }
+            }
+
+            commonFields.dueDate = dueDate;
           } else {
             // Child start = Parent start
             commonFields.startDate = new Date(parentStart);
@@ -641,6 +704,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       const freqMap = {
         daily: "Daily",
         weekly: "Weekly",
+        twice_weekly: "Twice in a Week",
         fortnightly: "Fortnightly",
         monthly: "Monthly",
         quarterly: "Quarterly",
@@ -685,13 +749,26 @@ export const createTask = handleAsync(async (req, res, next) => {
           parsedWeekDays = days.map((day) => day.toLowerCase());
         }
       }
+      let recurrenceEnd = null;
+
+      if (cleanField(recurrenceEndDate)) {
+        recurrenceEnd = await nextWorkingShiftDate(
+          parseDateIST(recurrenceEndDate),
+          workShift._id,
+        );
+
+        recurrenceEnd = snapToShiftTime(
+          recurrenceEnd,
+          workShift,
+          false, // shift end time
+        );
+      }
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
         weekDays: parsedWeekDays,
-        endDate: cleanField(recurrenceEndDate)
-          ? parseDateIST(recurrenceEndDate)
-          : null,
+        weekStartDay,
+        endDate: recurrenceEnd,
         attachmentFile: req.files
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
           : [],
@@ -1790,11 +1867,14 @@ export const filterTasks = handleAsync(async (req, res) => {
     allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
   }
 
+  else if(taskType=="All"){
+      allTasks.push(...tasks);
+  allTasks.push(...mappedFmsTasks);
+  }
   // ✅ ONLY NORMAL TASKS
   else if (taskType) {
     allTasks = isDoThisEnabled ? [...tasks] : [];
   }
-
   // ✅ ALL TASKS
   else {
     if (isDoThisEnabled) {
@@ -3691,22 +3771,78 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
         const isSameShift =
           String(workShift?._id) === String(parentWorkShift?._id);
         if (!isSameShift) {
-          console.log("⚠️ Shift mismatch → using child shift window only");
+          console.log("⚠️ Shift mismatch → using child shift calendar");
+
+          const x = Number(depTask.dependencyConfig.xValue || 0);
+          const freqStr = (
+            depTask.dependencyConfig.isDependentFrequency || ""
+          ).toLowerCase();
 
           const baseDate = new Date(parentStart);
 
           const start = await nextWorkingShiftDate(baseDate, workShift._id);
 
           childStart = snapToShiftTime(start, workShift, true);
-          childDue = snapToShiftTime(start, workShift, false);
 
-          // ❗ DO NOT return
-          // just skip dependency math
+          childDue = new Date(childStart);
+
+          // ======================================================
+          // HOURS
+          // ======================================================
+          if (freqStr.includes("hour")) {
+            let calculatedDue = new Date(childStart);
+
+            calculatedDue.setHours(calculatedDue.getHours() + x);
+
+            const shiftEnd = snapToShiftTime(childStart, workShift, false);
+
+            if (calculatedDue < shiftEnd) {
+              childDue = calculatedDue;
+            } else {
+              const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+
+              let nextDay = new Date(childStart);
+              nextDay.setDate(nextDay.getDate() + 1);
+
+              let nextWorkingDay = await nextWorkingShiftDate(
+                nextDay,
+                workShift._id,
+              );
+
+              const nextShiftStart = snapToShiftTime(
+                nextWorkingDay,
+                workShift,
+                true,
+              );
+
+              childDue = new Date(nextShiftStart.getTime() + overflowMs);
+            }
+          }
+
+          // ======================================================
+          // DAYS
+          // ======================================================
+          else {
+            childDue = await addWorkingDaysHoliday(
+              childStart,
+              x,
+              workShift._id,
+            );
+
+            const shiftEndTime = snapToShiftTime(childDue, workShift, false);
+
+            childDue.setHours(
+              shiftEndTime.getHours(),
+              shiftEndTime.getMinutes(),
+              shiftEndTime.getSeconds(),
+              shiftEndTime.getMilliseconds(),
+            );
+          }
         } else {
           // ======================================================
           // CHILD START = PARENT START
           // ======================================================
-          childStart = new Date(parentStart);
+          childStart = new Date(updatedTask.completedAt);
 
           childDue = new Date(parentDue);
 
@@ -4863,11 +4999,38 @@ export const updateTask = handleAsync(async (req, res, next) => {
   }
 
   // 5. Handle discriminator-specific fields (RecurringTask)
+  let recurrenceEnd = null;
   if (task.taskType === "RecurringTask") {
+    const assignedUser = await User.findById(task.assignedTo).populate(
+      "assignShift",
+    );
+    if (!assignedUser) {
+      return next(
+        new AppError(`User with ID ${task.assignedTo} not found`, 404),
+      );
+    }
+
+    const workShift = assignedUser.assignShift;
+    if (!workShift) {
+      return next(
+        new AppError(`No workshift assigned to user ${assignedUser.name}`, 400),
+      );
+    }
     if (frequency !== undefined) task.frequency = cleanField(frequency);
     if (endDate !== undefined)
-      task.endDate = cleanField(endDate) ? parseDateIST(endDate) : null;
+      if (cleanField(endDate)) {
+        recurrenceEnd = await nextWorkingShiftDate(
+          parseDateIST(endDate),
+          workShift._id,
+        );
 
+        recurrenceEnd = snapToShiftTime(
+          recurrenceEnd,
+          workShift,
+          false, // shift end time
+        );
+      }
+    task.endDate = recurrenceEnd;
     // Your original robust weekDays logic
     if (weekDays !== undefined) {
       try {

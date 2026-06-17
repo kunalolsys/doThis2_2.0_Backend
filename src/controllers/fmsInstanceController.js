@@ -748,7 +748,9 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
   if (req.body.status) {
     task.status = req.body.status;
   }
-
+if (req.body.assignedTo) {
+  task.assignedTo = req.body.assignedTo;
+}
   await task.save();
 
   // ✅ 6. Better progress calculation
@@ -936,7 +938,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
         // ====================================
         // START DATE = PARENT START DATE
         // ====================================
-        startDate = new Date(parentStart);
+        startDate = new Date(task.actualCompleteDate);
 
         dueDate = new Date(parentDue);
 
