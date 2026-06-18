@@ -17,6 +17,7 @@ router.get('/templates-details/:id',authenticateJWT,  fmsTemplateController.getT
 router.put('/templates/:id',authenticateJWT,  fmsTemplateController.updateTemplate);
 router.delete('/templates/:id',authenticateJWT,  fmsTemplateController.deleteTemplate);
 router.post('/templates/:id/tasks-list',authenticateJWT,  fmsTemplateController.getTemplateTasks);
+router.get('/templates/export',authenticateJWT,  fmsTemplateController.exportTemplate);
 
 // BRD 5.2 Template Tasks (Bulk + Single) - FIXED ROUTES
 router.post('/templates/:id/tasks', authenticateJWT, upload.array('files'), fmsTaskController.createFmsTasks);

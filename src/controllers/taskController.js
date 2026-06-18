@@ -211,6 +211,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     recurrenceFrequency,
     recurrenceEndDate,
     weekStartDay,
+    repeatAfter,
     // delegationFlowEnabled,
   } = req.body;
 
@@ -704,7 +705,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       const freqMap = {
         daily: "Daily",
         weekly: "Weekly",
-        twice_weekly: "Twice in a Week",
+        "bi-weekly": "Bi-weekly",
         fortnightly: "Fortnightly",
         monthly: "Monthly",
         quarterly: "Quarterly",
@@ -768,6 +769,7 @@ export const createTask = handleAsync(async (req, res, next) => {
         frequency: modelFrequency,
         weekDays: parsedWeekDays,
         weekStartDay,
+        repeatAfter,
         endDate: recurrenceEnd,
         attachmentFile: req.files
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
@@ -1557,7 +1559,42 @@ export const filterTasks = handleAsync(async (req, res) => {
 
         isValid = template.weekDays?.includes(currentDay);
       }
+      // ==================================================
+      // BI-WEEKLY
+      // ==================================================
+      else if (template.frequency === "Bi-weekly") {
+        const weekDays = [
+          "sunday",
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+        ];
 
+        const startIndex = weekDays.indexOf(
+          template.weekStartDay?.toLowerCase(),
+        );
+
+        if (startIndex === -1) {
+          isValid = false;
+        } else {
+          const repeatAfter = Number(template.repeatAfter || 0);
+
+          const currentIndex = date.getDay();
+
+          // First occurrence
+          if (currentIndex === startIndex) {
+            isValid = true;
+          }
+          // Second occurrence (can fall into next week)
+          else {
+            const secondIndex = (startIndex + repeatAfter) % 7;
+            isValid = currentIndex === secondIndex;
+          }
+        }
+      }
       // ==================================================
       // FORTNIGHTLY
       // ==================================================
@@ -1866,11 +1903,11 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (taskType === "FmsInstanceTask") {
     allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
   }
-
-  else if(taskType=="All"){
-      allTasks.push(...tasks);
-  allTasks.push(...mappedFmsTasks);
-  }
+  //**This is for FMS task with normal task in task reassignment */
+  // else if (taskType == "All") {
+  //   allTasks.push(...tasks);
+  //   allTasks.push(...mappedFmsTasks);
+  // }
   // ✅ ONLY NORMAL TASKS
   else if (taskType) {
     allTasks = isDoThisEnabled ? [...tasks] : [];

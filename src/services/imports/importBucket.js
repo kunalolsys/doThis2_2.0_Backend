@@ -10,6 +10,7 @@ import Role from "../../models/Role.js";
 import Task, { DelegationTask, RecurringTask } from "../../models/Task.js";
 import { handleAsync } from "../../utils/handleAsync.js";
 import AppError from "../../utils/AppError.js";
+import TaskBucketRequest from "../../models/TaskBucketRequest.js";
 
 // ── Flexible date parser (DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY) ─────────────
 const parseFlexibleDate = (raw) => {
@@ -202,7 +203,7 @@ export const importTaskBuckets = handleAsync(async (req, res, next) => {
               "Target Role is required when Assignment Mode is Role.",
             );
           resolvedRole = roleByName.get(targetRoleRaw.toLowerCase());
-          console.log("object",resolvedRole)
+          // console.log("object", resolvedRole);
           if (!resolvedRole)
             throw new Error(`Role "${targetRoleRaw}" not found.`);
           audienceKey = `role:${resolvedRole._id}`;
@@ -560,3 +561,100 @@ export const downloadBucketImportTemplate = (req, res) => {
   );
   res.send(buffer);
 };
+
+export const exportTaskBuckets = handleAsync(async (req, res, next) => {
+  try {
+    const buckets = await TaskBucket.find({ isDeleted: false })
+      .populate("targetRole", "name")
+      .populate("targetUsers", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const data = buckets.map((bucket) => ({
+      BucketId: bucket.bucketId,
+      Title: bucket.title || "",
+      Description: bucket.description || "",
+      "Assignment Mode": bucket.assignmentMode || "",
+      "Target Role":
+        bucket.assignmentMode === "Role" ? bucket.targetRole?.name || "" : "",
+      "Target Users":
+        bucket.assignmentMode === "Users"
+          ? (bucket.targetUsers || []).map((u) => u.name || u.email).join(", ")
+          : "",
+      "Start Date": bucket.startDate
+        ? new Date(bucket.startDate)
+            .toLocaleDateString("en-GB")
+            .replace(/\//g, "-")
+        : "",
+      "Task End Days": bucket.taskEndDays || "",
+      // Remark: bucket.remark || "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Task Buckets");
+
+    const buffer = XLSX.write(workbook, {
+      type: "buffer",
+      bookType: "xlsx",
+    });
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="task-buckets.xlsx"`,
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+
+    res.send(buffer);
+  } catch (err) {
+    next(new AppError(err.message, 500));
+  }
+});
+
+export const exportPendingTaskBuckets = handleAsync(async (req, res, next) => {
+  try {
+    const buckets = await TaskBucketRequest.find({})
+      .populate("submittedBy", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const data = buckets.map((bucket) => ({
+      Title: bucket.title || "",
+      Description: bucket.description || "",
+      "Start Date": bucket.startDate
+        ? new Date(bucket.startDate)
+            .toLocaleDateString("en-GB")
+            .replace(/\//g, "-")
+        : "",
+      "Task End Days": bucket.taskEndDays || "",
+      Status: bucket.status || "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Task Buckets");
+
+    const buffer = XLSX.write(workbook, {
+      type: "buffer",
+      bookType: "xlsx",
+    });
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="task-buckets.xlsx"`,
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+
+    res.send(buffer);
+  } catch (err) {
+    next(new AppError(err.message, 500));
+  }
+});

@@ -7,7 +7,9 @@ import { createLog } from "./logController.js";
 import FmsInstance from "../models/FmsInstance.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import { snapToShiftTime } from "../utils/dateCalculator.js";
-
+import csv from "csv-parser";
+import XLSX from "xlsx";
+import { Parser } from "json2csv";
 export const createTemplate = handleAsync(async (req, res, next) => {
   const {
     templateName,
@@ -470,4 +472,52 @@ export const getTemplateTasks = handleAsync(async (req, res) => {
     //   limit: parseInt(limit),
     // },
   });
+});
+
+//**Export templates */
+export const exportTemplate = handleAsync(async (req, res, next) => {
+  try {
+    const templates = await FmsTemplate.find({ isDeleted: false })
+      .populate("manager", "name email")
+      .populate("srManager", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const data = templates.map((temp) => ({
+      ID: temp.fmsId,
+      "Template Name": temp.templateName,
+      Description: temp.description || "",
+      Manager: temp.manager.name || "",
+      "Sr Manager": temp.srManager.name || "",
+      "Created At": temp.createdAt
+        ? new Date(temp.createdAt)
+            .toLocaleDateString("en-GB")
+            .replace(/\//g, "-")
+        : "",
+      Launched: temp.isLaunched ? "True" : "False",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Templates");
+
+    const buffer = XLSX.write(workbook, {
+      type: "buffer",
+      bookType: "xlsx",
+    });
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="templates.xlsx"`,
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+
+    res.send(buffer);
+  } catch (err) {
+    next(new AppError(err.message, 500));
+  }
 });

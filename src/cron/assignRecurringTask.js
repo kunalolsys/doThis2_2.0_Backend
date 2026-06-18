@@ -32,7 +32,7 @@ const isTaskDueToday = (task) => {
       const currentDayName = today.format("dddd").toLowerCase();
       return task.weekDays.includes(currentDayName);
 
-    case "Twice in a Week": {
+    case "Bi-weekly": {
       if (!task.weekStartDay) return false;
 
       const days = [
@@ -45,15 +45,17 @@ const isTaskDueToday = (task) => {
         "saturday",
       ];
 
-      const startDayIndex = days.indexOf(task.weekStartDay.toLowerCase());
+      const startDay = days.indexOf(task.weekStartDay.toLowerCase());
 
-      if (startDayIndex === -1) return false;
+      const offset = Number(task.repeatAfter || 0);
 
-      const secondDayIndex = (startDayIndex + 2) % 7;
+      if (offset < 0 || offset > 6) return false;
 
-      const todayIndex = today.day(); // 0-6
+      const secondDay = (startDay + offset) % 7;
 
-      return todayIndex === startDayIndex || todayIndex === secondDayIndex;
+      const todayDay = today.day();
+
+      return todayDay === startDay || todayDay === secondDay;
     }
 
     case "Fortnightly":

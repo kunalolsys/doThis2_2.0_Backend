@@ -51,7 +51,7 @@ async function updateTaskStatuses() {
         newStatus = "Upcoming";
       } else if (start && due && today >= start && today <= due) {
         newStatus = "Pending";
-      } else if (due && today > due) {
+      } else if (due && due.getTime() > today.getTime()) {
         newStatus = "Delayed";
       } else if (due && due < today) {
         newStatus = "Overdue";

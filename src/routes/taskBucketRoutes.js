@@ -18,6 +18,8 @@ import { authenticateJWT } from "../middleware/authMiddleware.js";
 import upload from "../middleware/upload.js";
 import {
   downloadBucketImportTemplate,
+  exportPendingTaskBuckets,
+  exportTaskBuckets,
   importTaskBuckets,
 } from "../services/imports/importBucket.js";
 const router = express.Router();
@@ -52,4 +54,7 @@ router.put(
 );
 router.patch("/:id/complete", authenticateJWT, completeTaskBucket);
 router.get("/:id/reporting-users", authenticateJWT, getBucketReportingUsers);
+router.get("/bucket/export", authenticateJWT, exportTaskBuckets);
+router.get("/bucket/export-pending", authenticateJWT, exportPendingTaskBuckets);
+
 export default router;
