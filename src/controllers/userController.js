@@ -14,6 +14,7 @@ import {
 } from "../services/templates.js";
 import { createLog } from "./logController.js";
 import mongoose from "mongoose";
+import TaskAudienceMaster from "../models/TaskAudienceMaster.js";
 // Get all users
 async function getAllSubordinates(managerId) {
   const subordinates = await User.find({
@@ -386,7 +387,8 @@ export const updateUser = handleAsync(async (req, res, next) => {
   // console.log("email@@@@",typeof email)
   if (name !== undefined) user.name = name;
   if (telegramUserName !== undefined) user.telegramUserName = telegramUserName;
-  if (telegramNotificationsEnabled !== undefined) user.telegramNotificationsEnabled = telegramNotificationsEnabled;
+  if (telegramNotificationsEnabled !== undefined)
+    user.telegramNotificationsEnabled = telegramNotificationsEnabled;
   if (email !== undefined) {
     const cleanEmail = email.trim();
 
@@ -431,6 +433,21 @@ export const updateUser = handleAsync(async (req, res, next) => {
   }
 
   if (department) user.department = department;
+  // Prevent role change if user is referenced in Task Audience Master
+  if (role && String(role) !== String(user.role)) {
+    const linkedAudience = await TaskAudienceMaster.findOne({
+      $or: [{ targetUsers: user._id }, { targetRole: user.role }],
+    }).populate("targetRole", "name");
+
+    if (linkedAudience) {
+      return next(
+        new AppError(
+          `Cannot change this user's role because the user or their current role is linked to Task Audience "${linkedAudience.name}".`,
+          400,
+        ),
+      );
+    }
+  }
   if (role) {
     const roleExists = await Role.findById(role);
     if (!roleExists) {
