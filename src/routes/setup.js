@@ -39,6 +39,11 @@ router.get(
   authenticateJWT,
   departmentController.getAllDeptsForDrops,
 );
+router.get(
+  "/departments/allDepartmentsForFMS",
+  authenticateJWT,
+  departmentController.getAllDeptsForDropsForFMS,
+);
 router.post(
   "/departments",
   authenticateJWT,

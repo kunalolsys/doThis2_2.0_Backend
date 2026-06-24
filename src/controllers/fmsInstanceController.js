@@ -20,6 +20,7 @@ import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
 import Counter from "../models/Counter.js";
 import { addDays } from "date-fns";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
+import Role from "../models/Role.js";
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -748,9 +749,9 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
   if (req.body.status) {
     task.status = req.body.status;
   }
-if (req.body.assignedTo) {
-  task.assignedTo = req.body.assignedTo;
-}
+  if (req.body.assignedTo) {
+    task.assignedTo = req.body.assignedTo;
+  }
   await task.save();
 
   // ✅ 6. Better progress calculation
@@ -917,8 +918,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
       let startDate;
       let dueDate;
       if (!parentStart || !parentDue) continue;
-      const isSameShift =
-        String(shift?._id) === String(parentWorkShift?._id);
+      const isSameShift = String(shift?._id) === String(parentWorkShift?._id);
       if (!isSameShift) {
         console.log("⚠️ Shift mismatch → using child shift window only");
 
@@ -1301,9 +1301,45 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     instanceName,
   } = req.body;
   const userId = req.cookies.userId || req.user?._id;
+  const loggedInUser = req.cookies;
 
-  // Build query
   const query = { createdBy: userId };
+
+  // Get role IDs
+  const [managerRole, srManagerRole] = await Promise.all([
+    Role.findOne({ name: "Manager" }).select("_id"),
+    Role.findOne({ name: "Sr. Manager" }).select("_id"),
+  ]);
+
+  if (!managerRole || !srManagerRole) {
+    return res.status(400).json({
+      success: false,
+      message: "Required roles not found.",
+    });
+  }
+
+  if (loggedInUser.role == "Admin") {
+    const users = await User.find({
+      role: {
+        $in: [managerRole._id, srManagerRole._id],
+      },
+    }).select("_id");
+
+    query.createdBy = {
+      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
+    };
+  } else if (loggedInUser.role == "Sr. Manager") {
+    const users = await User.find({
+      role: managerRole._id,
+    }).select("_id");
+
+    query.createdBy = {
+      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
+    };
+  } else {
+    query.createdBy = userId;
+  }
+  // Build query
 
   // Search by instanceId OR instanceName
   if (search) {

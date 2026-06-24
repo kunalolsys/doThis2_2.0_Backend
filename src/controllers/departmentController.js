@@ -109,7 +109,26 @@ export const getAllDeptsForDrops = handleAsync(async (req, res) => {
     data: departments,
   });
 });
+export const getAllDeptsForDropsForFMS = handleAsync(async (req, res) => {
+  const userId = req.cookies.userId || req.user._id || null;
+  const loggedInUser = await User.findById(userId).populate("role", "name");
 
+  if (!loggedInUser) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  let departments = [];
+  departments = await Department.find({
+    isDeleted: false,
+  });
+  return res.status(200).json({
+    success: true,
+    data: departments,
+  });
+});
 // create Department
 export const createDepartment = handleAsync(async (req, res, next) => {
   const { name } = req.body;
