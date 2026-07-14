@@ -37,6 +37,7 @@ const OpenFormFieldSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isTableColumn: { type: Boolean, default: false },
 
     defaultValue: mongoose.Schema.Types.Mixed,
 

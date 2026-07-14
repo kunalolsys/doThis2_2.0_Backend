@@ -18,6 +18,9 @@ import {
   updateChecklistItem,
   getConversations,
   exportMYTasks,
+  filterFMSTasks,
+  getFMSTaskStats,
+  exportMYFMSTasks,
 } from '../controllers/taskController.js';
 import { reopenTask } from '../controllers/taskReopenController.js';
 
@@ -42,10 +45,17 @@ router.post(
 
 router.get('/', authenticateJWT, getAllTasks);
 router.post('/filter', authenticateJWT, filterTasks);
+router.post('/filter-fms', authenticateJWT, filterFMSTasks);
+
 router.post('/myTask-stats', authenticateJWT, getTaskStats);
+router.post('/myFmsTask-stats', authenticateJWT, getFMSTaskStats);
+
+router.post('/my-task/export', authenticateJWT, exportMYTasks);
+router.post('/my-task/export-fms', authenticateJWT, exportMYFMSTasks);
+
 router.post('/role-based-tasks', authenticateJWT, getRoleBasedTasks);
 router.post('/tasks-with-stats', authenticateJWT, getAllTasksWithStats);
-router.post('/my-task/export', authenticateJWT, exportMYTasks);
+
 
 router.post('/export', authenticateJWT, exportTasks);
 

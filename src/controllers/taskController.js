@@ -1897,31 +1897,31 @@ export const filterTasks = handleAsync(async (req, res) => {
         createdAt: task.createdAt,
       }))
     : [];
-  let allTasks = [];
+  let allTasks = [...tasks];
 
-  // ✅ ONLY FMS TASKS
-  if (taskType === "FmsInstanceTask") {
-    allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
-  }
-  //**This is for FMS task with normal task in task reassignment */
-  // else if (taskType == "All") {
-  //   allTasks.push(...tasks);
-  //   allTasks.push(...mappedFmsTasks);
+  // // ✅ ONLY FMS TASKS
+  // if (taskType === "FmsInstanceTask") {
+  //   allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
   // }
-  // ✅ ONLY NORMAL TASKS
-  else if (taskType) {
-    allTasks = isDoThisEnabled ? [...tasks] : [];
-  }
-  // ✅ ALL TASKS
-  else {
-    if (isDoThisEnabled) {
-      allTasks.push(...tasks);
-    }
+  // //**This is for FMS task with normal task in task reassignment */
+  // // else if (taskType == "All") {
+  // //   allTasks.push(...tasks);
+  // //   allTasks.push(...mappedFmsTasks);
+  // // }
+  // // ✅ ONLY NORMAL TASKS
+  // else if (taskType) {
+  //   allTasks = isDoThisEnabled ? [...tasks] : [];
+  // }
+  // // ✅ ALL TASKS
+  // else {
+  //   if (isDoThisEnabled) {
+  //     allTasks.push(...tasks);
+  //   }
 
-    if (isFmsEnabled) {
-      allTasks.push(...mappedFmsTasks);
-    }
-  }
+  //   if (isFmsEnabled) {
+  //     allTasks.push(...mappedFmsTasks);
+  //   }
+  // }
   // const actualTotal = total + fmsTotal;
   const totalTasks = allTasks.length;
 
@@ -1946,7 +1946,193 @@ export const filterTasks = handleAsync(async (req, res) => {
     totalPages: Math.ceil(totalTasks / limit),
   });
 });
+export const filterFMSTasks = handleAsync(async (req, res) => {
+  const {
+    userId,
+    page = 1,
+    limit = 10,
+    search,
+    filters = {},
+    creatorOrAssignorId,
+    departmentId,
+    createdBy,
+    assignedBy,
+    startDate,
+    endDate,
+  } = req.body;
 
+  const skip = (page - 1) * limit;
+
+  const { stat, taskCategory, status, taskType } = filters;
+
+  const todayStart = startOfDay(new Date());
+  const todayEnd = endOfDay(new Date());
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
+
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  //**GETING FMS TASKS */
+  const fmsQuery = {};
+
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // SEARCH
+  if (search) {
+    fmsQuery.$or = [
+      { description: { $regex: search, $options: "i" } },
+      { taskId: search },
+    ];
+  }
+
+  // STATUS
+  if (status && status !== "all") fmsQuery.status = status;
+
+  // TASK TYPE (ignore for FMS)
+  // delete query.taskType;
+
+  // DATE RANGE
+  if (startDate || endDate) {
+    const dateFilter = {};
+    if (startDate) dateFilter.$gte = startOfDay(parseISO(startDate));
+    if (endDate) dateFilter.$lte = endOfDay(parseISO(endDate));
+    fmsQuery.$or = [
+      { plannedStartDate: dateFilter },
+      { plannedDueDate: dateFilter },
+    ];
+  }
+
+  // =========================
+  // 📊 STATUS / STAT FILTER
+  // =========================
+  if (stat === "overdue") {
+    fmsQuery.plannedDueDate = { $lt: todayStart };
+    fmsQuery.status = { $nin: ["Completed", "Stopped"] };
+  }
+
+  if (stat === "dueToday") {
+    fmsQuery.plannedDueDate = { $gte: todayStart, $lte: todayEnd };
+  }
+
+  if (stat === "completed") {
+    fmsQuery.status = "Completed";
+  }
+
+  if (stat === "pending") {
+    fmsQuery.status = "Pending";
+  }
+
+  // =========================
+  // 📌 TAB CATEGORY
+  // =========================
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      const start = startOfDay(new Date());
+      const end = endOfDay(new Date());
+
+      fmsQuery.status = { $in: ["Pending", "Delayed", "Overdue"] };
+      fmsQuery.plannedStartDate = { $gte: start, $lte: end };
+    }
+
+    if (taskCategory === "upcoming") {
+      fmsQuery.status = "Upcoming";
+    }
+
+    if (taskCategory === "completed") {
+      fmsQuery.status = "Completed";
+    }
+  }
+
+  // =========================
+  // 📊 DIRECT STATUS FILTER
+  // =========================
+  if (taskCategory !== "upcoming" && status && status !== "all") {
+    fmsQuery.status = status;
+  }
+  // VISIBILITY
+  // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
+  const [fmsTasks, fmsTotal] = await Promise.all([
+    isFmsEnabled
+      ? FmsInstanceTask.find(fmsQuery)
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("updatedBy", "name email") // use as assignedBy fallback
+          .populate("departmentOfAssignToUser", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
+    // .skip(skip)
+    // .limit(limit)
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
+  ]);
+  const mappedFmsTasks = isFmsEnabled
+    ? fmsTasks.map((task) => ({
+        ...task,
+        _id: task._id,
+        TaskId: task.taskId,
+
+        title: task.description,
+        description: task.description,
+
+        startDate: task.plannedStartDate,
+        dueDate: task.plannedDueDate,
+
+        status: task.status,
+
+        assignedTo: task.assignedTo,
+        assignedBy: task.assignedBy || null,
+
+        departmentOfAssignToUser: task.departmentOfAssignToUser,
+
+        taskType: "FmsInstanceTask",
+
+        isVisible: task.isVisible,
+
+        checklist: task.checklist || [],
+
+        createdAt: task.createdAt,
+      }))
+    : [];
+  let allTasks = [...mappedFmsTasks];
+  // const actualTotal = total + fmsTotal;
+  const totalTasks = allTasks.length;
+
+  const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
+
+  res.json({
+    success: true,
+    // data: tasks,
+    data: paginatedTasks,
+    totalTasks: totalTasks,
+    currentPage: page,
+    totalPages: Math.ceil(totalTasks / limit),
+  });
+});
 //**export my task */
 export const exportMYTasks = handleAsync(async (req, res) => {
   const {
@@ -2541,28 +2727,28 @@ export const exportMYTasks = handleAsync(async (req, res) => {
         createdAt: task.createdAt,
       }))
     : [];
-  let allTasks = [];
+  let allTasks = [...tasks];
 
-  // ✅ ONLY FMS TASKS
-  if (taskType === "FmsInstanceTask") {
-    allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
-  }
+  // // ✅ ONLY FMS TASKS
+  // if (taskType === "FmsInstanceTask") {
+  //   allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
+  // }
 
-  // ✅ ONLY NORMAL TASKS
-  else if (taskType) {
-    allTasks = isDoThisEnabled ? [...tasks] : [];
-  }
+  // // ✅ ONLY NORMAL TASKS
+  // else if (taskType) {
+  //   allTasks = isDoThisEnabled ? [...tasks] : [];
+  // }
 
-  // ✅ ALL TASKS
-  else {
-    if (isDoThisEnabled) {
-      allTasks.push(...tasks);
-    }
+  // // ✅ ALL TASKS
+  // else {
+  //   if (isDoThisEnabled) {
+  //     allTasks.push(...tasks);
+  //   }
 
-    if (isFmsEnabled) {
-      allTasks.push(...mappedFmsTasks);
-    }
-  }
+  //   if (isFmsEnabled) {
+  //     allTasks.push(...mappedFmsTasks);
+  //   }
+  // }
   // const actualTotal = total + fmsTotal;
   const totalTasks = allTasks.length;
 
@@ -2586,7 +2772,187 @@ export const exportMYTasks = handleAsync(async (req, res) => {
     data: finalData,
   });
 });
+export const exportMYFMSTasks = handleAsync(async (req, res) => {
+  const {
+    userId,
+    search,
+    filters = {},
+    creatorOrAssignorId,
+    departmentId,
+    createdBy,
+    assignedBy,
+    startDate,
+    endDate,
+  } = req.body;
 
+  const { stat, taskCategory, status, taskType } = filters;
+
+  const todayStart = startOfDay(new Date());
+  const todayEnd = endOfDay(new Date());
+
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
+  // 🔥 STEP 4: MERGE in response
+  //**GETING FMS TASKS */
+  const fmsQuery = {};
+
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // SEARCH
+  if (search) {
+    fmsQuery.$or = [
+      { description: { $regex: search, $options: "i" } },
+      { taskId: search },
+    ];
+  }
+
+  // STATUS
+  if (status && status !== "all") fmsQuery.status = status;
+
+  // TASK TYPE (ignore for FMS)
+  // delete query.taskType;
+
+  // DATE RANGE
+  if (startDate || endDate) {
+    const dateFilter = {};
+    if (startDate) dateFilter.$gte = startOfDay(parseISO(startDate));
+    if (endDate) dateFilter.$lte = endOfDay(parseISO(endDate));
+    fmsQuery.$or = [
+      { plannedStartDate: dateFilter },
+      { plannedDueDate: dateFilter },
+    ];
+  }
+
+  // =========================
+  // 📊 STATUS / STAT FILTER
+  // =========================
+  if (stat === "overdue") {
+    fmsQuery.plannedDueDate = { $lt: todayStart };
+    fmsQuery.status = { $nin: ["Completed", "Stopped"] };
+  }
+
+  if (stat === "dueToday") {
+    fmsQuery.plannedDueDate = { $gte: todayStart, $lte: todayEnd };
+  }
+
+  if (stat === "completed") {
+    fmsQuery.status = "Completed";
+  }
+
+  if (stat === "pending") {
+    fmsQuery.status = "Pending";
+  }
+
+  // =========================
+  // 📌 TAB CATEGORY
+  // =========================
+  if (!stat) {
+    if (taskCategory === "today_backlog") {
+      const start = startOfDay(new Date());
+      const end = endOfDay(new Date());
+
+      fmsQuery.status = { $in: ["Pending", "Delayed", "Overdue"] };
+      fmsQuery.plannedStartDate = { $gte: start, $lte: end };
+    }
+
+    if (taskCategory === "upcoming") {
+      fmsQuery.status = "Upcoming";
+    }
+
+    if (taskCategory === "completed") {
+      fmsQuery.status = "Completed";
+    }
+  }
+
+  // =========================
+  // 📊 DIRECT STATUS FILTER
+  // =========================
+  if (taskCategory !== "upcoming" && status && status !== "all") {
+    fmsQuery.status = status;
+  }
+  // VISIBILITY
+  // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
+  const [fmsTasks, fmsTotal] = await Promise.all([
+    isFmsEnabled
+      ? FmsInstanceTask.find(fmsQuery)
+          .populate("assignedTo", "name email department assignShift")
+          .populate("assignedBy", "name email")
+          .populate("updatedBy", "name email") // use as assignedBy fallback
+          .populate("departmentOfAssignToUser", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      : Promise.resolve([]),
+    // .skip(skip)
+    // .limit(limit)
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
+  ]);
+  const mappedFmsTasks = isFmsEnabled
+    ? fmsTasks.map((task) => ({
+        ...task,
+        _id: task._id,
+        TaskId: task.taskId,
+
+        title: task.description,
+        description: task.description,
+
+        startDate: task.plannedStartDate,
+        dueDate: task.plannedDueDate,
+
+        status: task.status,
+
+        assignedTo: task.assignedTo,
+        assignedBy: task.assignedBy || null,
+
+        departmentOfAssignToUser: task.departmentOfAssignToUser,
+
+        taskType: "FmsInstanceTask",
+
+        isVisible: task.isVisible,
+
+        checklist: task.checklist || [],
+
+        createdAt: task.createdAt,
+      }))
+    : [];
+  let allTasks = [...mappedFmsTasks];
+
+  // const actualTotal = total + fmsTotal;
+  const totalTasks = allTasks.length;
+
+  const finalData = [...allTasks];
+
+  res.json({
+    success: true,
+    total: finalData.length,
+    data: finalData,
+  });
+});
 //**get my task stats */
 export const getTaskStats = handleAsync(async (req, res) => {
   const { userId, creatorOrAssignorId, departmentId, createdBy } = req.body;
@@ -2791,6 +3157,102 @@ export const getTaskStats = handleAsync(async (req, res) => {
         })
       : Promise.resolve(0),
   ]);
+
+  // res.json({
+  //   success: true,
+  //   stats: {
+  //     total: total + fmsTotal,
+  //     completed: completed + fmsCompleted,
+  //     pending: pending + fmsPending,
+  //     overdue: overdue + fmsOverdue,
+  //   },
+  // });
+  res.json({
+    success: true,
+    stats: {
+      total: total,
+      completed: completed,
+      pending: pending,
+      overdue: overdue,
+    },
+  });
+});
+export const getFMSTaskStats = handleAsync(async (req, res) => {
+  const { userId, creatorOrAssignorId, departmentId, createdBy } = req.body;
+
+  const baseConditions = [];
+
+  const todayStart = startOfDay(new Date());
+  const todayEnd = endOfDay(new Date());
+  // =========================
+  // MODULE ENABLE CHECK
+  // =========================
+
+  const moduleSettings = await ModuleSetting.find({
+    moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+  }).lean();
+
+  const isModuleEnabled = (key) => {
+    const mod = moduleSettings.find((m) => m.moduleKey === key);
+    return mod ? mod.isEnabled : true;
+  };
+
+  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
+  //**FMS Stats */
+  const fmsQuery = {};
+
+  // USER FILTERS
+  if (creatorOrAssignorId) {
+    fmsQuery.$or = [
+      { updatedBy: creatorOrAssignorId },
+      { assignedTo: creatorOrAssignorId },
+    ];
+  } else if (departmentId) {
+    const usersInDept = await User.find({ department: departmentId }).select(
+      "_id",
+    );
+    fmsQuery.assignedTo = { $in: usersInDept.map((u) => u._id) };
+  } else if (userId) {
+    fmsQuery.assignedTo = userId;
+  }
+
+  if (createdBy) fmsQuery.updatedBy = createdBy;
+
+  // visibility same as tasks
+  // fmsQuery.isVisible = true;
+  const [fmsTotal, fmsCompleted, fmsPending, fmsOverdue] = await Promise.all([
+    // TOTAL
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments(fmsQuery)
+      : Promise.resolve(0),
+
+    // COMPLETED
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          status: "Completed",
+        })
+      : Promise.resolve(0),
+
+    // PENDING
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          status: "Pending",
+        })
+      : Promise.resolve(0),
+
+    // OVERDUE
+    isFmsEnabled
+      ? FmsInstanceTask.countDocuments({
+          ...fmsQuery,
+          plannedDueDate: { $lt: todayStart },
+          status: { $nin: ["Completed", "Stopped"] },
+        })
+      : Promise.resolve(0),
+  ]);
   // =========================================================
   // 📤 RESPONSE
   // =========================================================
@@ -2806,10 +3268,10 @@ export const getTaskStats = handleAsync(async (req, res) => {
   res.json({
     success: true,
     stats: {
-      total: total + fmsTotal,
-      completed: completed + fmsCompleted,
-      pending: pending + fmsPending,
-      overdue: overdue + fmsOverdue,
+      total: fmsTotal,
+      completed: fmsCompleted,
+      pending: fmsPending,
+      overdue: fmsOverdue,
     },
   });
 });

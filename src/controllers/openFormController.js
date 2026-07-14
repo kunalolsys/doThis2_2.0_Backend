@@ -242,47 +242,56 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   // =====================================================
   // 2. VALIDATE SUBMISSION DATA
   // =====================================================
+  const enrichedSubmissionData = {};
 
-  for (const field of form.fields || []) {
-    const value = submissionData[field.fieldId];
-
-    // REQUIRED VALIDATION
-    if (field.isRequired) {
-      if (value === undefined || value === null || value === "") {
-        return next(new AppError(`${field.label} is required`, 400));
-      }
-    }
-
-    // TYPE VALIDATION
-    if (value !== undefined && value !== null && value !== "") {
-      switch (field.fieldType) {
-        case "email":
-          if (!/^\S+@\S+\.\S+$/.test(value)) {
-            return next(
-              new AppError(`${field.label} must be valid email`, 400),
-            );
-          }
-          break;
-
-        case "number":
-          if (isNaN(value)) {
-            return next(new AppError(`${field.label} must be number`, 400));
-          }
-          break;
-
-        case "url":
-          try {
-            new URL(value);
-          } catch {
-            return next(new AppError(`${field.label} must be valid URL`, 400));
-          }
-          break;
-
-        default:
-          break;
-      }
-    }
+  for (const field of form.fields) {
+    enrichedSubmissionData[field.fieldId] = {
+      value: submissionData[field.fieldId],
+      isTableColumn: field.isTableColumn || false,
+      label: field.label,
+      fieldType: field.fieldType,
+    };
   }
+  // for (const field of form.fields || []) {
+  //   const value = submissionData[field.fieldId];
+
+  //   // REQUIRED VALIDATION
+  //   if (field.isRequired) {
+  //     if (value === undefined || value === null || value === "") {
+  //       return next(new AppError(`${field.label} is required`, 400));
+  //     }
+  //   }
+
+  //   // TYPE VALIDATION
+  //   if (value !== undefined && value !== null && value !== "") {
+  //     switch (field.fieldType) {
+  //       case "email":
+  //         if (!/^\S+@\S+\.\S+$/.test(value)) {
+  //           return next(
+  //             new AppError(`${field.label} must be valid email`, 400),
+  //           );
+  //         }
+  //         break;
+
+  //       case "number":
+  //         if (isNaN(value)) {
+  //           return next(new AppError(`${field.label} must be number`, 400));
+  //         }
+  //         break;
+
+  //       case "url":
+  //         try {
+  //           new URL(value);
+  //         } catch {
+  //           return next(new AppError(`${field.label} must be valid URL`, 400));
+  //         }
+  //         break;
+
+  //       default:
+  //         break;
+  //     }
+  //   }
+  // }
 
   // =====================================================
   // 3. SAVE FORM SUBMISSION
@@ -291,7 +300,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   const submission = await FormSubmission.create({
     formId: form._id,
     submittedBy: userId,
-    submissionData,
+    submissionData:enrichedSubmissionData,
     status: "Submitted",
   });
 
@@ -359,7 +368,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
 
     fmsDuration: template.fmsDuration,
 
-    runtimeContext: submissionData,
+    runtimeContext: enrichedSubmissionData,
   });
 
   // =====================================================
