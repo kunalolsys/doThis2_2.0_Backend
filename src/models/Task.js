@@ -59,7 +59,10 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
-
+    taskEndTime: {
+      type: String,
+      default: null,
+    },
     checklist: {
       type: [ChecklistItemSchema],
       default: [],

@@ -212,6 +212,7 @@ export const createTask = handleAsync(async (req, res, next) => {
     recurrenceEndDate,
     weekStartDay,
     repeatAfter,
+    taskEndTime,
     // delegationFlowEnabled,
   } = req.body;
 
@@ -341,7 +342,12 @@ export const createTask = handleAsync(async (req, res, next) => {
         workShift._id,
       );
     }
+    // Override due time if taskEndTime is provided
+    if (effectiveDueDate && taskEndTime) {
+      const [hours, minutes] = taskEndTime.split(":").map(Number);
 
+      effectiveDueDate.setHours(hours, minutes, 0, 0);
+    }
     const commonFields = {
       title: title.trim(),
       description: description.trim(),
@@ -750,20 +756,20 @@ export const createTask = handleAsync(async (req, res, next) => {
           parsedWeekDays = days.map((day) => day.toLowerCase());
         }
       }
-      let recurrenceEnd = null;
+      let recurrenceEnd = recurrenceEndDate;
+      //**comment for new change now endtime also be stored with end date in recurring task */
+      // if (cleanField(recurrenceEndDate)) {
+      //   recurrenceEnd = await nextWorkingShiftDate(
+      //     parseDateIST(recurrenceEndDate),
+      //     workShift._id,
+      //   );
 
-      if (cleanField(recurrenceEndDate)) {
-        recurrenceEnd = await nextWorkingShiftDate(
-          parseDateIST(recurrenceEndDate),
-          workShift._id,
-        );
-
-        recurrenceEnd = snapToShiftTime(
-          recurrenceEnd,
-          workShift,
-          false, // shift end time
-        );
-      }
+      //   recurrenceEnd = snapToShiftTime(
+      //     recurrenceEnd,
+      //     workShift,
+      //     false, // shift end time
+      //   );
+      // }
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
@@ -779,6 +785,7 @@ export const createTask = handleAsync(async (req, res, next) => {
       // 🔥 DELEGATION
       newTask = new DelegationTask({
         ...commonFields,
+        taskEndTime,
         status: calculateStatus({ ...commonFields, completeStatus: false }),
         attachmentFile: req.files
           ? req.files.map((file) => `${req.uploadFolder}/${file.filename}`)
@@ -5357,6 +5364,15 @@ export const updateChecklistItem = handleAsync(async (req, res, next) => {
     },
   });
 });
+const applyTaskEndTime = (date, taskEndTime) => {
+  if (!date || !taskEndTime) return date;
+
+  const [hours, minutes] = taskEndTime.split(":").map(Number);
+
+  date.setHours(hours, minutes, 0, 0);
+
+  return date;
+};
 export const updateTask = handleAsync(async (req, res, next) => {
   const { id } = req.params;
   let shouldRecalculateStatus = false;
@@ -5382,7 +5398,8 @@ export const updateTask = handleAsync(async (req, res, next) => {
     endDate,
     weekDays,
     status,
-    taskEndDays, // <--- We capture this explicitly to check later
+    taskEndDays,
+    taskEndTime, // <--- We capture this explicitly to check later
     ...otherUpdates
   } = req.body;
 
@@ -5484,19 +5501,44 @@ export const updateTask = handleAsync(async (req, res, next) => {
     task.dueDate = newDate;
   }
   let effectiveStartDate = task.startDate;
-  if (taskEndDays !== null && taskEndDays > 0 && task.assignedTo) {
-    task.taskEndDays = Number(taskEndDays);
-    const user = await User.findById(task.assignedTo).populate("assignShift");
-    if (user?.assignShift) {
-      const workShiftId = user.assignShift._id;
-      task.dueDate = await addWorkingDaysHoliday(
-        effectiveStartDate,
-        Number(taskEndDays),
-        workShiftId,
-      );
-    }
+
+  // Save taskEndTime if frontend sends it
+  if (taskEndTime !== undefined) {
+    task.taskEndTime = taskEndTime;
   }
 
+  // Save taskEndDays if frontend sends it
+  if (taskEndDays !== undefined) {
+    task.taskEndDays = taskEndDays;
+  }
+
+  // ✅ Highest priority: explicit endDate from frontend
+  if (endDate !== undefined && cleanField(endDate)) {
+    task.dueDate = new Date(endDate);
+  }
+  // Otherwise calculate from taskEndDays
+  else if (task.taskEndDays && task.assignedTo) {
+    const user = await User.findById(task.assignedTo).populate("assignShift");
+
+    if (user?.assignShift) {
+      const workShiftId = user.assignShift._id;
+
+      task.dueDate = await addWorkingDaysHoliday(
+        effectiveStartDate,
+        Number(task.taskEndDays),
+        workShiftId,
+      );
+
+      // Apply custom time only if available
+      if (task.taskEndTime) {
+        task.dueDate = applyTaskEndTime(task.dueDate, task.taskEndTime);
+      }
+    }
+  }
+  // Only update the time of existing dueDate
+  else if (task.taskEndTime && task.dueDate) {
+    task.dueDate = applyTaskEndTime(task.dueDate, task.taskEndTime);
+  }
   // 5. Handle discriminator-specific fields (RecurringTask)
   let recurrenceEnd = null;
   if (task.taskType === "RecurringTask") {
@@ -5516,20 +5558,24 @@ export const updateTask = handleAsync(async (req, res, next) => {
       );
     }
     if (frequency !== undefined) task.frequency = cleanField(frequency);
-    if (endDate !== undefined)
-      if (cleanField(endDate)) {
-        recurrenceEnd = await nextWorkingShiftDate(
-          parseDateIST(endDate),
-          workShift._id,
-        );
+    if (endDate !== undefined && cleanField(endDate)) {
+      const selectedEndDate = new Date(endDate);
 
-        recurrenceEnd = snapToShiftTime(
-          recurrenceEnd,
-          workShift,
-          false, // shift end time
-        );
-      }
-    task.endDate = recurrenceEnd;
+      recurrenceEnd = await nextWorkingShiftDate(
+        selectedEndDate,
+        workShift._id,
+      );
+
+      // Preserve the selected time from the frontend
+      recurrenceEnd.setHours(
+        selectedEndDate.getHours(),
+        selectedEndDate.getMinutes(),
+        selectedEndDate.getSeconds(),
+        selectedEndDate.getMilliseconds(),
+      );
+
+      task.endDate = recurrenceEnd;
+    }
     // Your original robust weekDays logic
     if (weekDays !== undefined) {
       try {

@@ -143,9 +143,34 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
       }
 
       // Today + taskEndDays working days
-      const shiftDueEnd = task.taskEndDays
-        ? await addWorkingDays(todayShiftStart, task.taskEndDays, workShift._id)
-        : snapToShiftTime(todayShiftStart, workShift, false); // End of shift
+      //**comment for new change now we take time from frontend */
+      // const shiftDueEnd = task.taskEndDays
+      //   ? await addWorkingDays(todayShiftStart, task.taskEndDays, workShift._id)
+      //   : snapToShiftTime(todayShiftStart, workShift, false); // End of shift
+      let shiftDueEnd;
+
+      if (task.taskEndDays) {
+        shiftDueEnd = await addWorkingDays(
+          todayShiftStart,
+          task.taskEndDays,
+          workShift._id,
+        );
+      } else if (task.endDate) {
+        // Use the time stored in recurring task endDate
+        shiftDueEnd = new Date(todayShiftStart);
+
+        const recurringEnd = new Date(task.endDate);
+
+        shiftDueEnd.setHours(
+          recurringEnd.getHours(),
+          recurringEnd.getMinutes(),
+          recurringEnd.getSeconds(),
+          recurringEnd.getMilliseconds(),
+        );
+      } else {
+        // Fallback if no endDate is configured
+        shiftDueEnd = snapToShiftTime(todayShiftStart, workShift, false);
+      }
       const assignedByUser = await User.findById(task.assignedBy).select(
         "name email",
       );
