@@ -13,6 +13,8 @@ import {
 } from "../utils/dateCalculator.js";
 import { addDays, format } from "date-fns";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
+import sendEmail from "../services/emailService.js";
+import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js";
 
 const isWorkingDay = (today, weekDays) => {
   const dayLower = today.format("dddd").toLowerCase();
@@ -322,6 +324,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         const assignedByUser = await User.findById(task.assignedBy).select(
           "name email",
         );
+         const assignedToUser = await User.findById(task.assignedTo).select(
+          "name email",
+        );
         if (!user?.assignShift) continue;
 
         const shiftStart = await nextWorkingShiftDate(
@@ -361,6 +366,26 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           type: "TASK_ASSIGNED",
           task: parentInstanceTask,
           actor: assignedByUser,
+        });
+        const emailTemplate = taskAssignedTemplate({
+          userName: assignedToUser.name,
+
+          taskId: parentInstanceTask.taskId,
+
+          title: parentInstanceTask.description,
+
+          description: parentInstanceTask.description,
+
+          dueDate: parentInstanceTask.plannedDueDate
+            ? new Date(parentInstanceTask.plannedDueDate).toLocaleString("en-IN")
+            : "N/A",
+
+          assignedBy: assignedByUser?.name,
+        });
+        sendEmail({
+          to: assignedToUser.email,
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
         });
         console.log(
           `✅ ${task.taskId} | ${format(shiftStart, "HH:mm dd-MM")}→${format(shiftEnd, "HH:mm")}`,

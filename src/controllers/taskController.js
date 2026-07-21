@@ -2086,6 +2086,7 @@ export const filterFMSTasks = handleAsync(async (req, res) => {
       ? FmsInstanceTask.find(fmsQuery)
           .populate("assignedTo", "name email department assignShift")
           .populate("assignedBy", "name email")
+          .populate("notDoneBy", "name email")
           .populate("updatedBy", "name email") // use as assignedBy fallback
           .populate("departmentOfAssignToUser", "name")
           .sort({ createdAt: -1 })

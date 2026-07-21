@@ -59,9 +59,18 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
         "Completed",
         "Onhold",
         "Stopped",
+        "Not Done",
       ],
       default: "Upcoming",
       index: true,
+    },
+    notDoneRemark: {
+      type: String,
+      default: null,
+    },
+    notDoneBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
     delayDays: Number,
     waitingForParent: { type: Boolean, default: false },

@@ -752,6 +752,34 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
   if (req.body.assignedTo) {
     task.assignedTo = req.body.assignedTo;
   }
+  // Handle Not Done
+  if (req.body.status === "Not Done") {
+    task.status = "Not Done";
+    task.notDoneRemark = req.body.notDoneRemark || "";
+    task.notDoneBy = req.cookies.userId || req.user?._id;
+
+    // Recursively mark all dependent children as Not Done
+    const markChildrenNotDone = async (parentTaskId) => {
+      const children = await FmsInstanceTask.find({
+        fmsInstanceId: instanceId,
+        dependentOn: parentTaskId,
+      });
+
+      for (const child of children) {
+        child.status = "Not Done";
+        child.notDoneRemark = task.notDoneRemark;
+        child.notDoneBy = req.cookies.userId || req.user?._id;
+        child.updatedBy = req.cookies.userId || req.user?._id;
+
+        await child.save();
+
+        // Continue for grandchildren
+        await markChildrenNotDone(child.taskId);
+      }
+    };
+
+    await markChildrenNotDone(task.taskId);
+  }
   await task.save();
 
   // ✅ 6. Better progress calculation

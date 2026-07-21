@@ -298,6 +298,11 @@ const DelegationTaskSchema = new mongoose.Schema({
     ref: "User",
     default: null,
   },
+  instanceKey: {
+    type: String,
+    unique: true, // Prevents duplicates at the MongoDB database engine level
+    sparse: true,
+  },
 });
 
 // ---------------------------------------------------------

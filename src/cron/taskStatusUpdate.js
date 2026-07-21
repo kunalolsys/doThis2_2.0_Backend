@@ -90,8 +90,8 @@ async function updateTaskStatuses() {
 
         continue; // ⛔ skip normal logic
       }
-      // Skip already completed/cancelled
-      if (t.status === "Completed" || t.status === "Cancelled") continue;
+      // Skip already completed/cancelled/notdone
+      if (t.status === "Completed" || t.status === "Cancelled" ||t.status=="Not Done") continue;
 
       const start = t.plannedStartDate ? new Date(t.plannedStartDate) : null;
       const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;

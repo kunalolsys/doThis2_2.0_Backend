@@ -11,6 +11,8 @@ import {
 } from "../utils/dateCalculator.js";
 import { format } from "date-fns";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
+import { taskAssignedTemplate } from "../services/templates/taskAssignedTemp.js";
+import sendEmail from "../services/emailService.js";
 
 // Helper: Check if today matches the frequency criteria
 const isTaskDueToday = (task) => {
@@ -174,6 +176,9 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
       const assignedByUser = await User.findById(task.assignedBy).select(
         "name email",
       );
+      const assignedToUser = await User.findById(task.assignedTo).select(
+        "name email",
+      );
       // 🔥 3. CREATE DELEGATION INSTANCE
       const newDelegation = new DelegationTask({
         title: task.title,
@@ -207,7 +212,27 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         task: newDelegation,
         actor: assignedByUser,
       });
+      const emailTemplate = taskAssignedTemplate({
+        userName: assignedToUser.name,
 
+        taskId: newDelegation.TaskId,
+
+        title: newDelegation.title,
+
+        description: newDelegation.description,
+
+        dueDate: newDelegation.dueDate
+          ? new Date(newDelegation.dueDate).toLocaleString("en-IN")
+          : "N/A",
+
+        assignedBy: assignedByUser?.name,
+      });
+      sendEmail({
+        to: assignedToUser.email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+      });
+      // console.log(assignedByUser,assignedToUser)
       console.log(
         `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "HH:mm")} to ${format(shiftDueEnd, "HH:mm")}`,
       );
