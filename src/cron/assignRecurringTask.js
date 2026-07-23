@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import moment from "moment";
-import { RecurringTask, DelegationTask, Task } from "../models/Task.js";
+import { RecurringTask, DelegationTask } from "../models/Task.js";
 import User from "../models/User.js";
 import {
   nextWorkingShiftDate,
@@ -19,13 +19,11 @@ const isTaskDueToday = (task) => {
   const today = moment().startOf("day");
   const start = moment(task.startDate).startOf("day");
 
-  // 1. Basic Date Validation
-  if (today.isBefore(start)) return false; // Hasn't started yet
+  if (today.isBefore(start)) return false;
   if (task.endDate && today.isAfter(moment(task.endDate).endOf("day"))) {
     return false;
   }
 
-  // 2. Frequency Logic (unchanged)
   switch (task.frequency) {
     case "Daily":
       return true;
@@ -48,13 +46,11 @@ const isTaskDueToday = (task) => {
       ];
 
       const startDay = days.indexOf(task.weekStartDay.toLowerCase());
-
       const offset = Number(task.repeatAfter || 0);
 
       if (offset < 0 || offset > 6) return false;
 
       const secondDay = (startDay + offset) % 7;
-
       const todayDay = today.day();
 
       return todayDay === startDay || todayDay === secondDay;
@@ -83,25 +79,25 @@ const isTaskDueToday = (task) => {
   }
 };
 
-// 🔥 Main Job - WORKSHIFT AWARE
+// Main Job - WORKSHIFT AWARE
 export const generateRecurringTasks = async (recurringTaskId = null) => {
   console.log("recurringTaskId", recurringTaskId);
   console.log("⏳ Cron: WorkShift-Aware Recurring Tasks...");
 
   try {
     const now = new Date();
-    // const recurringTasks = await RecurringTask.find({});
-    const recurringTasks = recurringTaskId
-      ? await RecurringTask.find({
-          _id: recurringTaskId,
-        })
-      : await RecurringTask.find({});
+    const query = { isDeleted: { $ne: true } };
+    if (recurringTaskId) {
+      query._id = recurringTaskId;
+    }
+
+    const recurringTasks = await RecurringTask.find(query);
     let createdCount = 0;
 
     for (const task of recurringTasks) {
       if (!isTaskDueToday(task)) continue;
 
-      // 🔥 CHECK USER WORKSHIFT FOR TODAY
+      // 1. CHECK USER WORKSHIFT FOR TODAY
       const assignedUser = await User.findById(task.assignedTo).populate(
         "assignShift",
       );
@@ -112,21 +108,21 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
       const workShift = assignedUser.assignShift;
 
-      // 🔥 1. Prevent duplicate (today's instance)
-      const startOfDay = moment().utc().startOf("day").toDate();
-      const endOfDay = moment().utc().endOf("day").toDate();
+      // 2. Generate unique instance key for today
+      const todayStr = moment().format("YYYY-MM-DD");
+      const instanceKey = `${task._id}_${todayStr}`;
 
-      const alreadyExists = await DelegationTask.findOne({
-        recurrenceTaskId: task._id,
-        createdAt: { $gte: startOfDay, $lte: endOfDay },
-      });
+      // 3. Prevent duplicate (Checks ALL instances, including soft-deleted ones)
+      const alreadyExists = await DelegationTask.findOne({ instanceKey });
 
       if (alreadyExists) {
-        console.log(`⏭️ Skip duplicate: ${task.TaskId}`);
+        console.log(
+          `⏭️ Skip duplicate/deleted instance: ${task.TaskId} [Key: ${instanceKey}]`,
+        );
         continue;
       }
 
-      // 🔥 VALIDATE: Working day + not holiday (BEFORE create)
+      // 4. VALIDATE: Working day + not holiday
       const todayShiftStart = await nextWorkingShiftDate(now, workShift._id);
       if (task.endDate) {
         const endDate = moment(task.endDate).utc().endOf("day").toDate();
@@ -144,11 +140,6 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         continue;
       }
 
-      // Today + taskEndDays working days
-      //**comment for new change now we take time from frontend */
-      // const shiftDueEnd = task.taskEndDays
-      //   ? await addWorkingDays(todayShiftStart, task.taskEndDays, workShift._id)
-      //   : snapToShiftTime(todayShiftStart, workShift, false); // End of shift
       let shiftDueEnd;
 
       if (task.taskEndDays) {
@@ -158,9 +149,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
           workShift._id,
         );
       } else if (task.endDate) {
-        // Use the time stored in recurring task endDate
         shiftDueEnd = new Date(todayShiftStart);
-
         const recurringEnd = new Date(task.endDate);
 
         shiftDueEnd.setHours(
@@ -170,16 +159,17 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
           recurringEnd.getMilliseconds(),
         );
       } else {
-        // Fallback if no endDate is configured
         shiftDueEnd = snapToShiftTime(todayShiftStart, workShift, false);
       }
+
       const assignedByUser = await User.findById(task.assignedBy).select(
         "name email",
       );
       const assignedToUser = await User.findById(task.assignedTo).select(
         "name email",
       );
-      // 🔥 3. CREATE DELEGATION INSTANCE
+
+      // 5. CREATE DELEGATION INSTANCE WITH INSTANCE KEY
       const newDelegation = new DelegationTask({
         title: task.title,
         description: task.description,
@@ -190,49 +180,48 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
         recurringRefId: task.TaskId,
+        instanceKey: instanceKey, // Set unique key
         frequency: task.frequency,
         checklist:
           task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
           [],
         status: "Pending",
-        isVisible: false, // 🔥 Cron visibility system
+        isVisible: false,
         attachmentFile: task.attachmentFile || [],
-
         currentHolder: task.assignedTo,
-
         distributionStatus: "Awaiting Distribution",
-
         delegationFlowEnabled: true,
+        isDeleted: false,
       });
 
       await newDelegation.save();
       createdCount++;
+
       sendNotification({
         type: "TASK_ASSIGNED",
         task: newDelegation,
         actor: assignedByUser,
       });
+
       const emailTemplate = taskAssignedTemplate({
-        userName: assignedToUser.name,
-
+        userName: assignedToUser?.name,
         taskId: newDelegation.TaskId,
-
         title: newDelegation.title,
-
         description: newDelegation.description,
-
         dueDate: newDelegation.dueDate
           ? new Date(newDelegation.dueDate).toLocaleString("en-IN")
           : "N/A",
-
         assignedBy: assignedByUser?.name,
       });
-      sendEmail({
-        to: assignedToUser.email,
-        subject: emailTemplate.subject,
-        html: emailTemplate.html,
-      });
-      // console.log(assignedByUser,assignedToUser)
+
+      if (assignedToUser?.email) {
+        sendEmail({
+          to: assignedToUser.email,
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
+        });
+      }
+
       console.log(
         `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "HH:mm")} to ${format(shiftDueEnd, "HH:mm")}`,
       );
@@ -246,9 +235,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
   }
 };
 
-// Schedule: Daily at shift start time? Or keep 00:01 for batching
 const startCronJobs = () => {
-  // cron.schedule("0 9 * * *", generateRecurringTasks, {
   cron.schedule(
     "*/5 * * * * *",
     () => {

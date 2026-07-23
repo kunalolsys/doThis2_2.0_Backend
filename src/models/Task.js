@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import Counter from "./Counter.js"; // Import the new Counter model
+import Counter from "./Counter.js";
 import User from "./User.js";
 
 // ---------------------------------------------------------
@@ -25,7 +25,7 @@ const ChecklistItemSchema = new mongoose.Schema(
     },
   },
   { _id: true },
-); // Ensure each checklist item gets an ID
+);
 
 const BaseTaskSchema = new mongoose.Schema(
   {
@@ -48,13 +48,11 @@ const BaseTaskSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-
     startDate: {
       type: Date,
       default: null,
       required: false,
     },
-
     taskEndDays: {
       type: Number,
       default: null,
@@ -67,7 +65,6 @@ const BaseTaskSchema = new mongoose.Schema(
       type: [ChecklistItemSchema],
       default: [],
     },
-
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -174,7 +171,6 @@ const BaseTaskSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-
     delegationFlowEnabled: {
       type: Boolean,
       default: false,
@@ -187,28 +183,11 @@ const BaseTaskSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    // distributionStatus: {
-    //   type: String,
-    //   enum: ["Awaiting Distribution", "Distributed", "Assigned"],
-    //   default: "Assigned",
-    // },
-
-    // currentHolder: {
-    //   type: mongoose.Schema.Types.ObjectId,
-    //   ref: "User",
-    //   default: null,
-    // },
-
-    // finalAssignedTo: {
-    //   type: mongoose.Schema.Types.ObjectId,
-    //   ref: "User",
-    //   default: null,
-    // },
-
-    // delegationLevel: {
-    //   type: Number,
-    //   default: 0,
-    // },
+    // 🔥 Added Soft Delete Flag across all tasks
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
   },
   baseOptions,
 );
@@ -237,32 +216,23 @@ BaseTaskSchema.pre("validate", function (next) {
   next();
 });
 
-// --- MIDDLEWARE: Generate TaskId and populate departmentOfAssignToUser on new document ---
+// --- MIDDLEWARE: Generate TaskId ---
 BaseTaskSchema.pre("save", async function (next) {
-  if (this.isNew) {
-    if (!this.TaskId) {
+  if (this.isNew && !this.TaskId) {
+    try {
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
       const mm = String(now.getMonth() + 1).padStart(2, "0");
-      const period = `${yy}${mm}`; // e.g., '2512'
+      const period = `${yy}${mm}`;
 
       const counter = await Counter.findByIdAndUpdate(
         { _id: `taskId-${period}` },
         { $inc: { seq: 1 } },
         { new: true, upsert: true },
       );
-      this.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`; // e.g., '25120001'
-    }
-
-    if (!this.departmentOfAssignToUser && this.assignedTo) {
-      try {
-        const user = await User.findById(this.assignedTo);
-        if (user && user.department && user.department.length > 0) {
-          this.departmentOfAssignToUser = user.department[0];
-        }
-      } catch (error) {
-        console.error("Error populating departmentOfAssignToUser:", error);
-      }
+      this.TaskId = `${period}${counter.seq.toString().padStart(4, "0")}`;
+    } catch (error) {
+      return next(error);
     }
   }
   next();
@@ -300,7 +270,7 @@ const DelegationTaskSchema = new mongoose.Schema({
   },
   instanceKey: {
     type: String,
-    unique: true, // Prevents duplicates at the MongoDB database engine level
+    unique: true,
     sparse: true,
   },
 });
@@ -346,12 +316,10 @@ const RecurringTaskSchema = new mongoose.Schema({
       ],
     },
   ],
-
   endDate: {
     type: Date,
     default: null,
   },
-
   attachmentFile: {
     type: [String],
     default: [],

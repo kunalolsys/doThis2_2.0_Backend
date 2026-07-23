@@ -876,7 +876,7 @@ const normalizeStatus = (status) => {
 };
 export const exportTasks = handleAsync(async (req, res, next) => {
   const { format = "csv", tabType, assignedTo, status, search } = req.body;
-  let filter = {};
+  let filter = { isDeleted: { $ne: true } };
 
   // ✅ Apply same logic as frontend
   if (tabType === "one-time") {
@@ -1123,6 +1123,7 @@ export const getAllTasksWithStats = async (req, res) => {
     const filter = {
       ...dateFilter,
       taskType: { $ne: "RecurringTask" },
+      isDeleted: { $ne: true },
       ...(andConditions.length > 0 && { $and: andConditions }),
     };
 
@@ -1271,7 +1272,7 @@ export const filterTasks = handleAsync(async (req, res) => {
   //   return res.status(400).json({ success: false, message: "endDate must be YYYY-MM-DD" });
   // }
 
-  const query = {};
+  const query = { isDeleted: { $ne: true } };
   const andConditions = [];
 
   const todayStart = startOfDay(new Date());
@@ -2157,7 +2158,7 @@ export const exportMYTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const query = {};
+  const query = { isDeleted: { $ne: true } };
   const andConditions = [];
 
   const todayStart = startOfDay(new Date());
@@ -3025,7 +3026,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
   // =========================================================
   // 🧱 BASE QUERY
   // =========================================================
-  const baseQuery = {};
+  const baseQuery = {isDeleted: { $ne: true } };
 
   if (baseConditions.length > 0) {
     baseQuery.$and = baseConditions;
@@ -3303,7 +3304,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const query = {};
+  const query = { isDeleted: { $ne: true } };
   const andConditions = [];
 
   const todayStart = startOfDay(new Date());
@@ -3768,7 +3769,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
   let tasks = [];
   let total = 0;
 
-  const filterQuery = {};
+  const filterQuery = { isDeleted: { $ne: true } };
   const today = startOfDay(new Date());
   const loggedInUserId = req.cookies.userId || req.user?._id;
 
@@ -4461,7 +4462,7 @@ export const deleteTask = handleAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID", 400));
 
   try {
-    const task = await Task.findById({ _id: id });
+    const task = await Task.findById(id);
     if (!task) {
       return next(new AppError("Task not found", 404));
     }
@@ -4473,21 +4474,23 @@ export const deleteTask = handleAsync(async (req, res, next) => {
         },
       });
     }
-    // Delete task
-    await Task.deleteOne({ _id: id });
+
+    // 🔥 Soft Delete: Keep document in DB so instanceKey persists & prevents Cron re-creation
+    task.isDeleted = true;
+    await task.save();
 
     // Save history
     const historyDoc = await DeleteTaskHistory.create({
-      deleteParentTaskId: null,
-      deletedBy: req.cookies.userId || req.user._id || null,
-      remark: "",
+      deleteParentTaskId: task.recurrenceTaskId || null,
+      deletedBy: req.cookies?.userId || req.user?._id || null,
+      remark: "Soft deleted task",
       deletedTasksCount: 1,
       deletedTaskIds: [task._id],
     });
 
     res.status(200).json({
       success: true,
-      message: "Task deleted",
+      message: "Task deleted successfully",
       deletedCount: 1,
       deletedTaskIds: [task._id],
       historyId: historyDoc._id,
