@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import moment from "moment";
+import moment from "moment-timezone"; // Use moment-timezone
 import { RecurringTask, DelegationTask } from "../models/Task.js";
 import User from "../models/User.js";
 import {
@@ -16,11 +16,15 @@ import sendEmail from "../services/emailService.js";
 
 // Helper: Check if today matches the frequency criteria
 const isTaskDueToday = (task) => {
-  const today = moment().startOf("day");
-  const start = moment(task.startDate).startOf("day");
+  // Always evaluate today in Asia/Kolkata timezone
+  const today = moment().tz("Asia/Kolkata").startOf("day");
+  const start = moment(task.startDate).tz("Asia/Kolkata").startOf("day");
 
   if (today.isBefore(start)) return false;
-  if (task.endDate && today.isAfter(moment(task.endDate).endOf("day"))) {
+  if (
+    task.endDate &&
+    today.isAfter(moment(task.endDate).tz("Asia/Kolkata").endOf("day"))
+  ) {
     return false;
   }
 
@@ -85,7 +89,10 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
   console.log("⏳ Cron: WorkShift-Aware Recurring Tasks...");
 
   try {
-    const now = new Date();
+    // 1. Get exact current time in IST
+    const nowIST = moment().tz("Asia/Kolkata");
+    const todayStr = nowIST.format("YYYY-MM-DD");
+
     const query = { isDeleted: { $ne: true } };
     if (recurringTaskId) {
       query._id = recurringTaskId;
@@ -97,7 +104,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
     for (const task of recurringTasks) {
       if (!isTaskDueToday(task)) continue;
 
-      // 1. CHECK USER WORKSHIFT FOR TODAY
+      // CHECK USER WORKSHIFT FOR TODAY
       const assignedUser = await User.findById(task.assignedTo).populate(
         "assignShift",
       );
@@ -108,13 +115,11 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
       const workShift = assignedUser.assignShift;
 
-      // 2. Generate unique instance key for today
-      const todayStr = moment().format("YYYY-MM-DD");
+      // Generate unique instance key
       const instanceKey = `${task._id}_${todayStr}`;
 
-      // 3. Prevent duplicate (Checks ALL instances, including soft-deleted ones)
+      // Prevent duplicate
       const alreadyExists = await DelegationTask.findOne({ instanceKey });
-
       if (alreadyExists) {
         console.log(
           `⏭️ Skip duplicate/deleted instance: ${task.TaskId} [Key: ${instanceKey}]`,
@@ -122,16 +127,39 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         continue;
       }
 
-      // 4. VALIDATE: Working day + not holiday
-      const todayShiftStart = await nextWorkingShiftDate(now, workShift._id);
-      if (task.endDate) {
-        const endDate = moment(task.endDate).utc().endOf("day").toDate();
+      // 🔥 FIX: Pass today's 00:00:00 IST date to date calculator rather than exact execution time (e.g. 01:00 AM)
+      const baseTodayDate = nowIST.clone().startOf("day").toDate();
 
+      let todayShiftStart = await nextWorkingShiftDate(
+        baseTodayDate,
+        workShift._id,
+      );
+
+      // 🔥 FORCE FIX: If shift calculation pushes it to previous day due to UTC shift offsets, align back to todayStr
+      const calculatedStartStr = moment(todayShiftStart)
+        .tz("Asia/Kolkata")
+        .format("YYYY-MM-DD");
+      if (calculatedStartStr !== todayStr) {
+        // Parse time component from calculated shift start and force target date to todayStr
+        const timePart = moment(todayShiftStart)
+          .tz("Asia/Kolkata")
+          .format("HH:mm:ss");
+        todayShiftStart = moment
+          .tz(`${todayStr} ${timePart}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata")
+          .toDate();
+      }
+
+      if (task.endDate) {
+        const endDate = moment(task.endDate)
+          .tz("Asia/Kolkata")
+          .endOf("day")
+          .toDate();
         if (todayShiftStart > endDate) {
           console.log(`⏭️ Skip ${task.TaskId}: shifted beyond endDate`);
           continue;
         }
       }
+
       const isTodayHoliday = await isHoliday(todayShiftStart);
       if (isTodayHoliday || !isWorkingDay(todayShiftStart, workShift)) {
         console.log(
@@ -169,7 +197,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         "name email",
       );
 
-      // 5. CREATE DELEGATION INSTANCE WITH INSTANCE KEY
+      // CREATE DELEGATION INSTANCE
       const newDelegation = new DelegationTask({
         title: task.title,
         description: task.description,
@@ -180,7 +208,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         dueDate: shiftDueEnd,
         recurrenceTaskId: task._id,
         recurringRefId: task.TaskId,
-        instanceKey: instanceKey, // Set unique key
+        instanceKey: instanceKey,
         frequency: task.frequency,
         checklist:
           task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
@@ -209,7 +237,9 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         title: newDelegation.title,
         description: newDelegation.description,
         dueDate: newDelegation.dueDate
-          ? new Date(newDelegation.dueDate).toLocaleString("en-IN")
+          ? new Date(newDelegation.dueDate).toLocaleString("en-IN", {
+              timeZone: "Asia/Kolkata",
+            })
           : "N/A",
         assignedBy: assignedByUser?.name,
       });
@@ -223,7 +253,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
       }
 
       console.log(
-        `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "HH:mm")} to ${format(shiftDueEnd, "HH:mm")}`,
+        `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "yyyy-MM-dd HH:mm")} to ${format(shiftDueEnd, "yyyy-MM-dd HH:mm")}`,
       );
     }
 
@@ -236,8 +266,9 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 };
 
 const startCronJobs = () => {
+  // Daily at 00:01 AM IST
   cron.schedule(
-    "*/5 * * * * *",
+    "*/3 * * * * *",
     () => {
       generateRecurringTasks(null);
     },
