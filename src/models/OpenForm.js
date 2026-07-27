@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+
 const OpenFormFieldSchema = new mongoose.Schema(
   {
     fieldId: {
@@ -31,7 +32,21 @@ const OpenFormFieldSchema = new mongoose.Schema(
 
     placeholder: String,
 
+    // Static custom options (e.g., ["High", "Medium", "Low"])
     options: [String],
+
+    // 🔥 NEW: Dynamic Master Logic Fields
+    optionType: {
+      type: String,
+      enum: ["STATIC", "MASTER"],
+      default: "STATIC",
+    },
+
+    masterSource: {
+      type: String,
+      enum: ["VENDOR", "EMPLOYEE", null],
+      default: null,
+    },
 
     isRequired: {
       type: Boolean,
@@ -45,6 +60,7 @@ const OpenFormFieldSchema = new mongoose.Schema(
   },
   { _id: false },
 );
+
 const OpenFormSchema = new mongoose.Schema(
   {
     formName: {
@@ -92,6 +108,7 @@ const OpenFormSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
 OpenFormSchema.index(
   { slug: 1 },
   {
@@ -101,4 +118,5 @@ OpenFormSchema.index(
     },
   },
 );
+
 export default mongoose.model("OpenForm", OpenFormSchema);

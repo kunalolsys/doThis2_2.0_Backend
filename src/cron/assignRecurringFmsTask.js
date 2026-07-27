@@ -199,12 +199,21 @@ export const generateDependentChildren = async (
         }
       }
     }
-
+    const assignedByUser = await User.findById(childTemplate.assignedBy).select(
+      "name email",
+    );
+    const assignedToUser = await User.findById(childTemplate.assignedTo).select(
+      "name email",
+    );
     const childInstanceTask = await FmsInstanceTask.create({
       fmsInstanceId: instance._id,
 
       fmsTaskId: childTemplate._id,
-
+      formId: instance.formId || parentInstanceTask.formId || null,
+      submissionId:
+        instance.submissionId || parentInstanceTask.submissionId || null,
+      submissionData:
+        instance.runtimeContext || parentInstanceTask.submissionData || {},
       taskId: childTemplate.taskId,
 
       description: childTemplate.description,
@@ -222,7 +231,7 @@ export const generateDependentChildren = async (
       isDependent: true,
 
       dependentOn: parentInstanceTask.taskId,
-
+      recurrenceKey: parentInstanceTask.recurrenceKey,
       startTimeSetting: childTemplate.startTimeSetting,
 
       plannedStartDate:
@@ -246,6 +255,24 @@ export const generateDependentChildren = async (
       task: childInstanceTask,
       actor: childTemplate.assignedBy,
     });
+    if (assignedToUser?.email) {
+      const emailTemplate = taskAssignedTemplate({
+        userName: assignedToUser.name,
+        taskId: childInstanceTask.taskId,
+        title: childInstanceTask.description,
+        description: childInstanceTask.description,
+        dueDate: childInstanceTask.plannedDueDate
+          ? new Date(childInstanceTask.plannedDueDate).toLocaleString("en-IN")
+          : "N/A",
+        assignedBy: assignedByUser?.name,
+      });
+
+      sendEmail({
+        to: assignedToUser.email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+      });
+    }
     // recursive support (child -> grandchild)
     await generateDependentChildren(instance, childInstanceTask, childTemplate);
   }
@@ -324,7 +351,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         const assignedByUser = await User.findById(task.assignedBy).select(
           "name email",
         );
-         const assignedToUser = await User.findById(task.assignedTo).select(
+        const assignedToUser = await User.findById(task.assignedTo).select(
           "name email",
         );
         if (!user?.assignShift) continue;
@@ -377,7 +404,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           description: parentInstanceTask.description,
 
           dueDate: parentInstanceTask.plannedDueDate
-            ? new Date(parentInstanceTask.plannedDueDate).toLocaleString("en-IN")
+            ? new Date(parentInstanceTask.plannedDueDate).toLocaleString(
+                "en-IN",
+              )
             : "N/A",
 
           assignedBy: assignedByUser?.name,

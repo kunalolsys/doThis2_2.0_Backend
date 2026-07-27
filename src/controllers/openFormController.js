@@ -300,7 +300,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   const submission = await FormSubmission.create({
     formId: form._id,
     submittedBy: userId,
-    submissionData:enrichedSubmissionData,
+    submissionData: enrichedSubmissionData,
     status: "Submitted",
   });
 
@@ -400,7 +400,19 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     if (RECURRING_FREQUENCIES.includes(tmplTask.frequency)) {
       continue;
     }
-
+    // 🔥 ADD THIS FIX: Skip dependent tasks if their parent is recurring
+    // The Cron will automatically create them when the recurring parent is spawned!
+    if (tmplTask.isDependent && tmplTask.dependentOn) {
+      const parentTask = templateTasks.find(
+        (t) => t.taskId === tmplTask.dependentOn,
+      );
+      if (parentTask && RECURRING_FREQUENCIES.includes(parentTask.frequency)) {
+        console.log(
+          `⏭️ Skipping child task ${tmplTask.taskId} during submission (waiting for recurring parent ${parentTask.taskId})`,
+        );
+        continue;
+      }
+    }
     // ==========================================
     // GET USER SHIFT
     // ==========================================
@@ -450,7 +462,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
       formId: form._id,
 
       submissionId: submission._id,
-      submissionData: submission.submissionData,
+      submissionData: enrichedSubmissionData,
       //   instanceCode,
 
       // TASK IDS

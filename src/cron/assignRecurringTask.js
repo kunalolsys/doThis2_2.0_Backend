@@ -268,7 +268,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 const startCronJobs = () => {
   // Daily at 00:01 AM IST
   cron.schedule(
-    "*/3 * * * * *",
+    "0 7 * * *",
     () => {
       generateRecurringTasks(null);
     },
