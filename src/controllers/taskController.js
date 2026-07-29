@@ -1005,7 +1005,8 @@ export const exportTasks = handleAsync(async (req, res, next) => {
 // ---------------------------------------------------------
 export const getAllTasksWithStats = async (req, res) => {
   try {
-    const { filterType, userId, role } = req.body;
+    const { filterType, userId, role: rawRole } = req.body;
+    const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
     // filterType = today | week | month
 
     let dateFilter = {};
@@ -1060,9 +1061,9 @@ export const getAllTasksWithStats = async (req, res) => {
     // =========================
     const andConditions = [];
 
-    if (role === "Admin" || role === "Owner") {
+    if (role === "admin" || role === "owner" || role === "pc") {
       // full access → no restriction
-    } else if (role === "Sr. Manager") {
+    } else if (role === "sr.manager" || role === "srmanager") {
       const srManagerId = userId;
 
       // 1. Get Managers under Sr Manager
@@ -1086,7 +1087,7 @@ export const getAllTasksWithStats = async (req, res) => {
       andConditions.push({
         $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
       });
-    } else if (role === "Manager") {
+    } else if (role === "manager") {
       const managerId = userId;
 
       // 1. Get Members under this Manager
@@ -3026,7 +3027,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
   // =========================================================
   // 🧱 BASE QUERY
   // =========================================================
-  const baseQuery = {isDeleted: { $ne: true } };
+  const baseQuery = { isDeleted: { $ne: true } };
 
   if (baseConditions.length > 0) {
     baseQuery.$and = baseConditions;
@@ -3288,7 +3289,7 @@ export const getFMSTaskStats = handleAsync(async (req, res) => {
 export const getRoleBasedTasks = handleAsync(async (req, res) => {
   const {
     userId,
-    role,
+    role: rawRole,
     departmentId,
     page = 1,
     limit = 10,
@@ -3299,7 +3300,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     selectedManager,
     selectedSrManager,
   } = req.body;
-
+  const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
   const skip = (page - 1) * limit;
 
   const { stat, taskCategory, status, taskType } = filters;
@@ -3314,7 +3315,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   // 👥 ROLE BASED ACCESS (NO DEPARTMENT)
   // =========================
 
-  if (role === "Admin" || role === "Owner") {
+  if (role === "admin" || role === "owner" || role === "pc") {
     // ✅ Full access
 
     if (selectedDoer && selectedDoer !== "all") {
@@ -3339,7 +3340,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
       });
       // andConditions.push({ assignedTo: selectedSrManager });
     }
-  } else if (role === "Sr. Manager") {
+  } else if (role === "sr.manager" || role === "srmanager") {
     const srManagerId = userId;
 
     // 1. Get Managers under Sr Manager
@@ -3377,7 +3378,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
         assignedTo: selectedDoer,
       });
     }
-  } else if (role === "Manager") {
+  } else if (role === "manager") {
     const managerId = userId;
 
     // 1. Get Members under this Manager
@@ -3534,7 +3535,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   const fmsAndConditions = [];
 
   // 👥 ROLE BASED ACCESS (SAME LOGIC)
-  if (role === "Admin" || role === "Owner") {
+  if (role === "admin" || role === "owner" || role === "pc") {
     if (selectedDoer && selectedDoer !== "all") {
       fmsAndConditions.push({ assignedTo: selectedDoer });
     }
@@ -3553,7 +3554,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
         ],
       });
     }
-  } else if (role === "Sr. Manager") {
+  } else if (role === "sr.manager" || role === "srmanager") {
     const managers = await User.find({
       reportingManager: userId,
     }).select("_id");
@@ -3571,7 +3572,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     fmsAndConditions.push({
       assignedTo: { $in: allIds },
     });
-  } else if (role === "Manager") {
+  } else if (role === "manager") {
     const members = await User.find({
       reportingManager: userId,
     }).select("_id");

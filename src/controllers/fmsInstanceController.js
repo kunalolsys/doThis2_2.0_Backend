@@ -1430,8 +1430,9 @@ export const getFmsInstances = handleAsync(async (req, res) => {
 });
 //**GET FMS COUNTS FOR DASHBOARD */
 export const getFmsInstancesCount = handleAsync(async (req, res) => {
-  const matchStage = {};
-
+  const matchStage = {
+    triggerType: { $ne: "FORM_SUBMISSION" },
+  };
   const result = await FmsInstance.aggregate([
     { $match: matchStage },
 

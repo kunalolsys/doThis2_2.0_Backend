@@ -1,28 +1,28 @@
 import { MongoClient } from "mongodb";
 import dns from "node:dns";
 
-// Windows DNS fix
+// Windows DNS fix for Atlas SRV lookup
 dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
-// 1st Screenshot (Cluster 1 / k3ylgca) - Source: suvidha_stu
+// Target: Self-hosted MongoDB (Remove retryWrites & w=majority for standalone servers)
 const TARGET_URI =
-  "mongodb+srv://tushar_db_user:uNYhrg7tZ8S9gmdt@cluster0.k3ylgca.mongodb.net/suvidha_stu?retryWrites=true&w=majority";
+  "mongodb://suvidha_stuuser:3453sGSoG3XYv9b2Z6ZG@164.52.193.152:27017/suvidha_studb?authSource=suvidha_studb";
 
-// 2nd Screenshot (Cluster 2 / bwwjwiy) - Target: suvidha_stu
+// Source: MongoDB Atlas (Requires tls: true and retryWrites=true&w=majority)
 const SOURCE_URI =
-  "mongodb+srv://dothis2_db_user:GDRY6c2wkvKClj7I@cluster0.bwwjwiy.mongodb.net/suvidha_stu?retryWrites=true&w=majority";
-
+  "mongodb+srv://tushar_db_user:uNYhrg7tZ8S9gmdt@cluster0.k3ylgca.mongodb.net/suvidha_stu?retryWrites=true&w=majority";
+// mongodb://suvidha_stuuser:3453sGSoG3XYv9b2Z6ZG@164.52.193.152/?authSource=suvidha_studb
 async function transferExactDatabase() {
+  // Source Client: Atlas (TLS REQUIRED)
   const sourceClient = new MongoClient(SOURCE_URI, {
     tls: true,
-    tlsAllowInvalidCertificates: true,
     connectTimeoutMS: 30000,
     socketTimeoutMS: 30000,
   });
 
+  // Target Client: VPS Standalone Server (NO TLS)
   const targetClient = new MongoClient(TARGET_URI, {
-    tls: true,
-    tlsAllowInvalidCertificates: true,
+    tls: false,
     connectTimeoutMS: 30000,
     socketTimeoutMS: 30000,
   });
@@ -34,12 +34,12 @@ async function transferExactDatabase() {
     console.log("✅ Connected successfully!\n");
 
     const srcDb = sourceClient.db("suvidha_stu");
-    const targetDb = targetClient.db("suvidha_stu");
+    const targetDb = targetClient.db("suvidha_studb");
 
     const collections = await srcDb.listCollections().toArray();
 
     if (collections.length === 0) {
-      console.log("❌ No collections found in source database 'suvidha_stu'.");
+      console.log("❌ No collections found in source database 'new_dothis2'.");
       return;
     }
 
@@ -52,10 +52,10 @@ async function transferExactDatabase() {
       const docs = await srcDb.collection(collName).find({}).toArray();
 
       if (docs.length > 0) {
-        // Target collection clear karo taaki duplicate primary key error na aaye
+        // Clear target collection to prevent duplicate _id conflicts
         await targetDb.collection(collName).deleteMany({});
-        
-        // Target cluster me records insert karo
+
+        // Insert documents into target DB
         await targetDb.collection(collName).insertMany(docs);
         console.log(`  ✅ Done: "${collName}" (${docs.length} documents copied)`);
       } else {
@@ -63,7 +63,9 @@ async function transferExactDatabase() {
       }
     }
 
-    console.log("\n🎉 Database 'suvidha_stu' ka sara data target cluster me successfully copy ho gaya!");
+    console.log(
+      "\n🎉 Database 'new_dothis2' data copied to target server successfully!"
+    );
   } catch (err) {
     console.error("Transfer failed:", err);
   } finally {
