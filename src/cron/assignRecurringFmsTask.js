@@ -34,10 +34,6 @@ const isTaskDueToday = (task, instance, weekDays) => {
   if (end && today.isAfter(end)) return false;
 
   const todayDay = today.format("dddd").toLowerCase();
-  // if (!isWorkingDay(today, weekDays)) {
-  //   console.log("⏭️ Non-working day:", todayDay);
-  //   return false;
-  // }
 
   let due = false;
   switch (task.frequency) {
@@ -47,16 +43,14 @@ const isTaskDueToday = (task, instance, weekDays) => {
       break;
 
     case "Weekly":
-      // Every week on same weekday as startDate (adjusted to working)
       const startDay = start.format("dddd").toLowerCase();
       due = todayDay === startDay && isWorkingDay(today, weekDays);
       break;
 
     case "Monthly":
-      // Same date each month (adjusted)
       const startDateNum = start.date();
       const expected = today.clone().date(startDateNum);
-      if (!expected.isValid()) expected.date(1); // Fallback
+      if (!expected.isValid()) expected.date(1);
 
       due = today.isSame(expected, "day") && isWorkingDay(today, weekDays);
       break;
@@ -65,6 +59,7 @@ const isTaskDueToday = (task, instance, weekDays) => {
   console.log(due ? "✅ DUE" : "⏭️ SKIP");
   return due;
 };
+
 export const generateDependentChildren = async (
   instance,
   parentInstanceTask,
@@ -72,22 +67,20 @@ export const generateDependentChildren = async (
 ) => {
   const children = await FmsTask.find({
     dependentOn: parentTemplateTask.taskId,
-    // startTimeSetting: "planned-to-planned",
     isDependent: true,
   });
+
   const assignedParentUser = await User.findById(
     parentInstanceTask.assignedTo,
   ).populate("assignShift");
+
   if (!assignedParentUser) {
-    return next(
-      new AppError(
-        `User with ID ${parentInstanceTask.assignedTo} not found`,
-        404,
-      ),
-    );
+    console.error(`User with ID ${parentInstanceTask.assignedTo} not found`);
+    return;
   }
 
   const parentWorkShift = assignedParentUser.assignShift;
+
   for (const childTemplate of children) {
     const alreadyExists = await FmsInstanceTask.findOne({
       fmsInstanceId: instance._id,
@@ -107,38 +100,27 @@ export const generateDependentChildren = async (
     let startDate;
     let dueDate;
     if (!parentStart || !parentDue) continue;
+
     const isSameShift =
       String(doer.assignShift?._id) === String(parentWorkShift?._id);
-    // =====================================
-    // CHILD START = SAME AS PARENT START
-    // =====================================
+
     if (!isSameShift) {
       console.log("⚠️ Shift mismatch → using child shift window only");
-
       const baseDate = new Date(parentStart);
-
       const start = await nextWorkingShiftDate(baseDate, doer.assignShift._id);
 
       startDate = snapToShiftTime(start, doer.assignShift, true);
       dueDate = snapToShiftTime(start, doer.assignShift, false);
-
-      // ❗ DO NOT return
-      // just skip dependency math
     } else {
       startDate = new Date(parentStart);
-
       dueDate = new Date(parentDue);
 
       const x = Number(childTemplate.xValue || 0);
       const freq = (childTemplate.frequency || "").toLowerCase();
 
       if (doer?.assignShift) {
-        // =====================================
-        // HOURS
-        // =====================================
         if (freq.includes("hour")) {
           let calculatedDue = new Date(parentDue);
-
           calculatedDue.setHours(calculatedDue.getHours() + x);
 
           const shiftEnd = snapToShiftTime(parentDue, doer.assignShift, false);
@@ -147,7 +129,6 @@ export const generateDependentChildren = async (
             dueDate = calculatedDue;
           } else {
             const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-
             let nextDay = new Date(parentDue);
             nextDay.setDate(nextDay.getDate() + 1);
 
@@ -164,12 +145,7 @@ export const generateDependentChildren = async (
 
             dueDate = new Date(nextShiftStart.getTime() + overflowMs);
           }
-        }
-
-        // =====================================
-        // DAYS
-        // =====================================
-        else {
+        } else {
           dueDate = await addWorkingDaysHoliday(
             parentDue,
             x,
@@ -199,15 +175,22 @@ export const generateDependentChildren = async (
         }
       }
     }
+
     const assignedByUser = await User.findById(childTemplate.assignedBy).select(
       "name email",
     );
     const assignedToUser = await User.findById(childTemplate.assignedTo).select(
       "name email",
     );
+
+    // Strict boolean check for decision step
+    const isDecisionStep =
+      childTemplate.decisionStep === true ||
+      childTemplate.decisionStep === "yes" ||
+      childTemplate.decisionStep === "true";
+
     const childInstanceTask = await FmsInstanceTask.create({
       fmsInstanceId: instance._id,
-
       fmsTaskId: childTemplate._id,
       formId: instance.formId || parentInstanceTask.formId || null,
       submissionId:
@@ -217,19 +200,14 @@ export const generateDependentChildren = async (
       taskId: childTemplate.taskId,
 
       description: childTemplate.description,
-
       departmentOfAssignToUser: childTemplate.departmentOfAssignToUser,
-
       assignedTo: childTemplate.assignedTo,
-
       assignedBy: childTemplate.assignedBy,
 
       frequency: childTemplate.frequency,
-
       xValue: childTemplate.xValue,
 
       isDependent: true,
-
       dependentOn: parentInstanceTask.taskId,
       recurrenceKey: parentInstanceTask.recurrenceKey,
       startTimeSetting: childTemplate.startTimeSetting,
@@ -245,8 +223,23 @@ export const generateDependentChildren = async (
       status: "Pending",
 
       checklist: childTemplate.checklist || [],
-
       createdForm: childTemplate.createdForm || [],
+
+      // ── Decision Step Fields Cloned From Template ──
+      decisionStep: isDecisionStep,
+      decisionYesAction: isDecisionStep
+        ? childTemplate.decisionYesAction || null
+        : null,
+      triggerFmsTemplate:
+        isDecisionStep && childTemplate.decisionYesAction === "trigger_fms"
+          ? childTemplate.triggerFmsTemplate || null
+          : null,
+
+      // ── Decision Step Runtime Defaults ──
+      decisionAnswer: null,
+      decisionRemark: null,
+      decisionSubmissionId: null,
+      triggeredInstanceId: null,
     });
 
     console.log(`✅ Generated child ${childInstanceTask.taskId}`);
@@ -255,6 +248,7 @@ export const generateDependentChildren = async (
       task: childInstanceTask,
       actor: childTemplate.assignedBy,
     });
+
     if (assignedToUser?.email) {
       const emailTemplate = taskAssignedTemplate({
         userName: assignedToUser.name,
@@ -273,19 +267,16 @@ export const generateDependentChildren = async (
         html: emailTemplate.html,
       });
     }
-    // recursive support (child -> grandchild)
+
+    // Recursive support for multi-level child dependencies
     await generateDependentChildren(instance, childInstanceTask, childTemplate);
   }
 };
+
 export const generateRecurringFmsTasks = async (instanceId = null) => {
   console.log("\n🚀 FMS CRON -", new Date().toLocaleString("en-IN"));
 
   try {
-    // const instances = await FmsInstance.find({
-    //   status: { $nin: ["Onhold", "Stopped", "Completed", "Cancelled"] },
-    //   isStopped: false,
-    // }).populate("fmsTemplateId");
-
     let instances;
 
     if (instanceId) {
@@ -298,6 +289,7 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         isStopped: false,
       }).populate("fmsTemplateId");
     }
+
     if (instances.length === 0) {
       console.log("ℹ️ No active FMS instances");
       return;
@@ -326,17 +318,12 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
         if (!isTaskDueToday(task, instance, weekDays)) continue;
 
         // Duplicate prevention
-        const todayRange = {
-          $gte: moment().startOf("day").toDate(),
-          $lte: moment().endOf("day").toDate(),
-        };
         const recurrenceKey = moment().format("YYYY-MM-DD");
 
         if (
           await FmsInstanceTask.findOne({
             fmsInstanceId: instance._id,
             fmsTaskId: task._id,
-            // createdAt: todayRange,
             recurrenceKey,
           })
         ) {
@@ -344,7 +331,6 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           continue;
         }
 
-        // Shift timing
         const user = await User.findById(task.assignedTo).populate(
           "assignShift",
         );
@@ -361,11 +347,20 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           user.assignShift._id,
         );
         const shiftEnd = snapToShiftTime(shiftStart, user.assignShift, false);
+
         const count = await FmsInstanceTask.countDocuments({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
         });
+
         const instanceTaskId = `${instance.instanceId}-${task.taskId}-R${count + 1}`;
+
+        // Strict boolean checking for decisionStep
+        const isDecisionStep =
+          task.decisionStep === true ||
+          task.decisionStep === "yes" ||
+          task.decisionStep === "true";
+
         const parentInstanceTask = await new FmsInstanceTask({
           fmsInstanceId: instance._id,
           fmsTaskId: task._id,
@@ -384,40 +379,57 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
           isVisible: false,
           checklist: task.checklist || [],
           createdForm: task.createdForm || [],
+
+          // ── Decision Step Fields Cloned From Template ──
+          decisionStep: isDecisionStep,
+          decisionYesAction: isDecisionStep
+            ? task.decisionYesAction || null
+            : null,
+          triggerFmsTemplate:
+            isDecisionStep && task.decisionYesAction === "trigger_fms"
+              ? task.triggerFmsTemplate || null
+              : null,
+
+          // ── Decision Step Runtime Defaults ──
+          decisionAnswer: null,
+          decisionRemark: null,
+          decisionSubmissionId: null,
+          triggeredInstanceId: null,
+
           recurrenceKey,
           triggerKey: `RECURRENCE:${instance._id}:${task._id}:${recurrenceKey}`,
         }).save();
+
         await generateDependentChildren(instance, parentInstanceTask, task);
         createdCount++;
+
         sendNotification({
           type: "TASK_ASSIGNED",
           task: parentInstanceTask,
           actor: assignedByUser,
         });
+
         const emailTemplate = taskAssignedTemplate({
           userName: assignedToUser.name,
-
           taskId: parentInstanceTask.taskId,
-
           title: parentInstanceTask.description,
-
           description: parentInstanceTask.description,
-
           dueDate: parentInstanceTask.plannedDueDate
             ? new Date(parentInstanceTask.plannedDueDate).toLocaleString(
                 "en-IN",
               )
             : "N/A",
-
           assignedBy: assignedByUser?.name,
         });
+
         sendEmail({
           to: assignedToUser.email,
           subject: emailTemplate.subject,
           html: emailTemplate.html,
         });
+
         console.log(
-          `✅ ${task.taskId} | ${format(shiftStart, "HH:mm dd-MM")}→${format(shiftEnd, "HH:mm")}`,
+          `✅ ${task.taskId} | ${format(shiftStart, "HH:mm dd-MM")}→${format(shiftEnd, "HH:mm")} [DecisionStep: ${isDecisionStep}]`,
         );
       }
     }
@@ -429,13 +441,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
 };
 
 const startRecurringFmsTaskJob = () => {
-  // // Test every 30s
-  // cron.schedule("*/3 * * * * *", generateRecurringFmsTasks, {
-  //   timezone: "Asia/Kolkata",
-  // });
-  console.log("🔄 FMS Cron: Every 30s (TEST)");
+  console.log("🔄 FMS Cron Job Initialized");
 
-  //This runs every day at 9:00 AM IST.
+  // Runs every day at 9:00 AM IST
   cron.schedule(
     "0 9 * * *",
     () => {

@@ -22,7 +22,20 @@ const generateSlug = (text) => {
 //**CREATE OPEN FORM */
 export const createOpenForm = handleAsync(async (req, res, next) => {
   const baseUrl = process.env.BASE_URL;
-  const { formName } = req.body;
+  const { formName, status, linkedTemplate } = req.body;
+
+  const targetStatus = status || "draft";
+
+  // Sanitize empty string to null
+  const cleanTemplate =
+    linkedTemplate && linkedTemplate.trim() !== "" ? linkedTemplate : null;
+
+  // ⛔ Prevent publishing if linkedTemplate is missing
+  if (targetStatus === "published" && !cleanTemplate) {
+    return next(
+      new AppError("Cannot publish form without linking an FMS template.", 400),
+    );
+  }
 
   const existingForm = await OpenForm.findOne({
     formName: formName.trim(),
@@ -37,7 +50,9 @@ export const createOpenForm = handleAsync(async (req, res, next) => {
 
   const form = await OpenForm.create({
     ...req.body,
+    linkedTemplate: cleanTemplate, // Pass sanitized null value
     slug,
+    status: targetStatus,
     formUrl: `${baseUrl}/open-form/${slug}`,
     createdBy: req.cookies.userId || req.user._id,
   });
@@ -139,6 +154,7 @@ export const updateOpenForm = handleAsync(async (req, res, next) => {
     fields,
     isActive,
     allowMultipleSubmissions,
+    status,
   } = req.body;
 
   const form = await OpenForm.findById(id);
@@ -147,12 +163,35 @@ export const updateOpenForm = handleAsync(async (req, res, next) => {
     return next(new AppError("Open form not found", 404));
   }
 
-  // Dynamic updates
+  // Sanitize empty string to null
+  const cleanTemplate =
+    linkedTemplate !== undefined
+      ? linkedTemplate && linkedTemplate.trim() !== ""
+        ? linkedTemplate
+        : null
+      : form.linkedTemplate;
+
+  const effectiveStatus = status !== undefined ? status : form.status;
+
+  // ⛔ Prevent publishing if linkedTemplate is missing
+  if (effectiveStatus === "published" && !cleanTemplate) {
+    return next(
+      new AppError("Cannot publish form without linking an FMS template.", 400),
+    );
+  }
+
   if (formName !== undefined) form.formName = formName;
   if (description !== undefined) form.description = description;
-  if (linkedTemplate !== undefined) form.linkedTemplate = linkedTemplate;
+  form.linkedTemplate = cleanTemplate; // Set sanitized null value
   if (fields !== undefined) form.fields = fields;
   if (isActive !== undefined) form.isActive = isActive;
+
+  if (status !== undefined) {
+    form.status = status;
+    if (status === "published" && isActive === undefined) {
+      form.isActive = true;
+    }
+  }
 
   if (allowMultipleSubmissions !== undefined) {
     form.allowMultipleSubmissions = allowMultipleSubmissions;
@@ -490,16 +529,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         : null,
 
       startTimeSetting: tmplTask.startTimeSetting,
-
-      decisionStep: tmplTask.decisionStep,
-
-      ifTrueStep: tmplTask.ifTrueStep
-        ? `${instance.instanceId}-${tmplTask.ifTrueStep}`
-        : null,
-
-      elseStep: tmplTask.elseStep
-        ? `${instance.instanceId}-${tmplTask.elseStep}`
-        : null,
 
       taskEndDays: tmplTask.taskEndDays || 0,
 

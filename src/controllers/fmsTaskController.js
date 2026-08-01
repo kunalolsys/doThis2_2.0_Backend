@@ -15,7 +15,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
 
   const created = [];
   const errors = [];
-  const createdTasksIds = []; // NEW: Track task IDs for template update
+  const createdTasksIds = []; // Track task IDs for template update
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -25,6 +25,12 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
     try {
       const description = row.description?.trim();
       if (!description) throw new Error("taskDescription required");
+
+      // ✅ FIX: Strict Boolean Normalization for decisionStep
+      const isDecisionStep =
+        row.decisionStep === true ||
+        row.decisionStep === "yes" ||
+        row.decisionStep === "true";
 
       const taskData = {
         fmsTemplateId: row.fmsTemplateId,
@@ -37,12 +43,20 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         isDependent: row.isDependent || false,
         dependentOn: row.dependentOn || null,
         startTimeSetting: row.startTimeSetting || null,
-        decisionStep: row.decisionStep,
-        ifTrueStep: row.ifTrueStep,
-        elseStep: row.elseStep,
+
+        // ✅ DECISION FIELDS ADDED HERE
+        decisionStep: isDecisionStep,
+        decisionYesAction: isDecisionStep
+          ? row.decisionYesAction || null
+          : null,
+        triggerFmsTemplate:
+          isDecisionStep && row.decisionYesAction === "trigger_fms"
+            ? row.triggerFmsTemplate || null
+            : null,
+
         taskEndDays: parseFloat(row.taskEndDays || 0),
-        assignedBy: req.cookies.userId || req.user._id || null,
-        createdBy: req.cookies.userId || req.user._id || null,
+        assignedBy: req.cookies?.userId || req.user?._id || null,
+        createdBy: req.cookies?.userId || req.user?._id || null,
         isRecurringTask: isRecurrent,
         checklist: row.checklist || [],
         createdForm: row.createdForm || [],
@@ -55,18 +69,13 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       const doer = await User.findById(taskData.assignedTo).populate(
         "role assignShift",
       );
-      if (
-        !doer ||
-        //  || doer.role.name !== "Member"
-        !doer.assignShift
-      ) {
+      if (!doer || !doer.assignShift) {
         throw new Error("Doer must be Member with shift");
       }
 
-      // Template tasks: NO dates (null) - set at launch
       const task = new FmsTask(taskData);
       await task.save();
-      // NEW: Track successful task ID
+
       createdTasksIds.push(task._id);
       await task.populate([
         "fmsTemplateId",
@@ -81,6 +90,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       errors.push({ row: i + 1, error: err.message });
     }
   }
+
   if (createdTasksIds.length > 0) {
     await FmsTemplate.findByIdAndUpdate(templateId, {
       $push: {
@@ -91,6 +101,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       `🔗 Linked ${createdTasksIds.length} tasks to template ${templateId}`,
     );
   }
+
   res.json({
     success: true,
     message: `${created.length}/${rows.length} template tasks planned (dates set at launch)`,
@@ -314,9 +325,6 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
         dependentOn: row.dependentOn || null,
         startTimeSetting: row.startTimeSetting || undefined,
         isRecurringTask: row.isRecurringTask === "true",
-        decisionStep: row.decisionStep === "true",
-        ifTrueStep: row.ifTrueStep,
-        elseStep: row.elseStep,
         taskEndDays: Number(row.taskEndDays) || 0,
 
         createdBy: req.cookies.userId || req.user._id || null,

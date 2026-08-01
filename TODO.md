@@ -1,8 +1,10 @@
-# TODO
-- [ ] Patch `src/controllers/taskController.js` recurring “virtual upcoming” generation for DO_THIS2 enabled.
-  - [ ] Replace current `futureRecurring` / `isTaskValidForToday`+break logic with workshift/holiday-aware generation using `nextWorkingShiftDate`, `isWorkingDay`, `isHoliday` from `src/utils/dateCalculator.js`.
-  - [ ] Generate all valid occurrences within the requested window (use `startDate/endDate` if provided; otherwise use next 30 days).
-  - [ ] Ensure occurrences respect frequency: Weekly/Monthly/Yearly + weekly weekdays (existing fields `frequency`, `weekDays`, `startDate`, `endDate`).
-  - [ ] Filter virtual recurring list by `stat`, `status`, `taskType`, `search` exactly like existing pipeline.
-- [ ] Run a quick node lint/test command or start server and manually validate upcoming list for weekly/monthly/yearly tasks.
+# Action Gate Feature - Implementation Complete ✅
+
+## Completed Steps
+- [x] Step 0: Read and understand all relevant files (FmsTask, FmsInstanceTask, FmsInstance, controllers)
+- [x] Step 1: Clone `enableActionGate` during instance launch (fmsInstanceController.js)
+- [x] Step 2: Add Action Gate validation logic in completeInstanceTask
+- [x] Step 3: Implement TERMINATE_FMS action handler
+- [x] Step 4: Implement TRIGGER_ANOTHER_FMS action handler + helper function
+- [x] Step 5: Implementation complete
 

@@ -1991,8 +1991,10 @@ export const filterFMSTasks = handleAsync(async (req, res) => {
 
   const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
   //**GETING FMS TASKS */
-  const fmsQuery = {};
-
+const fmsQuery = {
+    isTerminated: { $ne: true },
+  status: { $nin: ["Terminated"] }, 
+};
   // USER FILTERS
   if (creatorOrAssignorId) {
     fmsQuery.$or = [
@@ -3211,7 +3213,10 @@ export const getFMSTaskStats = handleAsync(async (req, res) => {
   const isDoThisEnabled = isModuleEnabled("DO_THIS2");
 
   //**FMS Stats */
-  const fmsQuery = {};
+  const fmsQuery = {
+    isTerminated: { $ne: true },
+    status: { $nin: ["Terminated"] },
+  };
 
   // USER FILTERS
   if (creatorOrAssignorId) {

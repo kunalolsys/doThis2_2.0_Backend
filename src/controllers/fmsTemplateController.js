@@ -345,6 +345,20 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
     data: templates,
   });
 });
+// controllers/fmsTemplateController.js
+
+export const getAllTemplates = handleAsync(async (req, res) => {
+  const templates = await FmsTemplate.find({ isDeleted: false })
+    .select("_id templateName fmsId description fmsDuration endDate isLaunched")
+    .populate("manager", "name email")
+    .populate("srManager", "name email")
+    .sort({ templateName: 1 }); // Sorted alphabetically by name for dropdowns
+
+  res.status(200).json({
+    success: true,
+    data: templates,
+  });
+});
 export const getTemplateById = handleAsync(async (req, res, next) => {
   const template = await FmsTemplate.findById(req.params.id)
     .populate("manager", "name email")

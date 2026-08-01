@@ -5,7 +5,7 @@ import FmsInstanceTask from "../models/FmsInstanceTask.js"; // 👈 ADDED
 import FmsInstance from "../models/FmsInstance.js";
 
 // const SCHEDULE = "*/5 * * * *";
-const SCHEDULE = "*/10 * * * * *" ;
+const SCHEDULE = "*/10 * * * * *";
 function resolveDueDate(task) {
   if (task.plannedDueDate) return task.plannedDueDate; // FMS Priority
   if (task.dueDate) return task.dueDate;
@@ -64,8 +64,12 @@ async function updateTaskStatuses() {
       }
     }
     const blockedInstances = await FmsInstance.find({
-      status: { $in: ["Onhold", "Stopped"] },
-    });
+      $or: [
+        { status: { $in: ["Onhold", "Stopped"] } },
+        { isStopped: true },
+        { isTerminated: true },
+      ],
+    }).lean();
 
     const blockedInstanceIds = new Set(
       blockedInstances.map((i) => i._id.toString()),
@@ -75,15 +79,24 @@ async function updateTaskStatuses() {
     const fmsUpdates = [];
 
     for (const t of fmsTasks) {
-      const instanceIdStr = t.fmsInstanceId.toString();
+      const instanceIdStr = t.fmsInstanceId ? t.fmsInstanceId.toString() : null;
 
-      if (blockedInstanceIds.has(instanceIdStr)) {
+      if (instanceIdStr && blockedInstanceIds.has(instanceIdStr)) {
         const parentInstance = blockedInstances.find(
           (i) => i._id.toString() === instanceIdStr,
         );
 
-        const newStatus =
-          parentInstance.status === "Stopped" ? "Stopped" : "Onhold";
+        let newStatus = "Stopped";
+        if (
+          parentInstance.isTerminated ||
+          parentInstance.isStopped ||
+          parentInstance.status === "Stopped"
+        ) {
+          newStatus = "Terminated"; // 👈 Updated status to Terminated
+        } else if (parentInstance.status === "Onhold") {
+          newStatus = "Onhold";
+        }
+
         if (t.status !== newStatus) {
           fmsUpdates.push({ id: t._id, status: newStatus });
         }
@@ -91,7 +104,12 @@ async function updateTaskStatuses() {
         continue; // ⛔ skip normal logic
       }
       // Skip already completed/cancelled/notdone
-      if (t.status === "Completed" || t.status === "Cancelled" ||t.status=="Not Done") continue;
+      if (
+        t.status === "Completed" ||
+        t.status === "Cancelled" ||
+        t.status == "Not Done"
+      )
+        continue;
 
       const start = t.plannedStartDate ? new Date(t.plannedStartDate) : null;
       const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;

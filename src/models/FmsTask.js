@@ -73,9 +73,6 @@ const FmsTaskSchema = new mongoose.Schema(
       enum: ["planned-to-planned", "actual-to-planned"],
     },
     isRecurringTask: { type: Boolean, default: false },
-    decisionStep: { type: Boolean, default: false },
-    ifTrueStep: String,
-    elseStep: String,
     taskEndDays: { type: Number, default: 0, min: 0 },
     // TENTATIVE - finalized at launch (NULL during template phase)
     tentativeStartDate: Date,
@@ -127,6 +124,24 @@ const FmsTaskSchema = new mongoose.Schema(
     // Audit
     assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // ── Decision Step ───────────────────────────────────────────────────────
+    decisionStep: {
+      type: Boolean,
+      default: false,
+    },
+    // "terminate" → stop the whole FMS on Yes
+    // "trigger_fms" → launch another FMS on Yes
+    decisionYesAction: {
+      type: String,
+      enum: ["terminate", "trigger_fms", null],
+      default: null,
+    },
+    // Which FMS template to trigger (only for trigger_fms)
+    triggerFmsTemplate: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FmsTemplate",
+      default: null,
+    },
   },
   { timestamps: true },
 );

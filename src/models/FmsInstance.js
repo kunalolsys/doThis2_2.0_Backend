@@ -32,6 +32,8 @@ const FmsInstanceSchema = new mongoose.Schema(
       ],
       default: "Upcoming",
     },
+    isTerminated: { type: Boolean, default: false },
+
     // FmsInstanceSchema
     progress: {
       totalTasks: { type: Number, default: 0 },

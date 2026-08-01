@@ -35,9 +35,6 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     isDependent: { type: Boolean, default: false },
     dependentOn: String,
     startTimeSetting: String,
-    decisionStep: { type: Boolean, default: false },
-    ifTrueStep: String,
-    elseStep: String,
     taskEndDays: { type: Number, default: 0 },
 
     // FINAL RUNTIME DATES (computed at launch)
@@ -60,6 +57,7 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
         "Onhold",
         "Stopped",
         "Not Done",
+        "Terminated"
       ],
       default: "Upcoming",
       index: true,
@@ -155,6 +153,39 @@ const FmsInstanceTaskSchema = new mongoose.Schema(
     // - triggerKey: generic occurrence key for dependency activation/generation
     recurrenceKey: String,
     triggerKey: String,
+
+    // ── Decision step runtime state ─────────────────────────────────────────
+    decisionStep: { type: Boolean, default: false },
+    decisionYesAction: {
+      type: String,
+      enum: ["terminate", "trigger_fms", null],
+      default: null,
+    },
+    triggerFmsTemplate: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FmsTemplate",
+      default: null,
+    },
+    // Filled at runtime
+    decisionAnswer: { type: String, enum: ["yes", "no", null], default: null },
+    decisionRemark: { type: String, default: null },
+    decisionSubmissionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FormSubmission",
+      default: null,
+    },
+    triggeredInstanceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FmsInstance",
+      default: null,
+    },
+    completedAt: { type: Date, default: null },
+    completedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    isTerminated: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

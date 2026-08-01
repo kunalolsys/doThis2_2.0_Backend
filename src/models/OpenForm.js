@@ -73,7 +73,7 @@ const OpenFormSchema = new mongoose.Schema(
     linkedTemplate: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "FmsTemplate",
-      required: true,
+      default: null,
     },
 
     fields: [OpenFormFieldSchema],
@@ -95,6 +95,11 @@ const OpenFormSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    status: {
+      type: String,
+      enum: ["draft", "published"],
+      default: "draft",
     },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
