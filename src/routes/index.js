@@ -18,6 +18,8 @@ import taskAudienceMastersRoutes from "./taskAudienceMasterRoutes.js";
 import emailRoutes from "./emailRoutes.js";
 import taskBucketsReqRoutes from "./taskBucketReqRoutes.js";
 import decisionRoutes from "./decisionStepRoutes.js";
+import openFormImportRoutes from "./openFormImportRoutes.js";
+
 import { moduleGate } from "../middleware/moduleGate.js";
 
 const router = express.Router();
@@ -59,5 +61,6 @@ router.use("/task-audience-masters", taskAudienceMastersRoutes);
 router.use("/email", emailRoutes);
 router.use("/task-buckets-req", taskBucketsReqRoutes);
 router.use("/fms-decision", decisionRoutes);
+router.use("/open-forms", openFormImportRoutes);
 
 export default router;

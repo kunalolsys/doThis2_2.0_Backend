@@ -1,0 +1,929 @@
+import fs from "fs";
+import path from "path";
+import XLSX from "xlsx";
+import csv from "csv-parser";
+import { Parser } from "json2csv";
+import OpenForm from "../models/OpenForm.js";
+import FormSubmission from "../models/FormSubmission.js";
+import FmsInstance from "../models/FmsInstance.js";
+import FmsInstanceTask from "../models/FmsInstanceTask.js";
+import FmsTemplate from "../models/FmsTemplate.js";
+import FmsTask from "../models/FmsTask.js";
+import User from "../models/User.js";
+import Counter from "../models/Counter.js";
+import { handleAsync } from "../utils/handleAsync.js";
+import AppError from "../utils/AppError.js";
+import fmsDateCalculator from "../utils/fmsDateCalculator.js";
+import {
+  addWorkingDaysHoliday,
+  nextWorkingShiftDate,
+  snapToShiftTime,
+} from "../utils/dateCalculator.js";
+import { addDays } from "date-fns";
+import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
+
+const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly"];
+
+// ── Helper: Calculate Task Status ──────────────────────────────────────────
+const calculateTaskStatus = (startDate, dueDate) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (!startDate) return "Upcoming";
+  const s = new Date(startDate);
+  if (s > today) return "Upcoming";
+
+  if (dueDate) {
+    const d = new Date(dueDate);
+    if (d < today) return "Overdue";
+    if (d.toDateString() === today.toDateString()) return "Delayed";
+  }
+  return "Pending";
+};
+
+// ── Helper: Calculate FMS Instance Status ─────────────────────────────────
+const calculateInstanceStatus = (startDate) => {
+  const now = new Date();
+  if (startDate && now < startDate) {
+    return "Upcoming";
+  }
+  return "Ongoing";
+};
+
+// ── Internal Helper to Launch FMS Instance from Form/Import ───────────────
+export const launchFmsInstanceInternal = async ({
+  templateId,
+  launchDate: launchDateInput,
+  endDate: endDateInput,
+  createdBy,
+  triggerType = "OPEN_FORM",
+  formId = null,
+  submissionId = null,
+  runtimeContext = {},
+}) => {
+  const template = await FmsTemplate.findById(templateId).populate([
+    "manager",
+    "srManager",
+  ]);
+  if (!template) throw new AppError("FMS Template not found", 404);
+
+  const taskCount = await FmsTask.countDocuments({ fmsTemplateId: templateId });
+  if (taskCount === 0) {
+    throw new AppError("Cannot launch FMS: No tasks found in template", 400);
+  }
+
+  const launchDate = new Date(launchDateInput || Date.now());
+  const instanceEnd =
+    template.fmsDuration === "Fixed Period" ? template.endDate : null;
+  const parsedEndDate =
+    template.fmsDuration === "Fixed Period"
+      ? endDateInput
+        ? new Date(endDateInput)
+        : template.endDate
+      : launchDate;
+
+  const status = calculateInstanceStatus(launchDate);
+
+  const managerUser = await User.findById(template.manager._id).populate(
+    "assignShift",
+  );
+
+  let instanceStartDate = launchDate;
+  let instanceEndDate = endDateInput ? new Date(endDateInput) : instanceEnd;
+
+  if (managerUser?.assignShift) {
+    instanceStartDate = await nextWorkingShiftDate(
+      launchDate,
+      managerUser.assignShift._id,
+    );
+
+    if (instanceEndDate) {
+      instanceEndDate = snapToShiftTime(
+        instanceEndDate,
+        managerUser.assignShift,
+        false,
+      );
+    }
+  }
+
+  // Create Instance
+  const instance = await FmsInstance.create({
+    fmsTemplateId: template._id,
+    instanceName: `${template.templateName}`,
+    startDate: instanceStartDate,
+    endDate: instanceEndDate,
+    manager: template.manager._id,
+    srManager: template.srManager?._id || null,
+    createdBy: createdBy || null,
+    fmsDuration: template.fmsDuration,
+    status,
+    triggerType,
+    formId,
+    submissionId,
+    runtimeContext,
+  });
+
+  // Fetch Template Tasks in sequential order
+  const templateTasks = await FmsTask.find({ fmsTemplateId: templateId }).sort(
+    "taskId",
+  );
+  const instanceTasks = [];
+
+  for (let i = 0; i < templateTasks.length; i++) {
+    const tmplTask = templateTasks[i];
+
+    if (RECURRING_FREQUENCIES.includes(tmplTask.frequency)) {
+      continue;
+    }
+
+    const prevTasks = instanceTasks.slice(0, i);
+    const doer = await User.findById(tmplTask.assignedTo).populate(
+      "assignShift",
+    );
+
+    let dates = { startDate: null, dueDate: null };
+    const freq = (tmplTask.frequency || "").trim().toLowerCase();
+
+    const parentTemplate = tmplTask.dependentOn
+      ? await FmsTask.findOne({ taskId: tmplTask.dependentOn })
+      : null;
+
+    const isRecurringParent =
+      parentTemplate &&
+      RECURRING_FREQUENCIES.includes(parentTemplate.frequency);
+
+    if (tmplTask.isDependent && isRecurringParent) {
+      continue;
+    }
+
+    if (freq === "anytime") {
+      const shiftStart = doer?.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate = parsedEndDate;
+      if (parsedEndDate && doer?.assignShift) {
+        dueDate = snapToShiftTime(parsedEndDate, doer.assignShift, false);
+      }
+
+      dates = { startDate: shiftStart, dueDate };
+    } else if (!tmplTask.isDependent && freq.startsWith("start")) {
+      const shiftStart = doer?.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate = shiftStart;
+      if (freq.includes("hour")) {
+        dueDate = new Date(
+          shiftStart.getTime() + (tmplTask.xValue || 0) * 60 * 60 * 1000,
+        );
+      } else {
+        const targetDate = addDays(shiftStart, tmplTask.xValue || 0);
+        dueDate = doer?.assignShift
+          ? await nextWorkingShiftDate(targetDate, doer.assignShift._id)
+          : targetDate;
+      }
+
+      dates = { startDate: shiftStart, dueDate };
+    } else if (!tmplTask.isDependent && freq.startsWith("event")) {
+      if (!parsedEndDate) {
+        throw new Error(
+          `Event based task "${tmplTask.taskId}" requires FMS End Date`,
+        );
+      }
+
+      const shiftStart = doer?.assignShift
+        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        : launchDate;
+
+      let dueDate;
+      const isNegative = freq.includes("event-x");
+      const multiplier = isNegative ? -1 : 1;
+
+      if (freq.includes("hour")) {
+        dueDate = new Date(
+          parsedEndDate.getTime() +
+            (tmplTask.xValue || 0) * 60 * 60 * 1000 * multiplier,
+        );
+      } else {
+        const targetDate = addDays(
+          parsedEndDate,
+          Math.abs(tmplTask.xValue || 0) * multiplier,
+        );
+
+        dueDate = doer?.assignShift
+          ? snapToShiftTime(
+              await nextWorkingShiftDate(targetDate, doer.assignShift._id),
+              doer.assignShift,
+              false,
+            )
+          : targetDate;
+      }
+
+      dates = { startDate: shiftStart, dueDate };
+    } else if (
+      tmplTask.startTimeSetting === "planned-to-planned" &&
+      tmplTask.isDependent
+    ) {
+      let parent =
+        prevTasks.find((t) => t.taskId === tmplTask.dependentOn) ||
+        templateTasks.find((t) => t.taskId === tmplTask.dependentOn) ||
+        (await FmsTask.findOne({ taskId: tmplTask.dependentOn }));
+
+      if (!parent) continue;
+
+      const assignedParentUser = await User.findById(
+        parent.assignedTo,
+      ).populate("assignShift");
+      if (!assignedParentUser) {
+        throw new AppError(`User ${parent.assignedTo} not found`, 404);
+      }
+
+      const parentWorkShift = assignedParentUser.assignShift;
+      const parentStart = parent.plannedStartDate;
+      const parentDue = parent.plannedDueDate;
+      let startDate, dueDate;
+
+      if (!parentStart || !parentDue) continue;
+
+      const isSameShift =
+        String(doer?.assignShift?._id) === String(parentWorkShift?._id);
+
+      if (!isSameShift) {
+        const baseDate = new Date(parentStart);
+        const start = await nextWorkingShiftDate(
+          baseDate,
+          doer.assignShift._id,
+        );
+        startDate = snapToShiftTime(start, doer.assignShift, true);
+        dueDate = snapToShiftTime(start, doer.assignShift, false);
+      } else {
+        const x = Number(tmplTask.xValue || 0);
+        startDate = new Date(parentStart);
+        dueDate = new Date(parentDue);
+
+        if (freq.includes("hour")) {
+          let calculatedDue = new Date(parentDue);
+          calculatedDue.setHours(calculatedDue.getHours() + x);
+          const shiftEnd = snapToShiftTime(parentDue, doer.assignShift, false);
+
+          if (calculatedDue < shiftEnd) {
+            dueDate = calculatedDue;
+          } else {
+            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+            let nextDay = new Date(parentDue);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              doer.assignShift._id,
+            );
+            const nextShiftStart = snapToShiftTime(
+              nextWorkingDay,
+              doer.assignShift,
+              true,
+            );
+            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+          }
+        } else {
+          dueDate = await addWorkingDaysHoliday(
+            parentDue,
+            x,
+            doer.assignShift._id,
+          );
+          dueDate.setHours(
+            parentDue.getHours(),
+            parentDue.getMinutes(),
+            parentDue.getSeconds(),
+            parentDue.getMilliseconds(),
+          );
+
+          const shiftEnd = snapToShiftTime(dueDate, doer.assignShift, false);
+          if (dueDate >= shiftEnd) {
+            let nextDay = new Date(dueDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              doer.assignShift._id,
+            );
+            dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
+          }
+        }
+      }
+
+      dates = { startDate, dueDate };
+    } else if (!tmplTask.isDependent) {
+      dates = await fmsDateCalculator.calculateFmsTaskDates(
+        tmplTask.toObject(),
+        launchDate,
+        parsedEndDate,
+        doer?.assignShift?._id,
+        prevTasks.map((t) => ({
+          taskId: t.taskId,
+          plannedDueDate: t.plannedDueDate,
+          plannedStartDate: t.plannedStartDate,
+        })),
+      );
+    } else if (tmplTask.startTimeSetting === "actual-to-planned") {
+      dates = { startDate: null, dueDate: null };
+    }
+
+    const isDecisionStep =
+      tmplTask.decisionStep === true ||
+      tmplTask.decisionStep === "yes" ||
+      tmplTask.decisionStep === "true";
+
+    const instanceTaskData = {
+      fmsInstanceId: instance._id,
+      fmsTaskId: tmplTask._id,
+      taskId: tmplTask.taskId,
+      description: tmplTask.description,
+      departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
+      assignedTo: tmplTask.assignedTo,
+      assignedBy: tmplTask.assignedBy,
+      frequency: tmplTask.frequency,
+      xValue: tmplTask.xValue,
+      isDependent: tmplTask.isDependent,
+      dependentOn: tmplTask.dependentOn,
+      startTimeSetting: tmplTask.startTimeSetting,
+      taskEndDays: tmplTask.taskEndDays || 0,
+      plannedStartDate: dates.startDate,
+      plannedDueDate: dates.dueDate,
+      status:
+        tmplTask.startTimeSetting === "actual-to-planned"
+          ? "Upcoming"
+          : calculateTaskStatus(dates.startDate, dates.dueDate),
+      isVisible: false,
+      updatedBy: createdBy,
+      decisionStep: isDecisionStep,
+      decisionYesAction: isDecisionStep
+        ? tmplTask.decisionYesAction || null
+        : null,
+      triggerFmsTemplate:
+        isDecisionStep && tmplTask.decisionYesAction === "trigger_fms"
+          ? tmplTask.triggerFmsTemplate || null
+          : null,
+      decisionAnswer: null,
+      decisionRemark: null,
+      decisionSubmissionId: null,
+      triggeredInstanceId: null,
+      checklist: tmplTask.checklist || [],
+      createdForm: tmplTask.createdForm || [],
+    };
+
+    if (
+      freq !== "anytime" &&
+      tmplTask.isDependent &&
+      tmplTask.startTimeSetting === "actual-to-planned"
+    ) {
+      instanceTaskData.waitingForParent = true;
+    }
+
+    const instanceTask = new FmsInstanceTask(instanceTaskData);
+    await instanceTask.save();
+    instanceTasks.push(instanceTask);
+  }
+
+  await generateRecurringFmsTasks(instance._id);
+
+  // await FmsTemplate.findByIdAndUpdate(templateId, {
+  //   isLaunched: true,
+  // });
+
+  return instance;
+};
+
+// ── Field Type Hints ───────────────────────────────────────────────────────
+const FIELD_HINTS = {
+  text: "Any text",
+  textarea: "Any text (multi-line)",
+  number: "Numbers only",
+  email: "Valid email address",
+  date: "YYYY-MM-DD",
+  phone: "10-digit number",
+  url: "https://...",
+  select: "One of the allowed values",
+  radio: "One of the allowed values",
+  checkbox: "true or false",
+  file: "Not supported in bulk import",
+};
+
+// ── Validate Field Values ──────────────────────────────────────────────────
+const validateField = (field, rawValue) => {
+  const val =
+    rawValue !== undefined && rawValue !== null ? String(rawValue).trim() : "";
+
+  if (field.isRequired && val === "") {
+    return { ok: false, reason: `"${field.label}" is required` };
+  }
+
+  if (val === "") return { ok: true, value: null };
+
+  switch (field.fieldType) {
+    case "number":
+      if (isNaN(Number(val)))
+        return { ok: false, reason: `"${field.label}" must be a number` };
+      return { ok: true, value: Number(val) };
+
+    case "email":
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))
+        return { ok: false, reason: `"${field.label}" must be a valid email` };
+      return { ok: true, value: val };
+
+    case "date": {
+      let parsedDate = null;
+
+      // 1. Handle Excel Serial Numbers (e.g., 45872)
+      if (
+        typeof val === "number" ||
+        (!isNaN(Number(val)) &&
+          !String(val).includes("-") &&
+          !String(val).includes("/"))
+      ) {
+        const excelNum = Number(val);
+        if (excelNum > 0 && excelNum < 2958465) {
+          // Valid Excel date range
+          const parsedObj = XLSX.SSF.parse_date_code(excelNum);
+          if (parsedObj) {
+            const { y, m, d } = parsedObj;
+            parsedDate = new Date(Date.UTC(y, m - 1, d));
+          }
+        }
+      }
+
+      // 2. Handle String Date Formats (e.g., "03-08-2026", "03/08/2026", "2026-08-03")
+      if (!parsedDate && typeof val === "string") {
+        const cleanVal = val.trim();
+
+        // Check for DD-MM-YYYY or DD/MM/YYYY pattern
+        const ddmmyyyyMatch = cleanVal.match(
+          /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/,
+        );
+        if (ddmmyyyyMatch) {
+          const day = parseInt(ddmmyyyyMatch[1], 10);
+          const month = parseInt(ddmmyyyyMatch[2], 10) - 1; // 0-indexed month
+          const year = parseInt(ddmmyyyyMatch[3], 10);
+          parsedDate = new Date(Date.UTC(year, month, day));
+        } else {
+          // Fallback to standard JS ISO date parsing
+          const timestamp = Date.parse(cleanVal);
+          if (!isNaN(timestamp)) {
+            parsedDate = new Date(timestamp);
+          }
+        }
+      }
+
+      // 3. Validate parsed date
+      if (!parsedDate || isNaN(parsedDate.getTime())) {
+        return {
+          ok: false,
+          reason: `"${field.label}" must be a valid date (YYYY-MM-DD or DD-MM-YYYY)`,
+        };
+      }
+
+      // Prevent unrealistic dates (like year 46236 or negative years)
+      const fullYear = parsedDate.getUTCFullYear();
+      if (fullYear < 1900 || fullYear > 2100) {
+        return {
+          ok: false,
+          reason: `"${field.label}" has an invalid year: ${fullYear}`,
+        };
+      }
+
+      // Return clean ISO Date (YYYY-MM-DD) or Full ISO String
+      return { ok: true, value: parsedDate.toISOString().slice(0, 10) };
+    }
+
+    case "phone":
+      if (!/^[6-9]\d{9}$/.test(val.replace(/\D/g, "")))
+        return {
+          ok: false,
+          reason: `"${field.label}" must be a valid 10-digit phone number`,
+        };
+      return { ok: true, value: val };
+
+    case "url":
+      try {
+        new URL(val);
+        return { ok: true, value: val };
+      } catch {
+        return { ok: false, reason: `"${field.label}" must be a valid URL` };
+      }
+
+    case "select":
+    case "radio":
+      if (field.options?.length && !field.options.includes(val))
+        return {
+          ok: false,
+          reason: `"${field.label}" must be one of: ${field.options.join(", ")}`,
+        };
+      return { ok: true, value: val };
+
+    case "checkbox":
+      const lower = val.toLowerCase();
+      if (!["true", "false", "yes", "no", "1", "0"].includes(lower))
+        return { ok: false, reason: `"${field.label}" must be true or false` };
+      return { ok: true, value: ["true", "yes", "1"].includes(lower) };
+
+    case "file":
+      return {
+        ok: false,
+        reason: `"${field.label}" (file) is not supported in bulk import`,
+      };
+
+    default:
+      return { ok: true, value: val };
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/open-forms/:slug/import-template
+// ─────────────────────────────────────────────────────────────────────────
+export const downloadImportTemplate = handleAsync(async (req, res, next) => {
+  const form = await OpenForm.findOne({
+    slug: req.params.slug,
+    isActive: true,
+    isDeleted: false,
+  }).lean();
+
+  if (!form) return next(new AppError("Form not found", 404));
+
+  const fields = form.fields.filter((f) => f.fieldType !== "file");
+  const wb = XLSX.utils.book_new();
+
+  const headerRow = fields.map((f) => f.label);
+  const exampleRow = fields.map((f) => {
+    if (f.fieldType === "select" || f.fieldType === "radio")
+      return f.options?.[0] || "ExampleValue";
+    if (f.fieldType === "number") return 123;
+    if (f.fieldType === "email") return "example@domain.com";
+    if (f.fieldType === "date") return new Date().toISOString().slice(0, 10);
+    if (f.fieldType === "phone") return "9876543210";
+    if (f.fieldType === "url") return "https://example.com";
+    if (f.fieldType === "checkbox") return "true";
+    return "Sample text";
+  });
+
+  const dataAOA = [headerRow, exampleRow];
+  const dataWS = XLSX.utils.aoa_to_sheet(dataAOA);
+
+  dataWS["!cols"] = fields.map((f) => ({
+    wch: Math.max(f.label.length + 4, 20),
+  }));
+
+  fields.forEach((_, c) => {
+    const cell = XLSX.utils.encode_cell({ r: 0, c });
+    if (dataWS[cell]) {
+      dataWS[cell].s = {
+        font: { bold: true, color: { rgb: "FFFFFF" } },
+        fill: { fgColor: { rgb: "2563EB" } },
+        alignment: { horizontal: "center" },
+      };
+    }
+  });
+
+  dataWS["!freeze"] = { xSplit: 0, ySplit: 1 };
+  XLSX.utils.book_append_sheet(wb, dataWS, "Import Data");
+
+  // Field Guide
+  const guideHeaders = [
+    "Label",
+    "Field ID",
+    "Type",
+    "Required",
+    "Allowed Values / Hint",
+  ];
+  const guideRows = fields.map((f) => [
+    f.label,
+    f.fieldId,
+    f.fieldType,
+    f.isRequired ? "YES" : "no",
+    (f.options?.length ? f.options.join(" | ") : FIELD_HINTS[f.fieldType]) ||
+      "",
+  ]);
+
+  const guideWS = XLSX.utils.aoa_to_sheet([guideHeaders, ...guideRows]);
+  guideWS["!cols"] = [24, 20, 14, 10, 40].map((w) => ({ wch: w }));
+
+  guideHeaders.forEach((_, c) => {
+    const cell = XLSX.utils.encode_cell({ r: 0, c });
+    if (guideWS[cell]) {
+      guideWS[cell].s = {
+        font: { bold: true, color: { rgb: "FFFFFF" } },
+        fill: { fgColor: { rgb: "059669" } },
+      };
+    }
+  });
+
+  XLSX.utils.book_append_sheet(wb, guideWS, "Field Guide");
+
+  // Instructions
+  const instrWS = XLSX.utils.aoa_to_sheet([
+    [`Bulk Import Template — ${form.formName}`],
+    [`Generated: ${new Date().toLocaleString("en-IN")}`],
+    [],
+    ["INSTRUCTIONS"],
+    [
+      "1. Fill your data in the 'Import Data' sheet starting from row 2 (row 1 is the header, do not change it).",
+    ],
+    ["2. Each row = one form submission."],
+    ["3. Check the 'Field Guide' sheet for allowed values and formats."],
+    ["4. Required fields must not be left empty."],
+    ["5. Date format: YYYY-MM-DD  (e.g. 2026-06-15)."],
+    [
+      "6. For select/radio fields, use only the allowed values listed in Field Guide.",
+    ],
+    ["7. File upload fields are not supported in bulk import — skip them."],
+    [
+      "8. Upload this file at the import endpoint. Invalid rows are skipped and reported.",
+    ],
+  ]);
+  instrWS["!cols"] = [{ wch: 90 }];
+  XLSX.utils.book_append_sheet(wb, instrWS, "Instructions");
+
+  const buffer = XLSX.write(wb, {
+    type: "buffer",
+    bookType: "xlsx",
+    cellStyles: true,
+  });
+
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${form.slug}-import-template.xlsx"`,
+  );
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  return res.send(buffer);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/open-forms/:slug/import
+// ─────────────────────────────────────────────────────────────────────────
+export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
+  if (!req.file) return next(new AppError("No file uploaded", 400));
+
+  const filePath = req.file.path;
+  const triggerFms =
+    req.body.triggerFms === "true" ||
+    req.body.triggerFms === true ||
+    req.body.triggerFms === "1" ||
+    req.body.triggerFms === 1;
+  const remark = req.body.remark || "Bulk import";
+  const userId = req.cookies?.userId || req.user?._id || null;
+
+  const importLog = [];
+  let rows = [];
+
+  try {
+    const form = await OpenForm.findOne({
+      slug: req.params.slug,
+      isActive: true,
+      isDeleted: false,
+    })
+      .populate("linkedTemplate")
+      .lean();
+
+    if (!form) {
+      fs.unlinkSync(filePath);
+      return next(new AppError("Form not found", 404));
+    }
+
+    const validFields = form.fields.filter((f) => f.fieldType !== "file");
+    const isCSV = req.file.originalname.toLowerCase().endsWith(".csv");
+
+    if (isCSV) {
+      rows = await new Promise((resolve, reject) => {
+        const acc = [];
+        fs.createReadStream(filePath)
+          .pipe(csv())
+          .on("data", (d) => acc.push(d))
+          .on("end", () => resolve(acc))
+          .on("error", (e) => reject(e));
+      });
+    } else {
+      const wb = XLSX.readFile(filePath);
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    }
+
+    if (!rows.length) {
+      fs.unlinkSync(filePath);
+      return next(new AppError("File is empty or unreadable", 400));
+    }
+
+    const labelToField = new Map(
+      validFields.map((f) => [f.label.toLowerCase().trim(), f]),
+    );
+    const idToField = new Map(
+      validFields.map((f) => [f.fieldId.toLowerCase().trim(), f]),
+    );
+
+    const resolveField = (headerKey) => {
+      const k = headerKey.toLowerCase().trim();
+      return labelToField.get(k) || idToField.get(k) || null;
+    };
+
+    const sheetHeaders = Object.keys(rows[0] || {});
+    const seenInBatch = new Set();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      const rowErrors = [];
+      const responsesMap = {};
+
+      for (const header of sheetHeaders) {
+        const field = resolveField(header);
+        if (!field) continue;
+
+        const { ok, value, reason } = validateField(field, row[header]);
+        if (!ok) {
+          rowErrors.push(reason);
+        } else if (value !== null) {
+          responsesMap[field.fieldId] = value;
+        }
+      }
+
+      for (const field of validFields) {
+        if (!field.isRequired) continue;
+        const headerPresent = sheetHeaders.some(
+          (h) => resolveField(h)?._id == field._id,
+        );
+        if (!headerPresent)
+          rowErrors.push(`"${field.label}" column is missing from the sheet`);
+      }
+
+      if (rowErrors.length > 0) {
+        importLog.push({
+          row: rowNum,
+          status: "error",
+          reason: rowErrors.join("; "),
+          data: JSON.stringify(row),
+        });
+        continue;
+      }
+
+      // 1. Same CSV/Excel file ke andar Batch Duplicate Check
+      const batchKey = JSON.stringify(responsesMap);
+      if (seenInBatch.has(batchKey)) {
+        importLog.push({
+          row: rowNum,
+          status: "skipped",
+          reason: "Duplicate row — same values already imported in this batch",
+          data: JSON.stringify(row),
+        });
+        continue;
+      }
+      seenInBatch.add(batchKey);
+
+      // 2. Database Existing Records Check (Taaki pehle se uploaded rows dobara insert na ho)
+      const duplicateConditions = [];
+
+      // Email ya Phone dynamic key check (Agar form me ho)
+      if (responsesMap.email) {
+        duplicateConditions.push({
+          "submissionData.email.value": responsesMap.email,
+        });
+      }
+      if (responsesMap.phone) {
+        duplicateConditions.push({
+          "submissionData.phone.value": responsesMap.phone,
+        });
+      }
+
+      // Fallback: Agar Email/Phone nahi hain, to Required Fields matching check karein
+      if (duplicateConditions.length === 0) {
+        const requiredMatch = {};
+        const requiredFields = validFields.filter((f) => f.isRequired);
+
+        for (const reqField of requiredFields) {
+          if (responsesMap[reqField.fieldId] !== undefined) {
+            requiredMatch[`submissionData.${reqField.fieldId}.value`] =
+              responsesMap[reqField.fieldId];
+          }
+        }
+
+        if (Object.keys(requiredMatch).length > 0) {
+          duplicateConditions.push(requiredMatch);
+        }
+      }
+
+      if (duplicateConditions.length > 0) {
+        const existingSubmission = await FormSubmission.findOne({
+          formId: form._id,
+          $or: duplicateConditions,
+        });
+
+        if (existingSubmission) {
+          importLog.push({
+            row: rowNum,
+            status: "skipped",
+            reason: "Duplicate record — already submitted in a previous import",
+            data: JSON.stringify(row),
+          });
+          continue; // ⏭️ Re-import aur duplicate FMS launch avoid karne ke liye skip karein
+        }
+      }
+
+      // 🟢 BUILD ENRICHED SUBMISSION DATA (Matching submitOpenForm structure)
+      const enrichedSubmissionData = {};
+      for (const field of form.fields) {
+        enrichedSubmissionData[field.fieldId] = {
+          value: responsesMap[field.fieldId] ?? null,
+          isTableColumn: field.isTableColumn || false,
+          label: field.label,
+          fieldType: field.fieldType,
+        };
+      }
+
+      try {
+        // 1. Create FormSubmission
+        const submission = await FormSubmission.create({
+          formId: form._id,
+          submissionData: enrichedSubmissionData,
+          submittedBy: userId,
+          status: "Submitted",
+        });
+
+        let triggeredInstanceId = null;
+
+        // 2. Trigger FMS if requested
+        if (triggerFms && form.linkedTemplate) {
+          const templateId = form.linkedTemplate._id || form.linkedTemplate;
+
+          const newInstance = await launchFmsInstanceInternal({
+            templateId,
+            launchDate: new Date(),
+            createdBy: userId,
+            triggerType: "FORM_SUBMISSION",
+            formId: form._id,
+            submissionId: submission._id,
+            runtimeContext: enrichedSubmissionData, // MATCHING submitOpenForm runtimeContext
+          });
+
+          if (newInstance) {
+            triggeredInstanceId = newInstance._id;
+
+            submission.triggeredInstance = newInstance._id;
+            submission.status = "Triggered";
+            await submission.save();
+          }
+        }
+
+        importLog.push({
+          row: rowNum,
+          status: "imported",
+          reason: "OK",
+          submissionId: submission._id,
+          triggeredInstanceId,
+        });
+      } catch (rowErr) {
+        importLog.push({
+          row: rowNum,
+          status: "error",
+          reason: `DB error: ${rowErr.message}`,
+          data: JSON.stringify(row),
+        });
+      }
+    }
+
+    const importedRows = importLog.filter((l) => l.status === "imported");
+    const skippedRows = importLog.filter((l) => l.status === "skipped");
+    const errorRows = importLog.filter((l) => l.status === "error");
+
+    let errorFileUrl = null;
+    const failedRows = [...skippedRows, ...errorRows];
+    if (failedRows.length > 0) {
+      const parser = new Parser({
+        fields: ["row", "status", "reason", "data"],
+      });
+      const csvContent = parser.parse(failedRows);
+      const errorFName = `${Date.now()}-form-import-errors.csv`;
+      const errorFPath = path.join(process.cwd(), "uploads", errorFName);
+      fs.writeFileSync(errorFPath, csvContent);
+      errorFileUrl = `/uploads/${errorFName}`;
+    }
+
+    return res.json({
+      success: importedRows.length > 0,
+      message:
+        importedRows.length > 0
+          ? `${importedRows.length} submission(s) imported successfully.`
+          : "No submissions were imported. All rows had errors or were duplicates.",
+      summary: {
+        total: rows.length,
+        imported: importedRows.length,
+        skipped: skippedRows.length,
+        errors: errorRows.length,
+      },
+      log: importLog,
+      errorFile: errorFileUrl,
+    });
+  } finally {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
+  }
+});
