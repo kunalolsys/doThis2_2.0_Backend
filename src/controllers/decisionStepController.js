@@ -268,15 +268,16 @@ export const submitDecision = handleAsync(async (req, res, next) => {
   if (answer === "no") {
     task.decisionAnswer = "no";
     task.decisionRemark = remark || null;
-    task.status = "Completed";
+    task.notDoneRemark = remark || null;
+    task.status = "Not Done";
     task.completedAt = new Date();
     task.completedBy = userId;
     await task.save();
 
     return res.json({
       success: true,
-      message: "Task completed successfully.",
-      data: { action: "completed" },
+      message: "Task marked Not Done.",
+      data: { action: "Not Done" },
     });
   }
 
