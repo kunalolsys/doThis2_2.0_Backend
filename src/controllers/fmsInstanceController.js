@@ -1144,11 +1144,12 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     status,
     instanceId,
     instanceName,
+    isTerminated,
   } = req.body;
   const userId = req.cookies.userId || req.user?._id;
   const loggedInUser = req.cookies;
 
-  const query = { createdBy: userId,isTerminated: false };
+  const query = { createdBy: userId, isTerminated: false };
 
   // Get role IDs
   const [managerRole, srManagerRole] = await Promise.all([
@@ -1185,6 +1186,15 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     query.createdBy = userId;
   }
   // Build query
+
+  // Filter by isTerminated (if explicitly provided in request body)
+  if (typeof isTerminated !== "undefined") {
+    query.isTerminated =
+      isTerminated === true ||
+      isTerminated === "true" ||
+      isTerminated === 1 ||
+      isTerminated === "1";
+  }
 
   // Search by instanceId OR instanceName
   if (search) {
@@ -1324,11 +1334,11 @@ export const getInstanceTasks = handleAsync(async (req, res) => {
   const tasks = await FmsInstanceTask.find({ fmsInstanceId: req.params.id })
     .populate({
       path: "fmsInstanceId",
-      select: "instanceName status progress",
+      select: "instanceName status progress isTerminated",
     })
     .populate({
       path: "fmsTaskId",
-      select: "taskId assignedBy", // only what you need
+      select: "taskId assignedBy",
       populate: {
         path: "assignedBy",
         select: "name email",
@@ -1347,6 +1357,8 @@ export const getInstanceTasks = handleAsync(async (req, res) => {
       select: "name",
     })
     .sort("taskId");
+
+  // Send the native tasks exactly as they are in the database
   res.json({ success: true, data: tasks });
 });
 

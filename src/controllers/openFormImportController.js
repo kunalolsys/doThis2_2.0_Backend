@@ -708,11 +708,12 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
     }
 
-    if (!rows.length) {
+    if (!rows || !rows.length) {
       fs.unlinkSync(filePath);
       return next(new AppError("File is empty or unreadable", 400));
     }
 
+    // ── 1. MAP FORM FIELDS FOR LOOKUP ────────────────────────────────────
     const labelToField = new Map(
       validFields.map((f) => [f.label.toLowerCase().trim(), f]),
     );
@@ -721,24 +722,88 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
     );
 
     const resolveField = (headerKey) => {
-      const k = headerKey.toLowerCase().trim();
+      if (!headerKey) return null;
+      const k = String(headerKey).toLowerCase().trim();
       return labelToField.get(k) || idToField.get(k) || null;
     };
 
     const sheetHeaders = Object.keys(rows[0] || {});
+
+    // 🛑 STRICT CHECK 1: Protect against Error File re-uploading (row, status, reason, data)
+    const isErrorLogFile =
+      sheetHeaders.includes("row") &&
+      sheetHeaders.includes("status") &&
+      sheetHeaders.includes("reason") &&
+      sheetHeaders.includes("data");
+
+    if (isErrorLogFile) {
+      fs.unlinkSync(filePath);
+      return next(
+        new AppError(
+          "Invalid file! You are trying to upload an Error Log file instead of the import template.",
+          400
+        )
+      );
+    }
+
+    // 🛑 STRICT CHECK 2: At least ONE column in the file must match the Form's fields
+    const matchedFieldsInSheet = sheetHeaders
+      .map((h) => resolveField(h))
+      .filter(Boolean);
+
+    if (matchedFieldsInSheet.length === 0) {
+      fs.unlinkSync(filePath);
+      return next(
+        new AppError(
+          "No valid columns found matching this form. Please download and use the official import template.",
+          400
+        )
+      );
+    }
+
+    // 🛑 STRICT CHECK 3: Check if ALL Required Form Columns are present in Sheet Headers
+    const missingRequiredFields = validFields.filter((field) => {
+      if (!field.isRequired) return false;
+      return !sheetHeaders.some((header) => {
+        const matched = resolveField(header);
+        return matched && String(matched.fieldId) === String(field.fieldId);
+      });
+    });
+
+    if (missingRequiredFields.length > 0) {
+      const missingLabels = missingRequiredFields
+        .map((f) => `"${f.label}"`)
+        .join(", ");
+      fs.unlinkSync(filePath);
+      return next(
+        new AppError(
+          `Import aborted! Required column(s) missing from sheet: ${missingLabels}`,
+          400
+        )
+      );
+    }
+
     const seenInBatch = new Set();
 
+    // ── 2. PROCESS EACH ROW ──────────────────────────────────────────────
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2;
       const rowErrors = [];
       const responsesMap = {};
 
+      let hasAnyValueInRow = false;
+
       for (const header of sheetHeaders) {
         const field = resolveField(header);
         if (!field) continue;
 
-        const { ok, value, reason } = validateField(field, row[header]);
+        const rawVal = row[header];
+        if (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== "") {
+          hasAnyValueInRow = true;
+        }
+
+        const { ok, value, reason } = validateField(field, rawVal);
         if (!ok) {
           rowErrors.push(reason);
         } else if (value !== null) {
@@ -746,14 +811,8 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         }
       }
 
-      for (const field of validFields) {
-        if (!field.isRequired) continue;
-        const headerPresent = sheetHeaders.some(
-          (h) => resolveField(h)?._id == field._id,
-        );
-        if (!headerPresent)
-          rowErrors.push(`"${field.label}" column is missing from the sheet`);
-      }
+      // Skip completely empty rows silently
+      if (!hasAnyValueInRow) continue;
 
       if (rowErrors.length > 0) {
         importLog.push({
@@ -765,7 +824,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         continue;
       }
 
-      // 1. Same CSV/Excel file ke andar Batch Duplicate Check
+      // 🛑 RULE A: Batch Duplicate Check within the same file
       const batchKey = JSON.stringify(responsesMap);
       if (seenInBatch.has(batchKey)) {
         importLog.push({
@@ -778,22 +837,20 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       }
       seenInBatch.add(batchKey);
 
-      // 2. Database Existing Records Check (Taaki pehle se uploaded rows dobara insert na ho)
+      // 🛑 RULE B: Previously Submitted Record Duplicate Check
       const duplicateConditions = [];
 
-      // Email ya Phone dynamic key check (Agar form me ho)
-      if (responsesMap.email) {
-        duplicateConditions.push({
-          "submissionData.email.value": responsesMap.email,
-        });
-      }
-      if (responsesMap.phone) {
-        duplicateConditions.push({
-          "submissionData.phone.value": responsesMap.phone,
-        });
-      }
+      // if (responsesMap.email) {
+      //   duplicateConditions.push({
+      //     "submissionData.email.value": responsesMap.email,
+      //   });
+      // }
+      // if (responsesMap.phone) {
+      //   duplicateConditions.push({
+      //     "submissionData.phone.value": responsesMap.phone,
+      //   });
+      // }
 
-      // Fallback: Agar Email/Phone nahi hain, to Required Fields matching check karein
       if (duplicateConditions.length === 0) {
         const requiredMatch = {};
         const requiredFields = validFields.filter((f) => f.isRequired);
@@ -823,11 +880,11 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
             reason: "Duplicate record — already submitted in a previous import",
             data: JSON.stringify(row),
           });
-          continue; // ⏭️ Re-import aur duplicate FMS launch avoid karne ke liye skip karein
+          continue;
         }
       }
 
-      // 🟢 BUILD ENRICHED SUBMISSION DATA (Matching submitOpenForm structure)
+      // 🟢 BUILD ENRICHED SUBMISSION DATA
       const enrichedSubmissionData = {};
       for (const field of form.fields) {
         enrichedSubmissionData[field.fieldId] = {
@@ -860,7 +917,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
             triggerType: "FORM_SUBMISSION",
             formId: form._id,
             submissionId: submission._id,
-            runtimeContext: enrichedSubmissionData, // MATCHING submitOpenForm runtimeContext
+            runtimeContext: enrichedSubmissionData,
           });
 
           if (newInstance) {
