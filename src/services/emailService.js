@@ -3,59 +3,79 @@ import User from "../models/User.js";
 
 const sendEmail = async ({ to, subject, html }) => {
   try {
-    // ✅ find user from primary or secondary email
+    if (!to) {
+      console.log("❌ No target email provided in arguments.");
+      return null;
+    }
+
+    const cleanTo = String(to).trim().toLowerCase();
+
+    // ✅ FIX: Search for active users only (isDeleted: false or not true)
+    // and match primary OR secondary email (case-insensitive)
     const user = await User.findOne({
-      $or: [{ email: to }],
+      isDeleted: { $ne: true }, // 🛑 Exclude deleted users
+      $or: [
+        { email: { $regex: `^${cleanTo}$`, $options: "i" } },
+        { secondaryEmail: { $regex: `^${cleanTo}$`, $options: "i" } },
+      ],
     }).select("email secondaryEmail mainEmailType isEmailNotificationEnabled");
 
-    // ✅ don't send if notifications disabled
+    console.log("🔍 DB lookup for:", cleanTo, "| Active user found:", !!user);
+
+    // ✅ Respect notification preference
     if (user && user.isEmailNotificationEnabled === false) {
-      console.log(`🚫 Email notification disabled for ${to}`);
+      console.log(`🚫 Email notifications disabled for user: ${cleanTo}`);
       return null;
     }
 
-    // ✅ decide which email to use
-    let sendTo = to;
+    // ✅ Route to secondary email if selected and non-empty
+    let sendTo = cleanTo;
 
     if (user) {
-      sendTo =
-        user.mainEmailType === "secondaryEmail"
-          ? user.secondaryEmail
-          : user.email;
+      const preferredType = String(user.mainEmailType).trim();
+      const hasSecondary =
+        user.secondaryEmail && user.secondaryEmail.trim() !== "";
+
+      if (preferredType === "secondaryEmail" && hasSecondary) {
+        sendTo = user.secondaryEmail.trim();
+        console.log(
+          `📌 Preference is Secondary Email -> Sending to: ${sendTo}`,
+        );
+      } else {
+        sendTo = user.email ? user.email.trim() : cleanTo;
+        console.log(`📌 Preference is Primary Email -> Sending to: ${sendTo}`);
+      }
+    } else {
+      console.log(
+        `⚠️ No active user matched '${cleanTo}'. Sending directly to provided address.`,
+      );
     }
 
-    // ✅ fallback safety
-    if (!sendTo) {
-      console.log("❌ No valid email found");
-      return null;
-    }
-
-    //   const transporter = nodemailer.createTransport({
-    //       service: "gmail",
-    //       auth: {
-    //         user: process.env.SMTP_EMAIL,
-    //         pass: process.env.SMTP_PASS,
-    //       },
-    //     });
+    // ✅ Create Transporter with cPanel TLS settings
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
+      host: process.env.SMTP_HOST || "tms.himaira.com",
+      port: Number(process.env.SMTP_PORT) || 465,
       secure: Number(process.env.SMTP_PORT) === 465,
       auth: {
         user: process.env.SMTP_EMAIL,
         pass: process.env.SMTP_PASS,
       },
+      tls: {
+        rejectUnauthorized: false, // Bypasses cPanel SSL handshake errors
+      },
     });
+
     const mailOptions = {
-      from: `"DoThis2" <${process.env.SMTP_EMAIL}>`,
+      from: `"Himaira TMS" <${process.env.SMTP_EMAIL}>`,
       to: sendTo,
       subject,
       html,
     };
 
     const info = await transporter.sendMail(mailOptions);
-
-    console.log("✅ Email sent:", info.messageId);
+    console.log(
+      `✅ Email sent successfully to ${sendTo} | ID: ${info.messageId}`,
+    );
 
     return info;
   } catch (error) {
