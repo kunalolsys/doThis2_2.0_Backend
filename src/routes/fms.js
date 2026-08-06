@@ -12,7 +12,7 @@ const router = express.Router();
 router.post('/templates', authenticateJWT, fmsTemplateController.createTemplate);
 router.post('/templates-import', authenticateJWT, fmsTemplateController.importFmsTemplates);
 router.post('/templates-list', authenticateJWT, fmsTemplateController.getTemplates);
-router.get('/templates-list-drop',authenticateJWT,  fmsTemplateController.getTemplatesForDropdown);
+router.post('/templates-list-drop',authenticateJWT,  fmsTemplateController.getTemplatesForDropdown);
 router.get('/all-templates',authenticateJWT,  fmsTemplateController.getAllTemplates);
 router.get('/templates-details/:id',authenticateJWT,  fmsTemplateController.getTemplateById);
 router.put('/templates/:id',authenticateJWT,  fmsTemplateController.updateTemplate);

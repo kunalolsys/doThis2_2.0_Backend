@@ -1081,10 +1081,7 @@ export const getAllTasksWithStats = async (req, res) => {
       const allIds = [managerId, ...memberIds];
 
       andConditions.push({
-        $or: [
-          { assignedBy: { $in: allIds } },
-          { assignedTo: { $in: allIds } },
-        ],
+        $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
       });
     } else {
       // 👤 Member
@@ -1188,7 +1185,7 @@ export const getAllTasksWithStats = async (req, res) => {
     }));
 
     const allTasks = [...tasks, ...mappedFmsTasks].sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
     );
 
     // =========================
@@ -3286,6 +3283,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     selectedDoer,
     selectedManager,
     selectedSrManager,
+    taskTypeFilter = "all", // "all" | "dothis" | "fms"
   } = req.body;
 
   const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
@@ -3299,7 +3297,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   const todayEnd = endOfDay(new Date());
 
   // =========================
-  // 1. MODULE ENABLE CHECK (single DB call)
+  // 1. MODULE ENABLE CHECK
   // =========================
   const moduleSettings = await ModuleSetting.find({
     moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
@@ -3310,8 +3308,13 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
     return mod ? mod.isEnabled : true;
   };
 
-  const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
-  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+  const shouldFetchDoThis =
+    isModuleEnabled("DO_THIS2") &&
+    (taskTypeFilter === "all" || taskTypeFilter === "dothis");
+
+  const shouldFetchFms =
+    isModuleEnabled("FMS_ENGINE") &&
+    (taskTypeFilter === "all" || taskTypeFilter === "fms");
 
   // =========================
   // 2. BUILD DO_THIS (TASK) QUERY
@@ -3319,135 +3322,143 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   const query = { isDeleted: { $ne: true } };
   const andConditions = [];
 
-  // Role Access
-  if (role === "admin" || role === "owner" || role === "pc") {
-    if (selectedDoer && selectedDoer !== "all") {
-      andConditions.push({ assignedTo: selectedDoer });
-    }
-    if (selectedManager && selectedManager !== "all") {
+  if (shouldFetchDoThis) {
+    // Role Access
+    if (role === "admin" || role === "owner" || role === "pc") {
+      if (selectedDoer && selectedDoer !== "all") {
+        andConditions.push({ assignedTo: selectedDoer });
+      }
+      if (selectedManager && selectedManager !== "all") {
+        andConditions.push({
+          $or: [
+            { assignedBy: selectedManager },
+            { assignedTo: selectedManager },
+          ],
+        });
+      }
+      if (selectedSrManager && selectedSrManager !== "all") {
+        andConditions.push({
+          $or: [
+            { assignedBy: selectedSrManager },
+            { assignedTo: selectedSrManager },
+          ],
+        });
+      }
+    } else if (role === "sr.manager" || role === "srmanager") {
+      const managers = await User.find({ reportingManager: userId })
+        .select("_id")
+        .lean();
+      const managerIds = managers.map((m) => m._id);
+
+      const members = await User.find({ reportingManager: { $in: managerIds } })
+        .select("_id")
+        .lean();
+      const memberIds = members.map((m) => m._id);
+
+      const allIds = [userId, ...managerIds, ...memberIds];
       andConditions.push({
-        $or: [{ assignedBy: selectedManager }, { assignedTo: selectedManager }],
+        $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
+      });
+
+      if (selectedManager && selectedManager !== "all") {
+        andConditions.push({
+          $or: [
+            { assignedBy: selectedManager },
+            { assignedTo: selectedManager },
+          ],
+        });
+      }
+      if (selectedDoer && selectedDoer !== "all") {
+        andConditions.push({ assignedTo: selectedDoer });
+      }
+    } else if (role === "manager") {
+      const memberUsers = await User.find({ reportingManager: userId })
+        .populate("role", "name")
+        .select("_id role")
+        .lean();
+
+      const memberIds = memberUsers
+        .filter((u) => u.role?.name === "Member")
+        .map((u) => u._id);
+
+      const allIds = [userId, ...memberIds];
+      andConditions.push({
+        $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
+      });
+
+      if (selectedDoer && selectedDoer !== "all") {
+        andConditions.push({ assignedTo: selectedDoer });
+      }
+    } else {
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        andConditions.push({ assignedTo: userId });
+      }
+    }
+
+    // Search
+    if (search) {
+      andConditions.push({
+        $or: [{ title: { $regex: search, $options: "i" } }, { TaskId: search }],
       });
     }
-    if (selectedSrManager && selectedSrManager !== "all") {
+
+    // Stat Filter
+    if (stat === "overdue") {
       andConditions.push({
         $or: [
-          { assignedBy: selectedSrManager },
-          { assignedTo: selectedSrManager },
+          { taskType: "DelegationTask", dueDate: { $lt: todayEnd } },
+          { taskType: "RecurringTask", endDate: { $lt: todayEnd } },
         ],
+        status: { $ne: "Completed" },
       });
     }
-  } else if (role === "sr.manager" || role === "srmanager") {
-    const managers = await User.find({ reportingManager: userId })
-      .select("_id")
-      .lean();
-    const managerIds = managers.map((m) => m._id);
 
-    const members = await User.find({ reportingManager: { $in: managerIds } })
-      .select("_id")
-      .lean();
-    const memberIds = members.map((m) => m._id);
-
-    const allIds = [userId, ...managerIds, ...memberIds];
-    andConditions.push({
-      $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
-    });
-
-    if (selectedManager && selectedManager !== "all") {
-      andConditions.push({
-        $or: [{ assignedBy: selectedManager }, { assignedTo: selectedManager }],
-      });
+    if (stat === "dueToday") {
+      andConditions.push({ dueDate: { $gte: todayStart, $lte: todayEnd } });
     }
-    if (selectedDoer && selectedDoer !== "all") {
-      andConditions.push({ assignedTo: selectedDoer });
+
+    if (stat === "completed") {
+      andConditions.push({ status: "Completed" });
     }
-  } else if (role === "manager") {
-    const memberUsers = await User.find({ reportingManager: userId })
-      .populate("role", "name")
-      .select("_id role")
-      .lean();
 
-    const memberIds = memberUsers
-      .filter((u) => u.role?.name === "Member")
-      .map((u) => u._id);
-
-    const allIds = [userId, ...memberIds];
-    andConditions.push({
-      $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
-    });
-
-    if (selectedDoer && selectedDoer !== "all") {
-      andConditions.push({ assignedTo: selectedDoer });
+    // Tab Filter
+    if (!stat) {
+      if (taskCategory === "today_backlog") {
+        andConditions.push({
+          status: { $in: ["Pending", "Delayed", "Overdue"] },
+          taskType: "DelegationTask",
+          startDate: { $gte: todayStart, $lte: todayEnd },
+        });
+      }
+      if (taskCategory === "upcoming") query.status = "Upcoming";
+      if (taskCategory === "completed") query.status = "Completed";
     }
-  } else {
-    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
-      andConditions.push({ assignedTo: userId });
+
+    // Status Filter
+    if (status && status !== "all") {
+      if (status === "Reopened") {
+        andConditions.push({ isReopen: true });
+      } else {
+        andConditions.push({ status });
+      }
     }
-  }
 
-  // Search
-  if (search) {
-    andConditions.push({
-      $or: [{ title: { $regex: search, $options: "i" } }, { TaskId: search }],
-    });
-  }
-
-  // Stat Filter
-  if (stat === "overdue") {
-    andConditions.push({
-      $or: [
-        { taskType: "DelegationTask", dueDate: { $lt: todayEnd } },
-        { taskType: "RecurringTask", endDate: { $lt: todayEnd } },
-      ],
-      status: { $ne: "Completed" },
-    });
-  }
-
-  if (stat === "dueToday") {
-    andConditions.push({ dueDate: { $gte: todayStart, $lte: todayEnd } });
-  }
-
-  if (stat === "completed") {
-    andConditions.push({ status: "Completed" });
-  }
-
-  // Tab Filter
-  if (!stat) {
-    if (taskCategory === "today_backlog") {
-      andConditions.push({
-        status: { $in: ["Pending", "Delayed", "Overdue"] },
-        taskType: "DelegationTask",
-        startDate: { $gte: todayStart, $lte: todayEnd },
-      });
-    }
-    if (taskCategory === "upcoming") query.status = "Upcoming";
-    if (taskCategory === "completed") query.status = "Completed";
-  }
-
-  // Status Filter
-  if (status && status !== "all") {
-    if (status === "Reopened") {
-      andConditions.push({ isReopen: true });
+    // ⚡ FIX: Push taskType check inside andConditions to prevent root query mutation collisions
+    if (taskType === "RecurringTask") {
+      andConditions.push({ taskType: "__NO_TASKS__" });
+    } else if (taskType) {
+      andConditions.push({ taskType });
     } else {
-      andConditions.push({ status });
+      andConditions.push({ taskType: { $ne: "RecurringTask" } });
     }
-  }
 
-  // Task Type
-  if (taskType === "RecurringTask") {
-    query.taskType = "__NO_TASKS__";
-  } else if (taskType) {
-    query.taskType = taskType;
-  } else {
-    query.taskType = { $ne: "RecurringTask" };
-  }
+    if (assignedBy && mongoose.Types.ObjectId.isValid(assignedBy)) {
+      andConditions.push({ assignedBy });
+    }
 
-  if (assignedBy && mongoose.Types.ObjectId.isValid(assignedBy)) {
-    andConditions.push({ assignedBy });
-  }
-
-  if (andConditions.length > 0) {
-    query.$and = andConditions;
+    if (andConditions.length > 0) {
+      query.$and = andConditions;
+    }
   }
 
   // =========================
@@ -3459,94 +3470,99 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   };
   const fmsAndConditions = [];
 
-  // Role Access
-  if (role === "admin" || role === "owner" || role === "pc") {
-    if (selectedDoer && selectedDoer !== "all") {
-      fmsAndConditions.push({ assignedTo: selectedDoer });
+  if (shouldFetchFms) {
+    // Role Access
+    if (role === "admin" || role === "owner" || role === "pc") {
+      if (selectedDoer && selectedDoer !== "all") {
+        fmsAndConditions.push({ assignedTo: selectedDoer });
+      }
+      if (selectedManager && selectedManager !== "all") {
+        fmsAndConditions.push({
+          $or: [
+            { updatedBy: selectedManager },
+            { assignedTo: selectedManager },
+          ],
+        });
+      }
+      if (selectedSrManager && selectedSrManager !== "all") {
+        fmsAndConditions.push({
+          $or: [
+            { updatedBy: selectedSrManager },
+            { assignedTo: selectedSrManager },
+          ],
+        });
+      }
+    } else if (role === "sr.manager" || role === "srmanager") {
+      const managers = await User.find({ reportingManager: userId })
+        .select("_id")
+        .lean();
+      const managerIds = managers.map((m) => m._id);
+
+      const members = await User.find({ reportingManager: { $in: managerIds } })
+        .select("_id")
+        .lean();
+      const memberIds = members.map((m) => m._id);
+
+      const allIds = [userId, ...managerIds, ...memberIds];
+      fmsAndConditions.push({ assignedTo: { $in: allIds } });
+    } else if (role === "manager") {
+      const members = await User.find({ reportingManager: userId })
+        .select("_id")
+        .lean();
+      const memberIds = members.map((m) => m._id);
+
+      const allIds = [userId, ...memberIds];
+      fmsAndConditions.push({ assignedTo: { $in: allIds } });
+    } else {
+      fmsAndConditions.push({ assignedTo: userId });
     }
-    if (selectedManager && selectedManager !== "all") {
-      fmsAndConditions.push({
-        $or: [{ updatedBy: selectedManager }, { assignedTo: selectedManager }],
-      });
-    }
-    if (selectedSrManager && selectedSrManager !== "all") {
+
+    // Search
+    if (search) {
       fmsAndConditions.push({
         $or: [
-          { updatedBy: selectedSrManager },
-          { assignedTo: selectedSrManager },
+          { description: { $regex: search, $options: "i" } },
+          { taskId: search },
         ],
       });
     }
-  } else if (role === "sr.manager" || role === "srmanager") {
-    const managers = await User.find({ reportingManager: userId })
-      .select("_id")
-      .lean();
-    const managerIds = managers.map((m) => m._id);
 
-    const members = await User.find({ reportingManager: { $in: managerIds } })
-      .select("_id")
-      .lean();
-    const memberIds = members.map((m) => m._id);
+    // Status
+    if (status && status !== "all") {
+      fmsAndConditions.push({ status });
+    }
 
-    const allIds = [userId, ...managerIds, ...memberIds];
-    fmsAndConditions.push({ assignedTo: { $in: allIds } });
-  } else if (role === "manager") {
-    const members = await User.find({ reportingManager: userId })
-      .select("_id")
-      .lean();
-    const memberIds = members.map((m) => m._id);
-
-    const allIds = [userId, ...memberIds];
-    fmsAndConditions.push({ assignedTo: { $in: allIds } });
-  } else {
-    fmsAndConditions.push({ assignedTo: userId });
-  }
-
-  // Search
-  if (search) {
-    fmsAndConditions.push({
-      $or: [
-        { description: { $regex: search, $options: "i" } },
-        { taskId: search },
-      ],
-    });
-  }
-
-  // Status
-  if (status && status !== "all") {
-    fmsAndConditions.push({ status });
-  }
-
-  // Stat Filter (Excluded Stopped & Not Done for consistency)
-  if (stat === "overdue") {
-    fmsAndConditions.push({
-      plannedDueDate: { $lt: todayStart },
-      status: { $nin: ["Completed", "Stopped", "Not Done"] },
-    });
-  }
-
-  if (stat === "dueToday") {
-    fmsAndConditions.push({
-      plannedDueDate: { $gte: todayStart, $lte: todayEnd },
-    });
-  }
-
-  // Tab Filter
-  if (!stat) {
-    if (taskCategory === "today_backlog") {
+    // Stat Filter
+    if (stat === "overdue") {
       fmsAndConditions.push({
-        status: { $in: ["Pending", "Delayed", "Overdue"] },
-        plannedStartDate: { $gte: todayStart, $lte: todayEnd },
+        plannedDueDate: { $lt: todayStart },
+        status: { $nin: ["Completed", "Stopped", "Not Done"] },
       });
     }
-    if (taskCategory === "upcoming")
-      fmsAndConditions.push({ status: "Upcoming" });
-    if (taskCategory === "completed")
-      fmsAndConditions.push({ status: "Completed" });
-  }
 
-  if (fmsAndConditions.length > 0) {
-    fmsQuery.$and = fmsAndConditions;
+    if (stat === "dueToday") {
+      fmsAndConditions.push({
+        plannedDueDate: { $gte: todayStart, $lte: todayEnd },
+      });
+    }
+
+    // Tab Filter
+    if (!stat) {
+      if (taskCategory === "today_backlog") {
+        fmsAndConditions.push({
+          status: { $in: ["Pending", "Delayed", "Overdue"] },
+          plannedStartDate: { $gte: todayStart, $lte: todayEnd },
+        });
+      }
+      if (taskCategory === "upcoming")
+        fmsAndConditions.push({ status: "Upcoming" });
+      if (taskCategory === "completed")
+        fmsAndConditions.push({ status: "Completed" });
+    }
+
+    if (fmsAndConditions.length > 0) {
+      fmsQuery.$and = fmsAndConditions;
+    }
   }
 
   // =========================
@@ -3554,7 +3570,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   // =========================
   const [tasksResult, tasksTotal, fmsTasksResult, fmsTotal] = await Promise.all(
     [
-      isDoThisEnabled
+      shouldFetchDoThis
         ? Task.find(query)
             .populate("assignedTo", "name email department")
             .populate("assignedBy", "name email")
@@ -3564,9 +3580,9 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
             .lean()
         : Promise.resolve([]),
 
-      isDoThisEnabled ? Task.countDocuments(query) : Promise.resolve(0),
+      shouldFetchDoThis ? Task.countDocuments(query) : Promise.resolve(0),
 
-      isFmsEnabled
+      shouldFetchFms
         ? FmsInstanceTask.find(fmsQuery)
             .populate("assignedTo", "name email department assignShift")
             .populate("assignedBy", "name email")
@@ -3576,14 +3592,14 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
             .lean()
         : Promise.resolve([]),
 
-      isFmsEnabled
+      shouldFetchFms
         ? FmsInstanceTask.countDocuments(fmsQuery)
         : Promise.resolve(0),
     ],
   );
 
   const mappedFmsTasks =
-    isFmsEnabled && Array.isArray(fmsTasksResult)
+    shouldFetchFms && Array.isArray(fmsTasksResult)
       ? fmsTasksResult.map((task) => ({
           ...task,
           _id: task._id,
@@ -3604,7 +3620,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
       : [];
 
   const mappedTasks =
-    isDoThisEnabled && Array.isArray(tasksResult)
+    shouldFetchDoThis && Array.isArray(tasksResult)
       ? tasksResult.map((task) => normalizeTask(task))
       : [];
 

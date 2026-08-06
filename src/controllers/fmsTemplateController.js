@@ -217,50 +217,53 @@ export const getTemplates = handleAsync(async (req, res) => {
     search,
     managerId,
     fmsDuration,
-    role,
+    role: bodyRole,
   } = req.body;
+
   const skip = (parseInt(page) - 1) * parseInt(limit);
-  const userId = req.cookies.userId || req.user?._id;
-  const loggedInUser = req.cookies;
+  const userId = req.cookies?.userId || req.user?._id;
+
+  // Extract user role safely from req.body, req.user, or req.cookies
+  const roleInput = bodyRole || req.user?.role || req.cookies?.role;
+  const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
+  const userRole = String(rawRole || "").toLowerCase();
 
   const filter = {
     isDeleted: false,
   };
 
-  // Get role IDs
-  const [managerRole, srManagerRole] = await Promise.all([
-    Role.findOne({ name: "Manager" }).select("_id"),
-    Role.findOne({ name: "Sr. Manager" }).select("_id"),
-  ]);
+  // =========================
+  // 👥 ROLE BASED FILTERING
+  // =========================
+  if (userRole === "admin" || userRole === "pc") {
+    // ✅ ADMIN / PC sees ALL templates across the organization.
+    // No filter.user constraint needed.
+  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+    // Sr. Manager sees templates created by themselves or Managers reporting to them / in manager role
+    const managerRole = await Role.findOne({ name: "Manager" })
+      .select("_id")
+      .lean();
 
-  if (!managerRole || !srManagerRole) {
-    return res.status(400).json({
-      success: false,
-      message: "Required roles not found.",
-    });
-  }
+    if (managerRole) {
+      const managerUsers = await User.find({ role: managerRole._id })
+        .select("_id")
+        .lean();
+      const managerIds = managerUsers.map((u) => u._id);
 
-  if (loggedInUser.role == "Admin") {
-    const users = await User.find({
-      role: {
-        $in: [managerRole._id, srManagerRole._id],
-      },
-    }).select("_id");
-
-    filter.user = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
-  } else if (loggedInUser.role == "Sr. Manager") {
-    const users = await User.find({
-      role: managerRole._id,
-    }).select("_id");
-
-    filter.user = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
+      filter.user = {
+        $in: [userId, ...managerIds],
+      };
+    } else {
+      filter.user = userId;
+    }
   } else {
+    // 👤 Regular Users / Doers only see their own created templates
     filter.user = userId;
   }
+
+  // =========================
+  // 🔍 OPTIONAL FILTERS
+  // =========================
   if (search) {
     filter.templateName = { $regex: search, $options: "i" };
   }
@@ -271,12 +274,16 @@ export const getTemplates = handleAsync(async (req, res) => {
     filter.fmsDuration = fmsDuration;
   }
 
+  // =========================
+  // 🚀 DB EXECUTION
+  // =========================
   const [templates, total] = await Promise.all([
     FmsTemplate.find(filter)
       .populate("manager srManager user", "name email")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit)),
+      .limit(parseInt(limit))
+      .lean(),
     FmsTemplate.countDocuments(filter),
   ]);
 
@@ -287,58 +294,58 @@ export const getTemplates = handleAsync(async (req, res) => {
       total,
       page: parseInt(page),
       limit: parseInt(limit),
-      pages: Math.ceil(total / parseInt(limit)),
+      pages: Math.ceil(total / parseInt(limit)) || 1,
     },
   });
 });
 export const getTemplatesForDropdown = handleAsync(async (req, res) => {
-  const userId = req.cookies.userId || req.user?._id;
-  const loggedInUser = req.cookies;
+  const { role: bodyRole } = req.body || {};
+  const userId = req.cookies?.userId || req.user?._id;
 
+  // Safely extract user role from req.body, req.user, or req.cookies
+  const roleInput = bodyRole || req.user?.role || req.cookies?.role;
+  const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
+  const userRole = String(rawRole || "").toLowerCase();
+
+  // Base filter: Return non-deleted templates (includes drafts where isDeleted is false/null/undefined)
   const filter = {
-    isDeleted: false,
+    isDeleted: { $ne: true },
   };
 
-  // Get role IDs
-  const [managerRole, srManagerRole] = await Promise.all([
-    Role.findOne({ name: "Manager" }).select("_id"),
-    Role.findOne({ name: "Sr. Manager" }).select("_id"),
-  ]);
+  // =========================
+  // 👥 ROLE BASED FILTERING
+  // =========================
+  if (userRole === "admin" || userRole === "pc") {
+    // ✅ ADMIN / PC sees ALL templates across all users (Drafts & Launched)
+    // No filter.user constraint applied!
+  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+    // Sr. Manager sees templates created by themselves or Managers
+    const managerRole = await Role.findOne({ name: "Manager" }).select("_id").lean();
 
-  if (!managerRole || !srManagerRole) {
-    return res.status(400).json({
-      success: false,
-      message: "Required roles not found.",
-    });
-  }
+    if (managerRole) {
+      const managerUsers = await User.find({ role: managerRole._id }).select("_id").lean();
+      const managerIds = managerUsers.map((u) => u._id);
 
-  if (loggedInUser.role == "Admin") {
-    const users = await User.find({
-      role: {
-        $in: [managerRole._id, srManagerRole._id],
-      },
-    }).select("_id");
-
-    filter.user = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
-  } else if (loggedInUser.role == "Sr. Manager") {
-    const users = await User.find({
-      role: managerRole._id,
-    }).select("_id");
-
-    filter.user = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
+      filter.user = {
+        $in: [userId, ...managerIds],
+      };
+    } else {
+      filter.user = userId;
+    }
   } else {
+    // 👤 Regular Users / Doers only see their own created templates
     filter.user = userId;
   }
-  // const filter = { isDeleted: false, user: userId };
+
+  // =========================
+  // 🚀 DB EXECUTION
+  // =========================
   const templates = await FmsTemplate.find(filter)
-    .select("_id templateName fmsId description fmsDuration endDate isLaunched")
+    .select("_id templateName fmsId description fmsDuration endDate isLaunched isDraft status")
     .populate("manager", "name email")
     .populate("srManager", "name email")
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
   res.status(200).json({
     success: true,

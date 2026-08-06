@@ -10,6 +10,7 @@ import AppError from "../utils/AppError.js";
 import fmsDateCalculator from "../utils/fmsDateCalculator.js";
 import User from "../models/User.js";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
+import Role from "../models/Role.js";
 
 const generateSlug = (text) => {
   return text
@@ -65,9 +66,49 @@ export const createOpenForm = handleAsync(async (req, res, next) => {
 
 //**GET ALL FORMS */
 export const getAllOpenForms = handleAsync(async (req, res) => {
-  const { search, isActive } = req.query;
-  const userId = req.cookies.userId || req.user?._id;
-  const query = { isDeleted: false, createdBy: userId };
+  const { search, isActive, role: bodyRole } = req.body;
+
+  // Extract userId and role safely
+  const userId = req.cookies?.userId || req.user?._id;
+  const roleInput = bodyRole || req.user?.role || req.cookies?.role;
+  const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
+  const userRole = String(rawRole || "").toLowerCase();
+
+  // Base Query: Exclude deleted forms
+  const query = { isDeleted: { $ne: true } };
+
+  // =========================
+  // 👥 ROLE BASED ACCESS
+  // =========================
+  if (userRole === "admin" || userRole === "pc") {
+    // ✅ ADMIN / PC sees ALL open forms across all users.
+    // No query.createdBy filter needed.
+  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+    // Sr. Manager sees forms created by themselves or Managers
+    const managerRole = await Role.findOne({ name: "Manager" })
+      .select("_id")
+      .lean();
+
+    if (managerRole) {
+      const managerUsers = await User.find({ role: managerRole._id })
+        .select("_id")
+        .lean();
+      const managerIds = managerUsers.map((u) => u._id);
+
+      query.createdBy = {
+        $in: [userId, ...managerIds],
+      };
+    } else {
+      query.createdBy = userId;
+    }
+  } else {
+    // 👤 Regular Users only see their own created forms
+    query.createdBy = userId;
+  }
+
+  // =========================
+  // 🔍 FILTERS
+  // =========================
 
   // Search by form name
   if (search) {
@@ -79,13 +120,17 @@ export const getAllOpenForms = handleAsync(async (req, res) => {
 
   // Filter active/inactive
   if (isActive !== undefined) {
-    query.isActive = isActive === "true";
+    query.isActive = isActive === true || isActive === "true";
   }
 
+  // =========================
+  // 🚀 DB EXECUTION
+  // =========================
   const forms = await OpenForm.find(query)
     .populate("linkedTemplate", "templateName fmsId")
     .populate("createdBy", "name email")
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
   res.status(200).json({
     success: true,

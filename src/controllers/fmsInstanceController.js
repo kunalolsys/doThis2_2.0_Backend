@@ -1145,47 +1145,51 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     instanceId,
     instanceName,
     isTerminated,
+    role: bodyRole,
   } = req.body;
-  const userId = req.cookies.userId || req.user?._id;
-  const loggedInUser = req.cookies;
 
-  const query = { createdBy: userId, isTerminated: false };
+  const userId = req.cookies?.userId || req.user?._id;
 
-  // Get role IDs
-  const [managerRole, srManagerRole] = await Promise.all([
-    Role.findOne({ name: "Manager" }).select("_id"),
-    Role.findOne({ name: "Sr. Manager" }).select("_id"),
-  ]);
+  // Extract user role safely from req.body, req.user, or req.cookies
+  const roleInput = bodyRole || req.user?.role || req.cookies?.role;
+  const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
+  const userRole = String(rawRole || "").toLowerCase();
 
-  if (!managerRole || !srManagerRole) {
-    return res.status(400).json({
-      success: false,
-      message: "Required roles not found.",
-    });
-  }
+  // Base Query
+  const query = { isTerminated: false };
 
-  if (loggedInUser.role == "Admin") {
-    const users = await User.find({
-      role: {
-        $in: [managerRole._id, srManagerRole._id],
-      },
-    }).select("_id");
+  // =========================
+  // 👥 ROLE BASED ACCESS
+  // =========================
+  if (userRole === "admin" || userRole === "pc") {
+    // ✅ ADMIN / PC sees ALL FMS instances across all users.
+    // No query.createdBy filter needed.
+  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+    // Sr. Manager sees instances created by themselves or Managers
+    const managerRole = await Role.findOne({ name: "Manager" })
+      .select("_id")
+      .lean();
 
-    query.createdBy = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
-  } else if (loggedInUser.role == "Sr. Manager") {
-    const users = await User.find({
-      role: managerRole._id,
-    }).select("_id");
+    if (managerRole) {
+      const managerUsers = await User.find({ role: managerRole._id })
+        .select("_id")
+        .lean();
+      const managerIds = managerUsers.map((u) => u._id);
 
-    query.createdBy = {
-      $in: [loggedInUser.userId, ...users.map((u) => u._id)],
-    };
+      query.createdBy = {
+        $in: [userId, ...managerIds],
+      };
+    } else {
+      query.createdBy = userId;
+    }
   } else {
+    // 👤 Regular Users only see their own created instances
     query.createdBy = userId;
   }
-  // Build query
+
+  // =========================
+  // 🔍 OPTIONAL FILTERS
+  // =========================
 
   // Filter by isTerminated (if explicitly provided in request body)
   if (typeof isTerminated !== "undefined") {
@@ -1214,7 +1218,7 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     query.instanceName = { $regex: instanceName, $options: "i" };
   }
 
-  // Status filter (upcoming, ongoing, completed)
+  // Status filter (upcoming, ongoing, completed, onhold, stopped)
   if (
     status &&
     ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
@@ -1231,25 +1235,30 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     query.status = statusMap[status.toLowerCase()];
   }
 
-  // Pagination
+  // =========================
+  // 🚀 DB EXECUTION
+  // =========================
   const skip = (Number(page) - 1) * Number(limit);
-  const total = await FmsInstance.countDocuments(query);
 
-  const instances = await FmsInstance.find(query)
-    .populate(
-      "fmsTemplateId manager srManager createdBy",
-      "templateName fmsId name email",
-    )
-    .sort({ startDate: -1, createdAt: -1 })
-    .skip(skip)
-    .limit(Number(limit));
+  const [instances, total] = await Promise.all([
+    FmsInstance.find(query)
+      .populate(
+        "fmsTemplateId manager srManager createdBy",
+        "templateName fmsId name email",
+      )
+      .sort({ startDate: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean(),
+    FmsInstance.countDocuments(query),
+  ]);
 
   res.json({
     success: true,
     data: instances,
     pagination: {
       current: Number(page),
-      pages: Math.ceil(total / Number(limit)),
+      pages: Math.ceil(total / Number(limit)) || 1,
       total,
       limit: Number(limit),
     },

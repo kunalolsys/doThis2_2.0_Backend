@@ -15,7 +15,7 @@ import {
 const router = express.Router();
 
 router.post("/", authenticateJWT, createOpenForm);
-router.get("/", authenticateJWT, getAllOpenForms);
+router.post("/get-forms", authenticateJWT, getAllOpenForms);
 router.put("/:id", authenticateJWT, updateOpenForm);
 
 //**PUBLIC API TO VARIFY USER VIA EMPLOYEE CODE */
