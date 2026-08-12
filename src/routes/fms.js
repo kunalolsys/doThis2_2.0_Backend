@@ -29,6 +29,7 @@ router.delete('/templates/:id/tasks/:taskId', authenticateJWT, fmsTaskController
 
 // BRD 002.2 Launch & Runtime
 router.post('/instances/:templateId/launch', authenticateJWT, fmsInstanceController.launchFmsInstance);
+router.post('/assigned-templates', authenticateJWT, fmsInstanceController.getAssignedTaskTemplates);
 router.post('/instances', authenticateJWT, fmsInstanceController.getFmsInstances);
 router.get('/instances-count', authenticateJWT, fmsInstanceController.getFmsInstancesCount);
 router.get('/instances/:id',authenticateJWT,  fmsInstanceController.getFmsInstanceById);

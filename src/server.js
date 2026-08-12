@@ -15,6 +15,7 @@ import { initSocket } from "./socket.js";
 import "../scripts/seedSuperRolesAndUser.js";
 import ModuleSetting from "./models/ModuleSetting.js";
 import "./services/telegram/telegramBOT.js";
+import startAnnualHolidayCron from "./seeders/seedAnnualHolidays.js";
 
 dotenv.config();
 
@@ -56,18 +57,19 @@ mongoose
         const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
         const isDoThisEnabled = isModuleEnabled("DO_THIS2");
 
-        startTaskStatusCron();
-        runDependencyCron();
+        // startTaskStatusCron();
+        // runDependencyCron();
+        startAnnualHolidayCron();
         if (isDoThisEnabled) {
           startCronJobs();
           startVisibilityCron();
         }
-        if (isFmsEnabled) {
-          startFMSProgressCronJobs();
-          startFmsVisibilityCron();
-          startRecurringFmsTaskJob();
-          startFmsUpcomingInstancesCron();
-        }
+        // if (isFmsEnabled) {
+        //   startFMSProgressCronJobs();
+        //   startFmsVisibilityCron();
+        //   startRecurringFmsTaskJob();
+        //   startFmsUpcomingInstancesCron();
+        // }
       } catch (err) {
         console.error("Failed to start crons:", err);
       }

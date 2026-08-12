@@ -1,26 +1,32 @@
-// models/Holiday.js
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
-const holidaySchema = new mongoose.Schema({
-  date: {
-    type: Date,
-    required: true,
-    unique: true
+const holidaySchema = new mongoose.Schema(
+  {
+    date: {
+      type: Date,
+      required: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      default: "",
+    },
+    isGlobal: {
+      type: Boolean,
+      default: true,
+    },
+    applicableDepartments: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Department",
+      },
+    ],
   },
-  name: {
-    type: String,
-    required: true
-  },
-  description: {
-    type: String,
-    default: ''
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+  { timestamps: true },
+);
 
-// Note: `date` has `unique: true` on the field; no separate index declaration needed to avoid duplicates
-
-export const Holiday = mongoose.model('Holiday', holidaySchema);
+export const Holiday = mongoose.model("Holiday", holidaySchema);

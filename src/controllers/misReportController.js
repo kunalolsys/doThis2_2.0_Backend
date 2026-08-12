@@ -16,7 +16,7 @@ export const getMisReport = handleAsync(async (req, res, next) => {
   } = req.body;
 
   // =========================
-  // Normalize Inputs
+  // 1. Normalize Inputs
   // =========================
   if (memberIds === "all" || !Array.isArray(memberIds)) {
     memberIds = [];
@@ -29,7 +29,7 @@ export const getMisReport = handleAsync(async (req, res, next) => {
   const { start, end } = getDateRange(period, startDate, endDate);
 
   // =========================
-  // User Filters
+  // 2. User Filters
   // =========================
   const userIds = new Set(memberIds || []);
 
@@ -45,11 +45,11 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     .filter(Boolean);
 
   // =========================
-  // Base Match
+  // 3. Base Match Condition
   // =========================
   const matchCondition = {
     isDeleted: { $ne: true },
-    taskType: { $ne: "RecurringTask" },
+    taskType: { $ne: "RecurringTask" }, // Only single/delegated instance tasks
     $or: [
       {
         dueDate: {
@@ -79,497 +79,296 @@ export const getMisReport = handleAsync(async (req, res, next) => {
     matchCondition.assignedTo = { $in: userIdArray };
   }
 
-  if (departmentId) {
+  if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
     matchCondition.departmentOfAssignToUser = new mongoose.Types.ObjectId(
       departmentId,
     );
   }
 
-  // =========================
-  // Dashboard Summary
-  // =========================
-  const summary = await Task.aggregate([
-    {
-      $match: matchCondition,
+  const now = new Date();
+
+  // Shared Group Expression for Counts
+  const groupExpression = {
+    totalTasks: { $sum: 1 },
+
+    completed: {
+      $sum: {
+        $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
+      },
     },
 
-    {
-      $group: {
-        _id: null,
+    pending: {
+      $sum: {
+        $cond: [{ $eq: ["$status", "Pending"] }, 1, 0],
+      },
+    },
 
-        totalTasks: { $sum: 1 },
+    upcoming: {
+      $sum: {
+        $cond: [{ $eq: ["$status", "Upcoming"] }, 1, 0],
+      },
+    },
 
-        completed: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
-          },
-        },
-
-        pending: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Pending"] }, 1, 0],
-          },
-        },
-
-        upcoming: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Upcoming"] }, 1, 0],
-          },
-        },
-
-        overdue: {
-          $sum: {
-            $cond: [
+    overdue: {
+      $sum: {
+        $cond: [
+          {
+            $or: [
+              { $eq: ["$status", "Overdue"] },
               {
                 $and: [
                   { $ne: ["$status", "Completed"] },
-                  { $lt: ["$dueDate", new Date()] },
+                  { $ne: ["$dueDate", null] },
+                  { $lt: ["$dueDate", now] },
                 ],
               },
-              1,
-              0,
             ],
           },
-        },
+          1,
+          0,
+        ],
+      },
+    },
 
-        delayed: {
-          $sum: {
-            $cond: [
+    delayed: {
+      $sum: {
+        $cond: [
+          {
+            $or: [
+              { $eq: ["$status", "Delayed"] },
               {
                 $and: [
                   { $eq: ["$status", "Completed"] },
+                  { $ne: ["$completedAt", null] },
+                  { $ne: ["$dueDate", null] },
                   { $gt: ["$completedAt", "$dueDate"] },
                 ],
               },
-              1,
-              0,
             ],
           },
-        },
+          1,
+          0,
+        ],
+      },
+    },
 
-        doneOnTime: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $eq: ["$status", "Completed"] },
-                  { $lte: ["$completedAt", "$dueDate"] },
+    doneOnTime: {
+      $sum: {
+        $cond: [
+          {
+            $and: [
+              { $eq: ["$status", "Completed"] },
+              { $ne: ["$completedAt", null] },
+              { $ne: ["$dueDate", null] },
+              { $lte: ["$completedAt", "$dueDate"] },
+            ],
+          },
+          1,
+          0,
+        ],
+      },
+    },
+  };
+
+  // =========================================================
+  // 4. Combined Aggregation via $facet
+  // =========================================================
+  const aggregationResult = await Task.aggregate([
+    { $match: matchCondition },
+    {
+      $facet: {
+        // SUMMARY BRANCH
+        summary: [{ $group: { _id: null, ...groupExpression } }],
+
+        // USER-WISE REPORTS BRANCH
+        reports: [
+          { $group: { _id: "$assignedTo", ...groupExpression } },
+          {
+            $lookup: {
+              from: "users",
+              localField: "_id",
+              foreignField: "_id",
+              as: "user",
+            },
+          },
+          { $unwind: "$user" },
+          {
+            $lookup: {
+              from: "roles",
+              localField: "user.role",
+              foreignField: "_id",
+              as: "role",
+            },
+          },
+          {
+            $unwind: {
+              path: "$role",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+          {
+            $lookup: {
+              from: "departments",
+              localField: "user.department",
+              foreignField: "_id",
+              as: "departments",
+            },
+          },
+
+          // CALCULATE PERCENTAGE RATES CORRECTLY
+          {
+            $addFields: {
+              completionRate: {
+                $round: [
+                  {
+                    $multiply: [
+                      {
+                        $divide: [
+                          "$completed",
+                          {
+                            $cond: [
+                              { $eq: ["$totalTasks", 0] },
+                              1,
+                              "$totalTasks",
+                            ],
+                          },
+                        ],
+                      },
+                      100,
+                    ],
+                  },
+                  2,
                 ],
               },
-              1,
-              0,
-            ],
+
+              onTimeCompletionRate: {
+                $round: [
+                  {
+                    $multiply: [
+                      {
+                        $divide: [
+                          "$doneOnTime",
+                          {
+                            $cond: [
+                              { $eq: ["$completed", 0] },
+                              1,
+                              "$completed",
+                            ],
+                          },
+                        ],
+                      },
+                      100,
+                    ],
+                  },
+                  2,
+                ],
+              },
+
+              delayedCompletionRate: {
+                $round: [
+                  {
+                    $multiply: [
+                      {
+                        $divide: [
+                          "$delayed",
+                          {
+                            $cond: [
+                              { $eq: ["$completed", 0] },
+                              1,
+                              "$completed",
+                            ],
+                          },
+                        ],
+                      },
+                      100,
+                    ],
+                  },
+                  2,
+                ],
+              },
+
+              overdueRate: {
+                $round: [
+                  {
+                    $multiply: [
+                      {
+                        $divide: [
+                          "$overdue",
+                          {
+                            $cond: [
+                              { $eq: ["$totalTasks", 0] },
+                              1,
+                              "$totalTasks",
+                            ],
+                          },
+                        ],
+                      },
+                      100,
+                    ],
+                  },
+                  2,
+                ],
+              },
+            },
           },
-        },
+
+          // PROJECT CLEAN OUTPUT
+          {
+            $project: {
+              _id: 0,
+              userId: "$user._id",
+              userName: "$user.name",
+              email: "$user.email",
+              role: { $ifNull: ["$role.name", "Unknown"] },
+              departments: "$departments.name",
+
+              totalTasks: 1,
+              completed: 1,
+              pending: 1,
+              upcoming: 1,
+              overdue: 1,
+              delayed: 1,
+              doneOnTime: 1,
+
+              completionRate: 1,
+              onTimeCompletionRate: 1,
+              delayedCompletionRate: 1,
+              overdueRate: 1,
+            },
+          },
+
+          {
+            $sort: {
+              completionRate: -1,
+              doneOnTime: -1,
+              totalTasks: -1,
+            },
+          },
+        ],
       },
     },
   ]);
 
-  // =========================
-  // User Wise MIS Report
-  // =========================
-  const reports = await Task.aggregate([
-    {
-      $match: matchCondition,
-    },
+  const summaryData = aggregationResult[0]?.summary[0] || {
+    totalTasks: 0,
+    completed: 0,
+    pending: 0,
+    upcoming: 0,
+    overdue: 0,
+    delayed: 0,
+    doneOnTime: 0,
+  };
 
-    {
-      $group: {
-        _id: "$assignedTo",
-
-        totalTasks: { $sum: 1 },
-
-        completed: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
-          },
-        },
-
-        pending: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Pending"] }, 1, 0],
-          },
-        },
-
-        upcoming: {
-          $sum: {
-            $cond: [{ $eq: ["$status", "Upcoming"] }, 1, 0],
-          },
-        },
-
-        overdue: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $ne: ["$status", "Completed"] },
-                  { $lt: ["$dueDate", new Date()] },
-                ],
-              },
-              1,
-              0,
-            ],
-          },
-        },
-
-        delayed: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $eq: ["$status", "Completed"] },
-                  { $gt: ["$completedAt", "$dueDate"] },
-                ],
-              },
-              1,
-              0,
-            ],
-          },
-        },
-
-        doneOnTime: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $eq: ["$status", "Completed"] },
-                  { $lte: ["$completedAt", "$dueDate"] },
-                ],
-              },
-              1,
-              0,
-            ],
-          },
-        },
-      },
-    },
-
-    // =========================
-    // User Join
-    // =========================
-    {
-      $lookup: {
-        from: "users",
-        localField: "_id",
-        foreignField: "_id",
-        as: "user",
-      },
-    },
-
-    {
-      $unwind: "$user",
-    },
-
-    // =========================
-    // Role Join
-    // =========================
-    {
-      $lookup: {
-        from: "roles",
-        localField: "user.role",
-        foreignField: "_id",
-        as: "role",
-      },
-    },
-
-    {
-      $unwind: {
-        path: "$role",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-
-    // =========================
-    // Department Join
-    // =========================
-    {
-      $lookup: {
-        from: "departments",
-        localField: "user.department",
-        foreignField: "_id",
-        as: "departments",
-      },
-    },
-
-    // =========================
-    // Calculations
-    // =========================
-    // {
-    //   $addFields: {
-    //     // =========================
-    //     // TOTAL COMPLETION RATE
-    //     // completed / total
-    //     // =========================
-    //     completionRate: {
-    //       $round: [
-    //         {
-    //           $multiply: [
-    //             {
-    //               $divide: [
-    //                 "$completed",
-    //                 {
-    //                   $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
-    //                 },
-    //               ],
-    //             },
-    //             100,
-    //           ],
-    //         },
-    //         2,
-    //       ],
-    //     },
-
-    //     // =========================
-    //     // ON TIME COMPLETION RATE
-    //     // doneOnTime / completed
-    //     // =========================
-    //     onTimeCompletionRate: {
-    //       $round: [
-    //         {
-    //           $multiply: [
-    //             {
-    //               $divide: [
-    //                 "$doneOnTime",
-    //                 {
-    //                   $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
-    //                 },
-    //               ],
-    //             },
-    //             100,
-    //           ],
-    //         },
-    //         2,
-    //       ],
-    //     },
-
-    //     // =========================
-    //     // DELAYED COMPLETION RATE
-    //     // delayed / completed
-    //     // =========================
-    //     delayedCompletionRate: {
-    //       $round: [
-    //         {
-    //           $multiply: [
-    //             {
-    //               $divide: [
-    //                 "$delayed",
-    //                 {
-    //                   $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
-    //                 },
-    //               ],
-    //             },
-    //             100,
-    //           ],
-    //         },
-    //         2,
-    //       ],
-    //     },
-
-    //     // =========================
-    //     // OVERDUE RATE
-    //     // overdue / total
-    //     // =========================
-    //     overdueRate: {
-    //       $round: [
-    //         {
-    //           $multiply: [
-    //             {
-    //               $divide: [
-    //                 "$overdue",
-    //                 {
-    //                   $cond: [{ $eq: ["$totalTasks", 0] }, 1, "$totalTasks"],
-    //                 },
-    //               ],
-    //             },
-    //             100,
-    //           ],
-    //         },
-    //         2,
-    //       ],
-    //     },
-    //   },
-    // },
-    {
-      $addFields: {
-        completionRate: {
-          $round: [
-            {
-              $subtract: [
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        "$completed",
-                        {
-                          $cond: [
-                            { $eq: ["$totalTasks", 0] },
-                            1,
-                            "$totalTasks",
-                          ],
-                        },
-                      ],
-                    },
-                    100,
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
-        },
-
-        onTimeCompletionRate: {
-          $round: [
-            {
-              $subtract: [
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        "$doneOnTime",
-                        {
-                          $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
-                        },
-                      ],
-                    },
-                    100,
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
-        },
-
-        delayedCompletionRate: {
-          $round: [
-            {
-              $subtract: [
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        "$delayed",
-                        {
-                          $cond: [{ $eq: ["$completed", 0] }, 1, "$completed"],
-                        },
-                      ],
-                    },
-                    100,
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
-        },
-
-        overdueRate: {
-          $round: [
-            {
-              $subtract: [
-                {
-                  $multiply: [
-                    {
-                      $divide: [
-                        "$overdue",
-                        {
-                          $cond: [
-                            { $eq: ["$totalTasks", 0] },
-                            1,
-                            "$totalTasks",
-                          ],
-                        },
-                      ],
-                    },
-                    100,
-                  ],
-                },
-                100,
-              ],
-            },
-            2,
-          ],
-        },
-      },
-    },
-    // =========================
-    // Final Response
-    // =========================
-    {
-      $project: {
-        _id: 0,
-
-        userId: "$user._id",
-        userName: "$user.name",
-        email: "$user.email",
-
-        role: {
-          $ifNull: ["$role.name", "Unknown"],
-        },
-
-        departments: "$departments.name",
-
-        totalTasks: 1,
-        completed: 1,
-        pending: 1,
-        upcoming: 1,
-        overdue: 1,
-        delayed: 1,
-        doneOnTime: 1,
-
-        completionRate: 1,
-        onTimeCompletionRate: 1,
-        delayedCompletionRate: 1,
-        overdueRate: 1,
-      },
-    },
-
-    {
-      $sort: {
-        completionRate: -1,
-        doneOnTime: -1,
-        totalTasks: -1,
-      },
-    },
-  ]);
+  const reports = aggregationResult[0]?.reports || [];
 
   // =========================
-  // Top Performers
+  // Top & Low Performers
   // =========================
   const topPerformers = reports.filter((u) => u.completionRate > 0).slice(0, 5);
 
-  // =========================
-  // Bottom Performers
-  // =========================
   const lowPerformers = [...reports]
     .sort((a, b) => b.overdue - a.overdue)
     .slice(0, 5);
-
-  // =========================
-  // Task List
-  // =========================
-  const filteredTasks = await Task.find(matchCondition)
-    .select(
-      `
-      TaskId
-      title
-      status
-      taskType
-      startDate
-      dueDate
-      endDate
-      completedAt
-    `,
-    )
-    .populate("assignedTo", "name email")
-    .populate("createdBy", "name")
-    .populate("departmentOfAssignToUser", "name")
-    .sort({ createdAt: -1 })
-    .lean();
 
   // =========================
   // Response
@@ -592,24 +391,11 @@ export const getMisReport = handleAsync(async (req, res, next) => {
       end: end.toISOString(),
     },
 
-    summary: summary[0] || {
-      totalTasks: 0,
-      completed: 0,
-      pending: 0,
-      upcoming: 0,
-      overdue: 0,
-      delayed: 0,
-      doneOnTime: 0,
-    },
-
+    summary: summaryData,
     topPerformers,
-
     lowPerformers,
 
     count: reports.length,
-
     reports,
-
-    // tasks: filteredTasks,
   });
 });

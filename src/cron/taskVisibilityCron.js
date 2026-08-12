@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import moment from "moment";
+import moment from "moment-timezone";
 import Task from "../models/Task.js";
 import User from "../models/User.js";
 import WorkShift from "../models/WorkShift.js";
@@ -9,7 +9,7 @@ import {
   isHoliday,
   nextWorkingShiftDate,
 } from "../utils/dateCalculator.js";
-import { format, isSameDay, startOfDay } from "date-fns";
+import { format, startOfDay } from "date-fns";
 
 // 🔥 MAIN CRON: Make tasks VISIBLE at shift start
 const makeTasksVisible = async () => {
@@ -20,12 +20,11 @@ const makeTasksVisible = async () => {
   try {
     const now = new Date();
 
-    // Find all users who have shift starting TODAY
+    // Find all active users with shifts and populated department
     const usersWithShifts = await User.find({ isActive: true })
       .populate("assignShift")
+      .populate("department")
       .lean();
-
-    // console.log(`👥 Found ${usersWithShifts.length} active users with shifts`);
 
     let updatedCount = 0;
     let processedUsers = 0;
@@ -33,43 +32,28 @@ const makeTasksVisible = async () => {
     for (const user of usersWithShifts) {
       processedUsers++;
       if (!user.assignShift) {
-        // console.log(`⚠️  User ${user.name} (${user.email}) has no shift - skipping`);
         continue;
       }
 
       const workShift = user.assignShift;
-      const shiftStartToday = snapToShiftTime(now, workShift, true);
+      const deptId = user.department?._id || user.department || null;
 
-      // console.log(`🔍 Processing ${user.name} (${workShift.name}): shiftStart=${shiftStartToday.toLocaleTimeString()}, now=${now.toLocaleTimeString()}`);
+      const shiftStartToday = snapToShiftTime(now, workShift, true);
 
       // Only run if current time >= shift start today
       if (now >= shiftStartToday) {
-        // 🔥 Make user's pending tasks VISIBLE (today's working day)
-        // 🔥 Pre-fetch today's holidays
-        const todayStart = moment().startOf("day").toDate();
-        const isTodayHoliday = await isHoliday(now);
-
-        // 🔥 Check if task.startDate is WITHIN current shift window
-        const shiftStartToday = snapToShiftTime(now, workShift, true);
+        const todayStart = moment(now)
+          .tz("Asia/Kolkata")
+          .startOf("day")
+          .toDate();
         const shiftEndToday = snapToShiftTime(now, workShift, false);
-
-        // 🔥 ADDITIONAL: Per-task workshift day + holiday check
-        // const tasksToCheck = await Task.find({
-        //   assignedTo: user._id,
-        //   isVisible: { $ne: true },
-        //   status: { $in: ['Pending', 'Delayed', 'Overdue',] },
-        //   startDate: {
-        //     $gte: todayStart,
-        //     $lte: shiftEndToday
-        //   }
-        // }).lean();
 
         const tasksToCheck = await Task.find({
           assignedTo: user._id,
           isVisible: { $ne: true },
+          isDeleted: { $ne: true },
           status: { $in: ["Pending", "Delayed", "Overdue", "Upcoming"] },
           $or: [
-            // ✅ Today's tasks (existing logic)
             {
               startDate: {
                 $gte: todayStart,
@@ -81,104 +65,93 @@ const makeTasksVisible = async () => {
             },
           ],
         }).lean();
-        let validTasks = 0;
+
+        let validTaskIds = [];
+
         for (const task of tasksToCheck) {
           // =====================================================
-          // ✅ NORMALIZED DATES
+          // ✅ NORMALIZED DATES (IST BOUNDARY)
           // =====================================================
-          const today = startOfDay(now);
-          const startDay = startOfDay(new Date(task.startDate));
-
-          const dueDay = task.dueDate
-            ? startOfDay(new Date(task.dueDate))
-            : null;
+          const today = moment(now).tz("Asia/Kolkata").startOf("day").toDate();
+          const taskDeptId = task.departmentOfAssignToUser || deptId;
 
           // =====================================================
-          // ✅ TODAY MUST BE VALID WORKING DAY
+          // ✅ TODAY MUST BE VALID WORKING DAY FOR DEPT/USER
           // =====================================================
-          const isTodayHoliday = await isHoliday(today);
+          const isTodayHoliday = await isHoliday(today, user._id);
+          const isTodayWorking = await isWorkingDay(
+            today,
+            workShift._id,
+            taskDeptId || user._id,
+          );
 
-          if (isTodayHoliday || !isWorkingDay(today, workShift)) {
+          if (isTodayHoliday || !isTodayWorking) {
             continue;
           }
 
           // =====================================================
-          // ✅ FIND FIRST VALID WORKING DAY
-          // AFTER TASK START DATE
+          // ✅ FIND FIRST VALID WORKING DAY AFTER TASK START DATE
           // =====================================================
-          const firstVisibleDay = startOfDay(
-            await nextWorkingShiftDate(task.startDate, workShift._id),
+          const nextShiftDate = await nextWorkingShiftDate(
+            task.startDate,
+            workShift._id,
+            {},
+            taskDeptId || user._id,
           );
+          const firstVisibleDay = moment(nextShiftDate)
+            .tz("Asia/Kolkata")
+            .startOf("day")
+            .toDate();
 
           /**
            * =====================================================
            * ✅ MAIN RULE
            * =====================================================
-           *
            * Task should become visible if:
-           *
            * 1. Today >= first valid working day
-           * 2. Today <= due date
-           *
-           * This automatically handles:
-           * - holidays
-           * - weekends
-           * - server downtime
-           * - missed cron executions
-           * - shift-based visibility
-           * - delayed visibility recovery
+           * 2. (Fix) Overdue tasks stay visible even if today > dueDate
            */
-
-          // const withinVisibleWindow =
-          //   today >= firstVisibleDay && (!dueDay || today <= dueDay);
           let withinVisibleWindow = false;
 
           if (task.isDependent) {
             withinVisibleWindow =
-              task.startDate &&
-              now >= new Date(task.startDate) &&
-              (!task.dueDate || now <= new Date(task.dueDate));
+              task.startDate && now >= new Date(task.startDate);
           } else {
-            withinVisibleWindow =
-              today >= firstVisibleDay && (!dueDay || today <= dueDay);
+            withinVisibleWindow = today >= firstVisibleDay;
           }
+
           if (!withinVisibleWindow) {
             continue;
           }
 
-          // =====================================================
-          // ✅ AVOID EXTRA DB WRITES
-          // =====================================================
+          // Avoid processing if already visible
           if (task.isVisible) {
             continue;
           }
 
-          // =====================================================
-          // ✅ MAKE TASK VISIBLE
-          // =====================================================
-          await Task.findByIdAndUpdate(task._id, {
-            isVisible: true,
-            visibleFrom: now,
-            updatedAt: now,
-          });
+          validTaskIds.push(task._id);
+        }
 
-          validTasks++;
+        // =====================================================
+        // ✅ BATCH UPDATE VISIBLE TASKS
+        // =====================================================
+        if (validTaskIds.length > 0) {
+          await Task.updateMany(
+            { _id: { $in: validTaskIds } },
+            {
+              $set: {
+                isVisible: true,
+                visibleFrom: now,
+                updatedAt: now,
+              },
+            },
+          );
 
+          updatedCount += validTaskIds.length;
           console.log(
-            `✅ ${task.TaskId} visible | ${format(today, "dd MMM yyyy")}`,
+            `✅ Made ${validTaskIds.length} task(s) VISIBLE for ${user.name || user._id}`,
           );
         }
-
-        updatedCount += validTasks;
-        // console.log(`✅ Made ${validTasks} tasks VISIBLE for ${user.name} (${workShift.name})`);
-
-        if (isTodayHoliday) {
-          // console.log(`⛔ TODAY IS HOLIDAY - No tasks made visible for ${user.name}`);
-        } else if (validTasks === 0) {
-          // console.log(`ℹ️  No tasks to show for ${user.name}`);
-        }
-      } else {
-        // console.log(`⏳ Shift not started for ${user.name}: ${now.toLocaleTimeString()} < ${shiftStartToday.toLocaleTimeString()}`);
       }
     }
 
@@ -225,8 +198,10 @@ const hideCompletedShiftTasks = async () => {
             startDate: { $gt: now }, // Tomorrow's tasks
           },
           {
-            isVisible: false,
-            updatedAt: now,
+            $set: {
+              isVisible: false,
+              updatedAt: now,
+            },
           },
         );
 
@@ -243,22 +218,13 @@ const hideCompletedShiftTasks = async () => {
   }
 };
 
-// Schedule: Every minute during working hours (more efficient than 00:01)
+// Schedule: Every 10 seconds in Asia/Kolkata timezone
 const startVisibilityCron = () => {
-  // Check every 5 minutes during 9AM-6PM IST
-  // cron.schedule('*/5 9-18 * * 1-5', makeTasksVisible, {
   cron.schedule("*/10 * * * * *", makeTasksVisible, {
-    // cron.schedule("*/3 * * * * *", makeTasksVisible, {
     timezone: "Asia/Kolkata",
   });
 
-  // Hide at night
-  // cron.schedule('0 18 * * *', hideCompletedShiftTasks, {
-  //   timezone: "Asia/Kolkata"
-  // });
-  console.log("👁️  Task Visibility Cron Started");
+  console.log("👁️ Task Visibility Cron Started");
 };
 
 export default startVisibilityCron;
-
-//working

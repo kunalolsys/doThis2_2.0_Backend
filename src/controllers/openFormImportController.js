@@ -21,6 +21,7 @@ import {
 } from "../utils/dateCalculator.js";
 import { addDays } from "date-fns";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
+import axios from "axios";
 
 const RECURRING_FREQUENCIES = ["Daily", "Weekly", "Monthly"];
 
@@ -409,7 +410,7 @@ const FIELD_HINTS = {
 };
 
 // ── Validate Field Values ──────────────────────────────────────────────────
-const validateField = (field, rawValue) => {
+export const validateField = (field, rawValue, masterOptionsMap = {}) => {
   const val =
     rawValue !== undefined && rawValue !== null ? String(rawValue).trim() : "";
 
@@ -421,28 +422,29 @@ const validateField = (field, rawValue) => {
 
   switch (field.fieldType) {
     case "number":
-      if (isNaN(Number(val)))
+      if (isNaN(Number(val))) {
         return { ok: false, reason: `"${field.label}" must be a number` };
+      }
       return { ok: true, value: Number(val) };
 
     case "email":
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
         return { ok: false, reason: `"${field.label}" must be a valid email` };
+      }
       return { ok: true, value: val };
 
     case "date": {
       let parsedDate = null;
 
-      // 1. Handle Excel Serial Numbers (e.g., 45872)
+      // 1. Handle Excel Serial Numbers
       if (
-        typeof val === "number" ||
+        typeof rawValue === "number" ||
         (!isNaN(Number(val)) &&
           !String(val).includes("-") &&
           !String(val).includes("/"))
       ) {
         const excelNum = Number(val);
         if (excelNum > 0 && excelNum < 2958465) {
-          // Valid Excel date range
           const parsedObj = XLSX.SSF.parse_date_code(excelNum);
           if (parsedObj) {
             const { y, m, d } = parsedObj;
@@ -451,21 +453,19 @@ const validateField = (field, rawValue) => {
         }
       }
 
-      // 2. Handle String Date Formats (e.g., "03-08-2026", "03/08/2026", "2026-08-03")
+      // 2. Handle String Date Formats
       if (!parsedDate && typeof val === "string") {
         const cleanVal = val.trim();
 
-        // Check for DD-MM-YYYY or DD/MM/YYYY pattern
         const ddmmyyyyMatch = cleanVal.match(
           /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/,
         );
         if (ddmmyyyyMatch) {
           const day = parseInt(ddmmyyyyMatch[1], 10);
-          const month = parseInt(ddmmyyyyMatch[2], 10) - 1; // 0-indexed month
+          const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
           const year = parseInt(ddmmyyyyMatch[3], 10);
           parsedDate = new Date(Date.UTC(year, month, day));
         } else {
-          // Fallback to standard JS ISO date parsing
           const timestamp = Date.parse(cleanVal);
           if (!isNaN(timestamp)) {
             parsedDate = new Date(timestamp);
@@ -481,7 +481,6 @@ const validateField = (field, rawValue) => {
         };
       }
 
-      // Prevent unrealistic dates (like year 46236 or negative years)
       const fullYear = parsedDate.getUTCFullYear();
       if (fullYear < 1900 || fullYear > 2100) {
         return {
@@ -490,16 +489,16 @@ const validateField = (field, rawValue) => {
         };
       }
 
-      // Return clean ISO Date (YYYY-MM-DD) or Full ISO String
       return { ok: true, value: parsedDate.toISOString().slice(0, 10) };
     }
 
     case "phone":
-      if (!/^[6-9]\d{9}$/.test(val.replace(/\D/g, "")))
+      if (!/^[6-9]\d{9}$/.test(val.replace(/\D/g, ""))) {
         return {
           ok: false,
           reason: `"${field.label}" must be a valid 10-digit phone number`,
         };
+      }
       return { ok: true, value: val };
 
     case "url":
@@ -511,19 +510,54 @@ const validateField = (field, rawValue) => {
       }
 
     case "select":
-    case "radio":
-      if (field.options?.length && !field.options.includes(val))
-        return {
-          ok: false,
-          reason: `"${field.label}" must be one of: ${field.options.join(", ")}`,
-        };
-      return { ok: true, value: val };
+    case "dropdown":
+    case "radio": {
+      let allowedOptions = [];
 
-    case "checkbox":
+      if (field.optionType === "MASTER") {
+        allowedOptions = masterOptionsMap[field.masterSource] || [];
+
+        // Reject if Master List failed to load or is empty
+        if (allowedOptions.length === 0) {
+          return {
+            ok: false,
+            reason: `Cannot validate "${field.label}": Vendor list (${field.masterSource}) could not be retrieved from API.`,
+          };
+        }
+      } else if (Array.isArray(field.options)) {
+        allowedOptions = field.options.filter(
+          (opt) =>
+            opt !== null && opt !== undefined && String(opt).trim() !== "",
+        );
+      }
+
+      // Strict match check against API Vendor List
+      if (allowedOptions.length > 0) {
+        const matchedOption = allowedOptions.find(
+          (opt) => String(opt).toLowerCase().trim() === val.toLowerCase(),
+        );
+
+        if (!matchedOption) {
+          return {
+            ok: false,
+            reason: `Vendor "${val}" does not exist in Vendor Master list. Row rejected.`,
+          };
+        }
+
+        // Return exact casing from master vendor list
+        return { ok: true, value: matchedOption };
+      }
+
+      return { ok: true, value: val };
+    }
+
+    case "checkbox": {
       const lower = val.toLowerCase();
-      if (!["true", "false", "yes", "no", "1", "0"].includes(lower))
+      if (!["true", "false", "yes", "no", "1", "0"].includes(lower)) {
         return { ok: false, reason: `"${field.label}" must be true or false` };
+      }
       return { ok: true, value: ["true", "yes", "1"].includes(lower) };
+    }
 
     case "file":
       return {
@@ -693,6 +727,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
     const validFields = form.fields.filter((f) => f.fieldType !== "file");
     const isCSV = req.file.originalname.toLowerCase().endsWith(".csv");
 
+    // 1. READ FILE
     if (isCSV) {
       rows = await new Promise((resolve, reject) => {
         const acc = [];
@@ -713,7 +748,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       return next(new AppError("File is empty or unreadable", 400));
     }
 
-    // ── 1. MAP FORM FIELDS FOR LOOKUP ────────────────────────────────────
+    // ── 2. HEADER & FIELD MAPPING ──────────────────────────────────────────
     const labelToField = new Map(
       validFields.map((f) => [f.label.toLowerCase().trim(), f]),
     );
@@ -729,7 +764,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
 
     const sheetHeaders = Object.keys(rows[0] || {});
 
-    // 🛑 STRICT CHECK 1: Protect against Error File re-uploading (row, status, reason, data)
+    // Guard Checks
     const isErrorLogFile =
       sheetHeaders.includes("row") &&
       sheetHeaders.includes("status") &&
@@ -740,13 +775,12 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       fs.unlinkSync(filePath);
       return next(
         new AppError(
-          "Invalid file! You are trying to upload an Error Log file instead of the import template.",
-          400
-        )
+          "Invalid file! You are uploading an Error Log file instead of an import template.",
+          400,
+        ),
       );
     }
 
-    // 🛑 STRICT CHECK 2: At least ONE column in the file must match the Form's fields
     const matchedFieldsInSheet = sheetHeaders
       .map((h) => resolveField(h))
       .filter(Boolean);
@@ -755,13 +789,12 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       fs.unlinkSync(filePath);
       return next(
         new AppError(
-          "No valid columns found matching this form. Please download and use the official import template.",
-          400
-        )
+          "No valid columns found matching this form. Please use the official import template.",
+          400,
+        ),
       );
     }
 
-    // 🛑 STRICT CHECK 3: Check if ALL Required Form Columns are present in Sheet Headers
     const missingRequiredFields = validFields.filter((field) => {
       if (!field.isRequired) return false;
       return !sheetHeaders.some((header) => {
@@ -778,20 +811,37 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       return next(
         new AppError(
           `Import aborted! Required column(s) missing from sheet: ${missingLabels}`,
-          400
-        )
+          400,
+        ),
       );
     }
 
-    const seenInBatch = new Set();
+    // ── 3. FETCH DYNAMIC MASTER OPTIONS IN PARALLEL ────────────────────────
+    const masterOptionsMap = {};
+    const masterFields = validFields.filter(
+      (f) => f.optionType === "MASTER" && f.masterSource,
+    );
 
-    // ── 2. PROCESS EACH ROW ──────────────────────────────────────────────
+    await Promise.all(
+      masterFields.map(async (field) => {
+        const source = field.masterSource;
+        if (!masterOptionsMap[source]) {
+          // Call directly without passing user request headers
+          masterOptionsMap[source] = await fetchMasterOptions(source);
+        }
+      }),
+    );
+
+    // ── 4. IN-MEMORY VALIDATION & BATCH PREPARATION ───────────────────────
+    const seenInBatch = new Set();
+    const candidateRows = []; // Valid rows ready for DB checks
+    const requiredFields = validFields.filter((f) => f.isRequired);
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2;
       const rowErrors = [];
       const responsesMap = {};
-
       let hasAnyValueInRow = false;
 
       for (const header of sheetHeaders) {
@@ -799,11 +849,19 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         if (!field) continue;
 
         const rawVal = row[header];
-        if (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== "") {
+        if (
+          rawVal !== undefined &&
+          rawVal !== null &&
+          String(rawVal).trim() !== ""
+        ) {
           hasAnyValueInRow = true;
         }
 
-        const { ok, value, reason } = validateField(field, rawVal);
+        const { ok, value, reason } = validateField(
+          field,
+          rawVal,
+          masterOptionsMap,
+        );
         if (!ok) {
           rowErrors.push(reason);
         } else if (value !== null) {
@@ -811,8 +869,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         }
       }
 
-      // Skip completely empty rows silently
-      if (!hasAnyValueInRow) continue;
+      if (!hasAnyValueInRow) continue; // Skip completely blank lines
 
       if (rowErrors.length > 0) {
         importLog.push({
@@ -824,67 +881,20 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         continue;
       }
 
-      // 🛑 RULE A: Batch Duplicate Check within the same file
+      // Check for duplicates inside the uploaded file itself
       const batchKey = JSON.stringify(responsesMap);
       if (seenInBatch.has(batchKey)) {
         importLog.push({
           row: rowNum,
           status: "skipped",
-          reason: "Duplicate row — same values already imported in this batch",
+          reason: "Duplicate row — same values already present in this batch",
           data: JSON.stringify(row),
         });
         continue;
       }
       seenInBatch.add(batchKey);
 
-      // 🛑 RULE B: Previously Submitted Record Duplicate Check
-      const duplicateConditions = [];
-
-      // if (responsesMap.email) {
-      //   duplicateConditions.push({
-      //     "submissionData.email.value": responsesMap.email,
-      //   });
-      // }
-      // if (responsesMap.phone) {
-      //   duplicateConditions.push({
-      //     "submissionData.phone.value": responsesMap.phone,
-      //   });
-      // }
-
-      if (duplicateConditions.length === 0) {
-        const requiredMatch = {};
-        const requiredFields = validFields.filter((f) => f.isRequired);
-
-        for (const reqField of requiredFields) {
-          if (responsesMap[reqField.fieldId] !== undefined) {
-            requiredMatch[`submissionData.${reqField.fieldId}.value`] =
-              responsesMap[reqField.fieldId];
-          }
-        }
-
-        if (Object.keys(requiredMatch).length > 0) {
-          duplicateConditions.push(requiredMatch);
-        }
-      }
-
-      if (duplicateConditions.length > 0) {
-        const existingSubmission = await FormSubmission.findOne({
-          formId: form._id,
-          $or: duplicateConditions,
-        });
-
-        if (existingSubmission) {
-          importLog.push({
-            row: rowNum,
-            status: "skipped",
-            reason: "Duplicate record — already submitted in a previous import",
-            data: JSON.stringify(row),
-          });
-          continue;
-        }
-      }
-
-      // 🟢 BUILD ENRICHED SUBMISSION DATA
+      // Build Enriched Submission Data Structure
       const enrichedSubmissionData = {};
       for (const field of form.fields) {
         enrichedSubmissionData[field.fieldId] = {
@@ -895,57 +905,140 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         };
       }
 
-      try {
-        // 1. Create FormSubmission
-        const submission = await FormSubmission.create({
-          formId: form._id,
-          submissionData: enrichedSubmissionData,
-          submittedBy: userId,
-          status: "Submitted",
-        });
-
-        let triggeredInstanceId = null;
-
-        // 2. Trigger FMS if requested
-        if (triggerFms && form.linkedTemplate) {
-          const templateId = form.linkedTemplate._id || form.linkedTemplate;
-
-          const newInstance = await launchFmsInstanceInternal({
-            templateId,
-            launchDate: new Date(),
-            createdBy: userId,
-            triggerType: "FORM_SUBMISSION",
-            formId: form._id,
-            submissionId: submission._id,
-            runtimeContext: enrichedSubmissionData,
-          });
-
-          if (newInstance) {
-            triggeredInstanceId = newInstance._id;
-
-            submission.triggeredInstance = newInstance._id;
-            submission.status = "Triggered";
-            await submission.save();
-          }
+      // Construct a DB query matcher for existing record lookup
+      const duplicateMatchQuery = {};
+      for (const reqField of requiredFields) {
+        if (responsesMap[reqField.fieldId] !== undefined) {
+          duplicateMatchQuery[`submissionData.${reqField.fieldId}.value`] =
+            responsesMap[reqField.fieldId];
         }
+      }
 
+      candidateRows.push({
+        rowNum,
+        rawRow: row,
+        responsesMap,
+        enrichedSubmissionData,
+        duplicateMatchQuery,
+      });
+    }
+
+    // ── 5. OPTIMIZED BATCH DUPLICATE CHECK (1 DB QUERY) ───────────────────
+    const existingSet = new Set();
+    const queryConditions = candidateRows
+      .map((c) => c.duplicateMatchQuery)
+      .filter((q) => Object.keys(q).length > 0);
+
+    if (queryConditions.length > 0) {
+      const existingSubmissions = await FormSubmission.find({
+        formId: form._id,
+        $or: queryConditions,
+      })
+        .select("submissionData")
+        .lean();
+
+      for (const existing of existingSubmissions) {
+        const subData = existing.submissionData || {};
+        const key = requiredFields
+          .map((f) => String(subData[f.fieldId]?.value ?? ""))
+          .join("||");
+        existingSet.add(key);
+      }
+    }
+
+    // Filter out existing DB records
+    const rowsToInsert = [];
+    for (const item of candidateRows) {
+      const key = requiredFields
+        .map((f) => String(item.responsesMap[f.fieldId] ?? ""))
+        .join("||");
+
+      if (existingSet.has(key)) {
         importLog.push({
-          row: rowNum,
-          status: "imported",
-          reason: "OK",
-          submissionId: submission._id,
-          triggeredInstanceId,
+          row: item.rowNum,
+          status: "skipped",
+          reason: "Duplicate record — already submitted in a previous import",
+          data: JSON.stringify(item.rawRow),
         });
-      } catch (rowErr) {
-        importLog.push({
-          row: rowNum,
-          status: "error",
-          reason: `DB error: ${rowErr.message}`,
-          data: JSON.stringify(row),
+      } else {
+        rowsToInsert.push(item);
+      }
+    }
+
+    // ── 6. BULK INSERT TO DB (BULK WRITE) ─────────────────────────────────
+    if (rowsToInsert.length > 0) {
+      const docsToCreate = rowsToInsert.map((item) => ({
+        formId: form._id,
+        submissionData: item.enrichedSubmissionData,
+        submittedBy: userId,
+        status: "Submitted",
+      }));
+
+      // Insert all valid documents in a single operation
+      const createdDocs = await FormSubmission.insertMany(docsToCreate, {
+        ordered: false,
+      });
+
+      // ── 7. OPTIONAL FMS TRIGGER (PARALLEL EXECUTION) ────────────────────
+      const templateId = form.linkedTemplate?._id || form.linkedTemplate;
+
+      if (triggerFms && templateId) {
+        await Promise.all(
+          createdDocs.map(async (doc, idx) => {
+            try {
+              const newInstance = await launchFmsInstanceInternal({
+                templateId,
+                launchDate: new Date(),
+                createdBy: userId,
+                triggerType: "FORM_SUBMISSION",
+                formId: form._id,
+                submissionId: doc._id,
+                runtimeContext: doc.submissionData,
+              });
+
+              if (newInstance) {
+                await FormSubmission.updateOne(
+                  { _id: doc._id },
+                  {
+                    $set: {
+                      triggeredInstance: newInstance._id,
+                      status: "Triggered",
+                    },
+                  },
+                );
+              }
+
+              importLog.push({
+                row: rowsToInsert[idx].rowNum,
+                status: "imported",
+                reason: "OK",
+                submissionId: doc._id,
+                triggeredInstanceId: newInstance?._id || null,
+              });
+            } catch (fmsErr) {
+              importLog.push({
+                row: rowsToInsert[idx].rowNum,
+                status: "imported",
+                reason: `Imported, but FMS trigger failed: ${fmsErr.message}`,
+                submissionId: doc._id,
+              });
+            }
+          }),
+        );
+      } else {
+        // Log successful import when FMS trigger is disabled
+        createdDocs.forEach((doc, idx) => {
+          importLog.push({
+            row: rowsToInsert[idx].rowNum,
+            status: "imported",
+            reason: "OK",
+            submissionId: doc._id,
+          });
         });
       }
     }
 
+    // ── 8. BUILD RESPONSE LOGS & CSV SUMMARY ──────────────────────────────
     const importedRows = importLog.filter((l) => l.status === "imported");
     const skippedRows = importLog.filter((l) => l.status === "skipped");
     const errorRows = importLog.filter((l) => l.status === "error");
@@ -984,3 +1077,52 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
     } catch {}
   }
 });
+
+// ── FAST MASTER OPTION FETCHING ───────────────────────────────────────────
+const fetchMasterOptions = async (masterSource) => {
+  if (masterSource === "VENDOR") {
+    // 1. Use the exact working token from your curl command
+    const suvidhaToken =
+      "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjkyNWQzYThhMzQ4NzE0OTkxZTY4NjdmYzY3YjYxNmIyOTQ0ZDE3OGU3YTM0OGQxODcyNTU0NWRiMDVhYzIwZTIzNmZkNGY4YTliMGVlNjJhIn0.eyJhdWQiOiIxIiwianRpIjoiOTI1ZDNhOGEzNDg3MTQ5OTFlNjg2N2ZjNjdiNjE2YjI5NDRkMTc4ZTdhMzQ4ZDE4NzI1NTQ1ZGIwNWFjMjBlMjM2ZmQ0ZjhhOWIwZWU2MmEiLCJpYXQiOjE2ODM4ODc3ODYsIm5iZiI6MTY4Mzg4Nzc4NiwiZXhwIjo3OTk1MjM0OTg2LCJzdWIiOiI0Iiwic2NvcGVzIjpbXX0.TpQxHxAKMHe5jmvCD7Q3bIZjDvH1Ib6l14B3EUIV1sdrqxzS0cP6VBmAwfbY9Reg6eR1Fb555QlaAUZZy_VVf_5qr0j41nq9WNAWTyum4jQuY8qOBwS1W0SRsvnpqEgnOtQxGGbCHpv4EX6DwH9Yi1wWeB1Z45Nr-RvDdl8tip8UZts7bYDq2wpbbpBR8B_OS8R1RuF1UvXR0VEO-ooRgwiXODXO-QCD0uBfXF3J7gIrhcBlYhfQ-dMPFZe5SVHKaOlW7NGiEOulVDJwRemMRp6y5wG-75171Yp6WyCmpT-eFwkm8jjXWzWq__U2FtbG60Y7Gwnjaxl6hok5_P_PhpaAchtZIKqJji1QQ3TWy9wIBACjw-BRY5_i9hWnUAnHLSQ_8a_oo7j3aXhXVLIxVnV9l2wuwSqr-HcgShMCxWeQE3PWjtz5A_npR9m4puhmZJ1QAuOXpluLZfbHch5eKESlxmwijQ7vH0YzlD2Ork131YVvNnPO959faeEoE5r4W2D_wtRLv7JrBqoBDwbAzt_NFYZ8RFjjwUXFdelR-7sRkRCCzjPZ1LwOk2NgBOh_1offoGpdoUyGj76mLaka1m86iaDqJZDJeFuj_vxbp_E0nZYoAQgb3lOLw4GZZRzuE4OI0p6pF7m169Xy5onmBTJplhDP5953RTkElVfXohg";
+
+    try {
+      const response = await axios({
+        method: "get",
+        url: "https://mis.suvidhastores.com/api/load-dtenData",
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9",
+          Authorization: suvidhaToken.trim(), // Ensure no trailing newlines/spaces
+          Origin: "http://localhost:5173",
+          Referer: "http://localhost:5173/",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        },
+        timeout: 15000,
+      });
+
+      const list = Array.isArray(response.data)
+        ? response.data
+        : response.data?.data || [];
+
+      // Extract vendor names safely
+      const vendorNames = list
+        .map((item) => item?.vendor_name || item?.vendorName)
+        .filter((name) => Boolean(name) && String(name).trim() !== "");
+
+      console.log(
+        `✅ [Vendor API Success] Loaded ${vendorNames.length} vendors.`,
+      );
+      return [...new Set(vendorNames)];
+    } catch (err) {
+      console.error("❌ [Vendor API Error Status]:", err?.response?.status);
+      console.error(
+        "❌ [Vendor API Error Data]:",
+        err?.response?.data || err.message,
+      );
+      return [];
+    }
+  }
+
+  return [];
+};

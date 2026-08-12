@@ -1,4 +1,5 @@
 import FmsInstance from "../models/FmsInstance.js";
+import mongoose from 'mongoose'
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import FmsTemplate from "../models/FmsTemplate.js";
 import FmsTask from "../models/FmsTask.js";
@@ -1387,3 +1388,129 @@ const calculateTaskStatus = (startDate, dueDate) => {
   }
   return "Pending";
 };
+//**GET FMS TEMPALTE BY FMS INSTANCE TASKS */
+export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
+  const {
+    userId,
+    role: rawRole,
+    selectedDoer,
+    selectedManager,
+    selectedSrManager,
+  } = req.body;
+
+  const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
+
+  // Base FMS Task Filter matching getRoleBasedTasks
+  const fmsAndConditions = [
+    { isTerminated: { $ne: true } },
+    { status: { $nin: ["Terminated"] } },
+  ];
+
+  // =========================
+  // 1. ROLE-BASED ACCESS MATCHING
+  // =========================
+  if (role === "admin" || role === "owner" || role === "pc") {
+    if (selectedDoer && selectedDoer !== "all") {
+      fmsAndConditions.push({ assignedTo: new mongoose.Types.ObjectId(selectedDoer) });
+    }
+    if (selectedManager && selectedManager !== "all") {
+      const managerObjId = new mongoose.Types.ObjectId(selectedManager);
+      fmsAndConditions.push({
+        $or: [
+          { updatedBy: managerObjId },
+          { assignedTo: managerObjId },
+        ],
+      });
+    }
+    if (selectedSrManager && selectedSrManager !== "all") {
+      const srManagerObjId = new mongoose.Types.ObjectId(selectedSrManager);
+      fmsAndConditions.push({
+        $or: [
+          { updatedBy: srManagerObjId },
+          { assignedTo: srManagerObjId },
+        ],
+      });
+    }
+  } else if (role === "sr.manager" || role === "srmanager") {
+    const managers = await User.find({ reportingManager: userId })
+      .select("_id")
+      .lean();
+    const managerIds = managers.map((m) => m._id);
+
+    const members = await User.find({ reportingManager: { $in: managerIds } })
+      .select("_id")
+      .lean();
+    const memberIds = members.map((m) => m._id);
+
+    const allIds = [userId, ...managerIds, ...memberIds].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    fmsAndConditions.push({ assignedTo: { $in: allIds } });
+  } else if (role === "manager") {
+    const members = await User.find({ reportingManager: userId })
+      .select("_id")
+      .lean();
+    const memberIds = members.map((m) => m._id);
+
+    const allIds = [userId, ...memberIds].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    fmsAndConditions.push({ assignedTo: { $in: allIds } });
+  } else {
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      fmsAndConditions.push({
+        assignedTo: new mongoose.Types.ObjectId(userId),
+      });
+    }
+  }
+
+  // =========================
+  // 2. AGGREGATION PIPELINE
+  // =========================
+  const templates = await FmsInstanceTask.aggregate([
+    // Match only tasks visible to this user/role
+    { $match: { $and: fmsAndConditions } },
+
+    // Lookup FmsInstance
+    {
+      $lookup: {
+        from: "fmsinstances",
+        localField: "fmsInstanceId",
+        foreignField: "_id",
+        as: "instance",
+      },
+    },
+    { $unwind: "$instance" },
+
+    // Lookup FmsTemplate
+    {
+      $lookup: {
+        from: "fmstemplates",
+        localField: "instance.fmsTemplateId",
+        foreignField: "_id",
+        as: "template",
+      },
+    },
+    { $unwind: "$template" },
+
+    // Filter out deleted templates
+    { $match: { "template.isDeleted": false } },
+
+    // Group to return unique templates only
+    {
+      $group: {
+        _id: "$template._id",
+        fmsId: { $first: "$template.fmsId" },
+        templateName: { $first: "$template.templateName" },
+      },
+    },
+
+    // Sort alphabetically by template name
+    { $sort: { templateName: 1 } },
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: templates,
+  });
+});

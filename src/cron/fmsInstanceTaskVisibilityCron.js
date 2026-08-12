@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import moment from "moment";
+import moment from "moment-timezone";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import User from "../models/User.js";
 import WorkShift from "../models/WorkShift.js";
@@ -19,7 +19,7 @@ const makeFmsTasksVisible = async () => {
 
   try {
     const now = new Date();
-    const todayStart = moment().startOf("day").toDate();
+    const todayStart = moment().tz("Asia/Kolkata").startOf("day").toDate();
 
     // Get active users with shifts
     const usersWithShifts = await User.find({ isActive: true })
@@ -60,9 +60,16 @@ const makeFmsTasksVisible = async () => {
         let validTasks = 0;
         for (const task of fmsTasksToCheck) {
           const taskDate = startOfDay(new Date(task.plannedStartDate));
-          const isTaskHoliday = await isHoliday(taskDate);
 
-          if (!isTaskHoliday && isWorkingDay(taskDate, workShift)) {
+          // Pass user context for department holidays & schedule checks + await isWorkingDay
+          const isTaskHoliday = await isHoliday(taskDate, user._id);
+          const isTaskWorkingDay = await isWorkingDay(
+            taskDate,
+            workShift,
+            user._id,
+          );
+
+          if (!isTaskHoliday && isTaskWorkingDay) {
             await FmsInstanceTask.findByIdAndUpdate(task._id, {
               isVisible: true,
               updatedAt: now,
@@ -133,16 +140,9 @@ const hideFmsCompletedShiftTasks = async () => {
 };
 
 const startFmsVisibilityCron = () => {
-  // Same schedule as main cron
-  // cron.schedule('*/5 9-18 * * 1-5', makeFmsTasksVisible, {
   cron.schedule("*/10 * * * * *", makeFmsTasksVisible, {
     timezone: "Asia/Kolkata",
   });
-
-  //   // Hide at night
-  //   cron.schedule('0 18 * * *', hideFmsCompletedShiftTasks, {
-  //     timezone: "Asia/Kolkata"
-  //   });
 
   console.log("👁️  FMS Instance Task Visibility Cron Started ✅");
 };

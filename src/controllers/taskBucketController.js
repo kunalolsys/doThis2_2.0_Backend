@@ -756,11 +756,21 @@ export const distributeTaskBucket = async (req, res) => {
       const workShift = assignedUser.assignShift;
 
       // ============================
-      // 1. START DATE (WORKSHIFT SAFE)
+      // 1. START DATE (WORKSHIFT & DEPT SAFE)
       // ============================
       let effectiveStartDate = bucket.startDate
-        ? await nextWorkingShiftDate(bucket.startDate, workShift._id)
-        : await nextWorkingShiftDate(new Date(), workShift._id);
+        ? await nextWorkingShiftDate(
+            bucket.startDate,
+            workShift._id,
+            {},
+            assignedUser._id,
+          )
+        : await nextWorkingShiftDate(
+            new Date(),
+            workShift._id,
+            {},
+            assignedUser._id,
+          );
 
       // ============================
       // 2. DUE DATE (TASK END DAYS LOGIC)
@@ -772,6 +782,9 @@ export const distributeTaskBucket = async (req, res) => {
           effectiveStartDate,
           bucket.taskEndDays,
           workShift._id,
+          false,
+          {},
+          assignedUser._id,
         );
       }
 
@@ -785,8 +798,6 @@ export const distributeTaskBucket = async (req, res) => {
         description: bucket.description,
 
         assignedTo: assignedUser._id,
-        // finalAssignedTo: assignedUser._id,
-        // currentHolder: assignedUser._id,
 
         assignedBy: userId,
         createdBy: userId,
@@ -795,7 +806,7 @@ export const distributeTaskBucket = async (req, res) => {
         departmentOfAssignToUser: assignedUser?.department?.[0] || null,
 
         startDate: effectiveStartDate,
-        dueDate: effectiveDueDate, // 🔥 IMPORTANT FIX
+        dueDate: effectiveDueDate,
 
         taskEndDays: bucket.taskEndDays,
 
@@ -804,8 +815,6 @@ export const distributeTaskBucket = async (req, res) => {
         isDependent: bucket.isDependent,
         dependencyConfig: bucket.dependencyConfig,
 
-        // delegationFlowEnabled: true,
-        // distributionStatus: "Assigned",
         status: "Pending",
       };
 
@@ -847,13 +856,15 @@ export const distributeTaskBucket = async (req, res) => {
 
       const io = getIO();
 
-      io.to(String(assignedUser._id)).emit("notification", {
-        type: "TASK_ASSIGNED",
-        title: "New Task Assigned",
-        description: `You received a new task "${task.title}"`,
-        taskId: task._id,
-        TaskId: task.TaskId,
-      });
+      if (io) {
+        io.to(String(assignedUser._id)).emit("notification", {
+          type: "TASK_ASSIGNED",
+          title: "New Task Assigned",
+          description: `You received a new task "${task.title}"`,
+          taskId: task._id,
+          TaskId: task.TaskId,
+        });
+      }
 
       // =====================================================
       // DATABASE NOTIFICATION
@@ -875,7 +886,7 @@ export const distributeTaskBucket = async (req, res) => {
       });
 
       // =====================================================
-      // EMAIL
+      // EMAIL & TELEGRAM (NON-BLOCKING SAFE)
       // =====================================================
 
       if (assignedUser?.email) {
@@ -903,16 +914,19 @@ export const distributeTaskBucket = async (req, res) => {
           to: assignedUser.email,
           subject: emailTemplate.subject,
           html: emailTemplate.html,
-        });
+        }).catch((e) => console.error("Email Error:", e.message));
       }
+
       sendNotification({
         type: "TASK_ASSIGNED",
         task: task,
         actor: req.user,
         userId: assignedUser._id,
-      });
+      }).catch((e) => console.error("Telegram Error:", e.message));
+
       createdTasks.push(task._id);
     }
+
     // =====================================================
     // UPDATE GENERATED TASKS
     // =====================================================
@@ -931,7 +945,7 @@ export const distributeTaskBucket = async (req, res) => {
     const reportingUserIds = reportingUsers.map((u) => String(u._id));
 
     // users who received this bucket task
-    const distributedTasks = await Task.find({
+    const distributedTasks = await DelegationTask.find({
       bucketId: bucket._id,
       assignedTo: { $in: reportingUserIds },
     }).select("assignedTo");
@@ -1237,12 +1251,12 @@ export const completeTaskBucket = async (req, res) => {
         html: emailTemplate.html,
       });
     }
-      sendNotification({
-        type: "BUCKET_COMPLETED",
-        task: bucket,
-        actor: completedUser,
-        userId:bucket.createdBy._id
-      });
+    sendNotification({
+      type: "BUCKET_COMPLETED",
+      task: bucket,
+      actor: completedUser,
+      userId: bucket.createdBy._id,
+    });
 
     // =====================================================
     // RESPONSE

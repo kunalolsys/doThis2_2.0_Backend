@@ -7,6 +7,16 @@ const departmentSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // Custom department working days schedule
+    workingWeekDays: {
+      monday: { type: Boolean, default: true },
+      tuesday: { type: Boolean, default: true },
+      wednesday: { type: Boolean, default: true },
+      thursday: { type: Boolean, default: true },
+      friday: { type: Boolean, default: true },
+      saturday: { type: Boolean, default: false },
+      sunday: { type: Boolean, default: false },
+    },
     isDeleted: {
       type: Boolean,
       default: false,
@@ -20,12 +30,10 @@ const departmentSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Add Partial index for "name" where isDeleted is false
 departmentSchema.index(
   { name: 1 },
   { unique: true, partialFilterExpression: { isDeleted: false } },
 );
 
 const Department = mongoose.model("Department", departmentSchema);
-
 export default Department;

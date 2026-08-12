@@ -37,10 +37,10 @@ async function ensureDefaultModules() {
 
   console.log("Default module settings ensured.");
 }
+
 async function ensureDefaultWorkingWeek() {
-  let workingWeek = await WorkingWeek.findOne({
-    isDefault: true,
-  });
+  // Fixed: Find the single working week configuration matching the new schema
+  let workingWeek = await WorkingWeek.findOne();
 
   if (!workingWeek) {
     workingWeek = await WorkingWeek.create({
@@ -53,7 +53,6 @@ async function ensureDefaultWorkingWeek() {
         saturday: true,
         sunday: false,
       },
-      isDefault: true,
     });
 
     console.log("Default working week created.");
@@ -61,6 +60,7 @@ async function ensureDefaultWorkingWeek() {
 
   return workingWeek;
 }
+
 async function ensureOpenDepartment() {
   let department = await Department.findOne({
     name: "Open Department",
@@ -68,8 +68,18 @@ async function ensureOpenDepartment() {
   });
 
   if (!department) {
+    // Fixed: Initialise workingWeekDays property matching the updated Department schema
     department = await Department.create({
       name: "Open Department",
+      workingWeekDays: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: false,
+      },
     });
 
     console.log("Open Department created.");
@@ -77,6 +87,7 @@ async function ensureOpenDepartment() {
 
   return department;
 }
+
 async function ensureRole({ name, permissions }) {
   const role = await Role.findOne({ name });
   if (!role) {
@@ -94,6 +105,7 @@ async function ensureRole({ name, permissions }) {
   await role.save();
   return role;
 }
+
 async function ensureDefaultShift() {
   let shift = await WorkShift.findOne({
     name: "General Shift",
@@ -121,6 +133,7 @@ async function ensureDefaultShift() {
 
   return shift;
 }
+
 async function ensureUser({
   employeeCode,
   name,
@@ -164,20 +177,24 @@ async function ensureUser({
   console.log(`${name} created.`);
   return user;
 }
+
 async function main() {
   const MONGODB_URI =
     process.env.MONGODB_URI ||
     process.env.MONGO_URI ||
     "mongodb://localhost:27017/dothis2";
 
-  await mongoose.connect(MONGODB_URI);
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(MONGODB_URI);
+  }
+
   // Ensure fixed roles exist (your Role model has initializeFixedRoles)
   if (typeof Role.initializeFixedRoles === "function") {
     await Role.initializeFixedRoles();
   }
 
   await ensureDefaultModules();
-  // 1) Create SUPER role (single role that contains all permissions)
+
   const allPermissions = [
     "Setup",
     "Reports",
@@ -219,29 +236,11 @@ async function main() {
     permissions: mgSmgPermissions,
   });
 
-  // 2) Create/update super user
-  const SUPERUSER_EMAIL = process.env.SUPERUSER_EMAIL || "super@gmail.com";
-  const SUPERUSER_PASSWORD = process.env.SUPERUSER_PASSWORD || "Super@123";
-
-  const SUPERUSER_PHONE = process.env.SUPERUSER_PHONE || "9999999999";
-  const SUPERUSER_NAME = process.env.SUPERUSER_NAME || "Super User";
-
-  // Your User schema requires assignShift (WorkShift id).
-  // For simplicity, pick the first WorkShift record if env is not provided.
-  // let assignShift = process.env.SUPERUSER_ASSIGNSHIFT_ID;
   const defaultShift = await ensureDefaultShift();
   const openDepartment = await ensureOpenDepartment();
   await ensureDefaultWorkingWeek();
   let assignShift = defaultShift._id.toString();
   const departmentIds = [openDepartment._id];
-  // if (!assignShift) {
-  //   const firstShift = await WorkShift.findOne({});
-  //   if (!firstShift)
-  //     throw new Error(
-  //       "No WorkShift records found in DB to set SUPER user assignShift",
-  //     );
-  //   assignShift = firstShift._id.toString();
-  // }
 
   await ensureUser({
     employeeCode: "SUPER001",
@@ -286,7 +285,6 @@ async function main() {
     departmentIds,
   });
 
-  // 3) Ensure ModuleSetting rows exist for known module keys
   const defaultModules = ["DO_THIS2", "FMS_ENGINE", "COMPANY_SETUP"];
 
   for (const moduleKey of defaultModules) {
@@ -297,7 +295,6 @@ async function main() {
     );
   }
 
-  // await mongoose.disconnect();
   console.log("Seed complete.");
 }
 

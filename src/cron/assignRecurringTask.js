@@ -89,7 +89,7 @@ const isTaskDueToday = (task) => {
   }
 };
 
-// Main Job - WORKSHIFT AWARE
+// Main Job - WORKSHIFT & DEPARTMENT AWARE
 export const generateRecurringTasks = async (recurringTaskId = null) => {
   console.log("recurringTaskId:", recurringTaskId);
   console.log("⏳ Cron: WorkShift-Aware Recurring Tasks Started...");
@@ -148,9 +148,12 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
         const baseTodayDate = nowIST.clone().startOf("day").toDate();
 
+        // Pass assignedTo ID so department resolution works
         let todayShiftStart = await nextWorkingShiftDate(
           baseTodayDate,
           workShift._id,
+          {},
+          task.assignedTo,
         );
 
         // FORCE FIX: Align back to todayStr
@@ -182,8 +185,18 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
           }
         }
 
-        const isTodayHoliday = await isHoliday(todayShiftStart);
-        if (isTodayHoliday || !isWorkingDay(todayShiftStart, workShift)) {
+        // Pass user context and await isWorkingDay
+        const isTodayHoliday = await isHoliday(
+          todayShiftStart,
+          task.assignedTo,
+        );
+        const isTodayWorking = await isWorkingDay(
+          todayShiftStart,
+          workShift,
+          task.assignedTo,
+        );
+
+        if (isTodayHoliday || !isTodayWorking) {
           console.log(
             `⏭️ Skip ${task.TaskId}: Non-working day/holiday (${format(
               todayShiftStart,
@@ -196,10 +209,13 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         let shiftDueEnd;
 
         if (task.taskEndDays) {
+          // Pass user context for department working schedule and holiday checks
           shiftDueEnd = await addWorkingDays(
             todayShiftStart,
             task.taskEndDays,
             workShift._id,
+            {},
+            task.assignedTo,
           );
         } else if (task.endDate) {
           shiftDueEnd = new Date(todayShiftStart);
@@ -299,7 +315,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
           )} to ${format(shiftDueEnd, "yyyy-MM-dd HH:mm")}`,
         );
       } catch (singleTaskError) {
-        // Kisi single task me eror aane par agla task process hoga
+        // Kisi single task me error aane par agla task process hoga
         console.error(
           `❌ Error processing task ${task?.TaskId || task?._id}:`,
           singleTaskError,
@@ -316,7 +332,7 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 };
 
 const startCronJobs = () => {
-// 2. Subah 09:00 AM IST Backup / Sync Schedule (Optional)
+  // Subah 09:00 AM IST Backup / Sync Schedule (Optional)
   cron.schedule(
     "0 9 * * *",
     () => {
@@ -328,7 +344,7 @@ const startCronJobs = () => {
     },
   );
 
-  console.log("🔄 Recurring Cron scheduled: Daily 00:01 AM & 09:00 AM IST");
+  console.log("🔄 Recurring Cron scheduled: Daily 09:00 AM IST");
 };
 
 export default startCronJobs;
