@@ -32,9 +32,12 @@ const isTaskDueToday = (task) => {
     case "Daily":
       return true;
 
-    case "Weekly":
+    case "Weekly": {
       const currentDayName = today.format("dddd").toLowerCase();
-      return task.weekDays.includes(currentDayName);
+      return (
+        Array.isArray(task.weekDays) && task.weekDays.includes(currentDayName)
+      );
+    }
 
     case "Bi-weekly": {
       if (!task.weekStartDay) return false;
@@ -60,20 +63,23 @@ const isTaskDueToday = (task) => {
       return todayDay === startDay || todayDay === secondDay;
     }
 
-    case "Fortnightly":
+    case "Fortnightly": {
       const daysDiff = today.diff(start, "days");
       return daysDiff % 14 === 0;
+    }
 
     case "Monthly":
       return today.date() === start.date();
 
-    case "Quarterly":
+    case "Quarterly": {
       const qDiff = today.diff(start, "months");
       return qDiff % 3 === 0 && today.date() === start.date();
+    }
 
-    case "Half Yearly":
+    case "Half Yearly": {
       const hDiff = today.diff(start, "months");
       return hDiff % 6 === 0 && today.date() === start.date();
+    }
 
     case "Yearly":
       return today.month() === start.month() && today.date() === start.date();
@@ -85,8 +91,8 @@ const isTaskDueToday = (task) => {
 
 // Main Job - WORKSHIFT AWARE
 export const generateRecurringTasks = async (recurringTaskId = null) => {
-  console.log("recurringTaskId", recurringTaskId);
-  console.log("⏳ Cron: WorkShift-Aware Recurring Tasks...");
+  console.log("recurringTaskId:", recurringTaskId);
+  console.log("⏳ Cron: WorkShift-Aware Recurring Tasks Started...");
 
   try {
     // 1. Get exact current time in IST
@@ -98,185 +104,231 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
       query._id = recurringTaskId;
     }
 
-    const recurringTasks = await RecurringTask.find(query);
+    const recurringTasks = await RecurringTask.find(query).lean();
     let createdCount = 0;
 
     for (const task of recurringTasks) {
-      if (!isTaskDueToday(task)) continue;
+      // 🔒 ISOLATION: Har task ke liye alag try...catch lagaya hai
+      // taaki ek task ke fail hone se baaki ke tasks na ruken.
+      try {
+        if (!isTaskDueToday(task)) continue;
 
-      // CHECK USER WORKSHIFT FOR TODAY
-      const assignedUser = await User.findById(task.assignedTo).populate(
-        "assignShift",
-      );
-      if (!assignedUser?.assignShift) {
-        console.log(`⚠️ Skipping ${task.TaskId}: No workshift`);
-        continue;
-      }
-
-      const workShift = assignedUser.assignShift;
-
-      // Generate unique instance key
-      const instanceKey = `${task._id}_${todayStr}`;
-
-      // Prevent duplicate
-      const alreadyExists = await DelegationTask.findOne({ instanceKey });
-      if (alreadyExists) {
-        console.log(
-          `⏭️ Skip duplicate/deleted instance: ${task.TaskId} [Key: ${instanceKey}]`,
-        );
-        continue;
-      }
-
-      // 🔥 FIX: Pass today's 00:00:00 IST date to date calculator rather than exact execution time (e.g. 01:00 AM)
-      const baseTodayDate = nowIST.clone().startOf("day").toDate();
-
-      let todayShiftStart = await nextWorkingShiftDate(
-        baseTodayDate,
-        workShift._id,
-      );
-
-      // 🔥 FORCE FIX: If shift calculation pushes it to previous day due to UTC shift offsets, align back to todayStr
-      const calculatedStartStr = moment(todayShiftStart)
-        .tz("Asia/Kolkata")
-        .format("YYYY-MM-DD");
-      if (calculatedStartStr !== todayStr) {
-        // Parse time component from calculated shift start and force target date to todayStr
-        const timePart = moment(todayShiftStart)
-          .tz("Asia/Kolkata")
-          .format("HH:mm:ss");
-        todayShiftStart = moment
-          .tz(`${todayStr} ${timePart}`, "YYYY-MM-DD HH:mm:ss", "Asia/Kolkata")
-          .toDate();
-      }
-
-      if (task.endDate) {
-        const endDate = moment(task.endDate)
-          .tz("Asia/Kolkata")
-          .endOf("day")
-          .toDate();
-        if (todayShiftStart > endDate) {
-          console.log(`⏭️ Skip ${task.TaskId}: shifted beyond endDate`);
+        if (!task.assignedTo) {
+          console.log(`⚠️ Skipping ${task.TaskId}: No assignedTo user ID`);
           continue;
         }
-      }
 
-      const isTodayHoliday = await isHoliday(todayShiftStart);
-      if (isTodayHoliday || !isWorkingDay(todayShiftStart, workShift)) {
-        console.log(
-          `⏭️ Skip ${task.TaskId}: Non-working day/holiday (${format(todayShiftStart, "dd-MM-yyyy")})`,
-        );
-        continue;
-      }
+        // CHECK USER WORKSHIFT FOR TODAY
+        const assignedUser = await User.findById(task.assignedTo)
+          .populate("assignShift")
+          .lean();
 
-      let shiftDueEnd;
+        if (!assignedUser?.assignShift) {
+          console.log(
+            `⚠️ Skipping ${task.TaskId}: No workshift for user ${task.assignedTo}`,
+          );
+          continue;
+        }
 
-      if (task.taskEndDays) {
-        shiftDueEnd = await addWorkingDays(
-          todayShiftStart,
-          task.taskEndDays,
+        const workShift = assignedUser.assignShift;
+
+        // Generate unique instance key
+        const instanceKey = `${task._id}_${todayStr}`;
+
+        // Prevent duplicate
+        const alreadyExists = await DelegationTask.findOne({
+          instanceKey,
+        }).lean();
+        if (alreadyExists) {
+          console.log(
+            `⏭️ Skip duplicate/deleted instance: ${task.TaskId} [Key: ${instanceKey}]`,
+          );
+          continue;
+        }
+
+        const baseTodayDate = nowIST.clone().startOf("day").toDate();
+
+        let todayShiftStart = await nextWorkingShiftDate(
+          baseTodayDate,
           workShift._id,
         );
-      } else if (task.endDate) {
-        shiftDueEnd = new Date(todayShiftStart);
-        const recurringEnd = new Date(task.endDate);
 
-        shiftDueEnd.setHours(
-          recurringEnd.getHours(),
-          recurringEnd.getMinutes(),
-          recurringEnd.getSeconds(),
-          recurringEnd.getMilliseconds(),
-        );
-      } else {
-        shiftDueEnd = snapToShiftTime(todayShiftStart, workShift, false);
-      }
+        // FORCE FIX: Align back to todayStr
+        const calculatedStartStr = moment(todayShiftStart)
+          .tz("Asia/Kolkata")
+          .format("YYYY-MM-DD");
 
-      const assignedByUser = await User.findById(task.assignedBy).select(
-        "name email",
-      );
-      const assignedToUser = await User.findById(task.assignedTo).select(
-        "name email",
-      );
+        if (calculatedStartStr !== todayStr) {
+          const timePart = moment(todayShiftStart)
+            .tz("Asia/Kolkata")
+            .format("HH:mm:ss");
+          todayShiftStart = moment
+            .tz(
+              `${todayStr} ${timePart}`,
+              "YYYY-MM-DD HH:mm:ss",
+              "Asia/Kolkata",
+            )
+            .toDate();
+        }
 
-      // CREATE DELEGATION INSTANCE
-      const newDelegation = new DelegationTask({
-        title: task.title,
-        description: task.description,
-        assignedTo: task.assignedTo,
-        assignedBy: task.assignedBy,
-        departmentOfAssignToUser: task.departmentOfAssignToUser,
-        startDate: todayShiftStart,
-        dueDate: shiftDueEnd,
-        recurrenceTaskId: task._id,
-        recurringRefId: task.TaskId,
-        instanceKey: instanceKey,
-        frequency: task.frequency,
-        checklist:
-          task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
-          [],
-        status: "Pending",
-        isVisible: false,
-        attachmentFile: task.attachmentFile || [],
-        currentHolder: task.assignedTo,
-        distributionStatus: "Awaiting Distribution",
-        delegationFlowEnabled: true,
-        isDeleted: false,
-      });
+        if (task.endDate) {
+          const endDate = moment(task.endDate)
+            .tz("Asia/Kolkata")
+            .endOf("day")
+            .toDate();
+          if (todayShiftStart > endDate) {
+            console.log(`⏭️ Skip ${task.TaskId}: shifted beyond endDate`);
+            continue;
+          }
+        }
 
-      await newDelegation.save();
-      createdCount++;
+        const isTodayHoliday = await isHoliday(todayShiftStart);
+        if (isTodayHoliday || !isWorkingDay(todayShiftStart, workShift)) {
+          console.log(
+            `⏭️ Skip ${task.TaskId}: Non-working day/holiday (${format(
+              todayShiftStart,
+              "dd-MM-yyyy",
+            )})`,
+          );
+          continue;
+        }
 
-      sendNotification({
-        type: "TASK_ASSIGNED",
-        task: newDelegation,
-        actor: assignedByUser,
-      });
+        let shiftDueEnd;
 
-      const emailTemplate = taskAssignedTemplate({
-        userName: assignedToUser?.name,
-        taskId: newDelegation.TaskId,
-        title: newDelegation.title,
-        description: newDelegation.description,
-        dueDate: newDelegation.dueDate
-          ? new Date(newDelegation.dueDate).toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-            })
-          : "N/A",
-        assignedBy: assignedByUser?.name,
-      });
+        if (task.taskEndDays) {
+          shiftDueEnd = await addWorkingDays(
+            todayShiftStart,
+            task.taskEndDays,
+            workShift._id,
+          );
+        } else if (task.endDate) {
+          shiftDueEnd = new Date(todayShiftStart);
+          const recurringEnd = new Date(task.endDate);
 
-      if (assignedToUser?.email) {
-        sendEmail({
-          to: assignedToUser.email,
-          subject: emailTemplate.subject,
-          html: emailTemplate.html,
+          shiftDueEnd.setHours(
+            recurringEnd.getHours(),
+            recurringEnd.getMinutes(),
+            recurringEnd.getSeconds(),
+            recurringEnd.getMilliseconds(),
+          );
+        } else {
+          shiftDueEnd = snapToShiftTime(todayShiftStart, workShift, false);
+        }
+
+        const assignedByUser = await User.findById(task.assignedBy)
+          .select("name email")
+          .lean();
+        const assignedToUser = await User.findById(task.assignedTo)
+          .select("name email")
+          .lean();
+
+        // CREATE DELEGATION INSTANCE
+        const newDelegation = new DelegationTask({
+          title: task.title,
+          description: task.description,
+          assignedTo: task.assignedTo,
+          assignedBy: task.assignedBy,
+          departmentOfAssignToUser: task.departmentOfAssignToUser,
+          startDate: todayShiftStart,
+          dueDate: shiftDueEnd,
+          recurrenceTaskId: task._id,
+          recurringRefId: task.TaskId,
+          instanceKey: instanceKey,
+          frequency: task.frequency,
+          checklist:
+            task.checklist?.map((item) => ({ ...item, isCompleted: false })) ||
+            [],
+          status: "Pending",
+          isVisible: false,
+          attachmentFile: task.attachmentFile || [],
+          currentHolder: task.assignedTo,
+          distributionStatus: "Awaiting Distribution",
+          delegationFlowEnabled: true,
+          isDeleted: false,
         });
-      }
 
-      console.log(
-        `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(todayShiftStart, "yyyy-MM-dd HH:mm")} to ${format(shiftDueEnd, "yyyy-MM-dd HH:mm")}`,
-      );
+        await newDelegation.save();
+        createdCount++;
+
+        // Non-blocking Async Notifications
+        try {
+          sendNotification({
+            type: "TASK_ASSIGNED",
+            task: newDelegation,
+            actor: assignedByUser,
+          }).catch((e) =>
+            console.error(
+              `Telegram Notif Error for ${newDelegation.TaskId}:`,
+              e.message,
+            ),
+          );
+
+          if (assignedToUser?.email) {
+            const emailTemplate = taskAssignedTemplate({
+              userName: assignedToUser?.name,
+              taskId: newDelegation.TaskId,
+              title: newDelegation.title,
+              description: newDelegation.description,
+              dueDate: newDelegation.dueDate
+                ? new Date(newDelegation.dueDate).toLocaleString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                  })
+                : "N/A",
+              assignedBy: assignedByUser?.name,
+            });
+
+            sendEmail({
+              to: assignedToUser.email,
+              subject: emailTemplate.subject,
+              html: emailTemplate.html,
+            }).catch((e) =>
+              console.error(
+                `Email Error for ${newDelegation.TaskId}:`,
+                e.message,
+              ),
+            );
+          }
+        } catch (notifErr) {
+          console.error("Notification trigger error:", notifErr);
+        }
+
+        console.log(
+          `✅ Generated ${newDelegation.TaskId} (${task.frequency}) → ${format(
+            todayShiftStart,
+            "yyyy-MM-dd HH:mm",
+          )} to ${format(shiftDueEnd, "yyyy-MM-dd HH:mm")}`,
+        );
+      } catch (singleTaskError) {
+        // Kisi single task me eror aane par agla task process hoga
+        console.error(
+          `❌ Error processing task ${task?.TaskId || task?._id}:`,
+          singleTaskError,
+        );
+      }
     }
 
     console.log(
       `✅ Cron Complete: ${createdCount} workshift-aware tasks generated`,
     );
   } catch (error) {
-    console.error("❌ Cron Error:", error);
+    console.error("❌ Fatal Cron Error:", error);
   }
 };
 
 const startCronJobs = () => {
-  // Daily at 00:01 AM IST
+// 2. Subah 09:00 AM IST Backup / Sync Schedule (Optional)
   cron.schedule(
-    "0 7 * * *",
+    "0 9 * * *",
     () => {
+      console.log("⏰ Running 09:00 AM Task Generation Sync...");
       generateRecurringTasks(null);
     },
     {
       timezone: "Asia/Kolkata",
     },
   );
-  console.log("🔄 Recurring Cron scheduled: Daily 00:01 IST (WorkShift Aware)");
+
+  console.log("🔄 Recurring Cron scheduled: Daily 00:01 AM & 09:00 AM IST");
 };
 
 export default startCronJobs;
