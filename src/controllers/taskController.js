@@ -606,6 +606,44 @@ export const createTask = handleAsync(async (req, res, next) => {
         console.error("Error computing dependent dates:", err);
       }
     }
+    if (
+      isDep &&
+      dependencyData.taskDependent &&
+      dependencyData.startTimeSetting === "planned-to-planned" &&
+      commonFields.startDate &&
+      commonFields.dueDate
+    ) {
+      const finalStartDate = new Date(commonFields.startDate);
+      const finalDueDate = new Date(commonFields.dueDate);
+
+      if (
+        !isNaN(finalStartDate.getTime()) &&
+        !isNaN(finalDueDate.getTime()) &&
+        finalDueDate >= finalStartDate
+      ) {
+        const startDay = new Date(finalStartDate);
+        const dueDay = new Date(finalDueDate);
+
+        startDay.setHours(0, 0, 0, 0);
+        dueDay.setHours(0, 0, 0, 0);
+
+        const diffMs = dueDay.getTime() - startDay.getTime();
+
+        // Inclusive count:
+        // 13 -> 17 = 5 days
+        const calculatedTaskEndDays =
+          Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+
+        commonFields.taskEndDays = calculatedTaskEndDays;
+
+        console.log(
+          `✅ Dependent taskEndDays | ` +
+            `Start: ${startDay.toISOString()} | ` +
+            `Due: ${dueDay.toISOString()} | ` +
+            `taskEndDays: ${calculatedTaskEndDays}`,
+        );
+      }
+    }
     let newTask;
 
     // --- TASK TYPE LOGIC ---
