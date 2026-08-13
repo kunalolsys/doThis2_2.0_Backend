@@ -370,134 +370,10 @@ export const createTask = handleAsync(async (req, res, next) => {
 
       // ✅ NEW FLAG
       waitingForParent: isActualToPlanned,
-      // startDate: effectiveStartDate,
-      // dueDate: effectiveDueDate,
       departmentOfAssignToUser: deptId,
       checklist: parsedChecklist,
-      // currentHolder: delegationFlowEnabled ? assignedTo : assignedTo,
-
-      // delegationFlowEnabled,
-
-      // distributionStatus: delegationFlowEnabled
-      //    ? "Awaiting Distribution"
-      //    : "Assigned",
     };
 
-    // 🔥 DEPENDENT PLANNED-TO-PLANNED (WorkShift Aware)
-    //**GLOBAL CHANGE */
-    // if (
-    //    isDep &&
-    //    dependencyData.taskDependent &&
-    //    dependencyData.startTimeSetting === "planned-to-planned"
-    // ) {
-    //    try {
-    //      let parent = null;
-    //      if (mongoose.Types.ObjectId.isValid(dependencyData.taskDependent)) {
-    //        parent = await Task.findById(dependencyData.taskDependent).lean();
-    //      }
-    //      if (!parent) {
-    //        parent = await Task.findOne({
-    //          TaskId: String(dependencyData.taskDependent),
-    //        }).lean();
-    //      }
-
-    //      if (parent) {
-    //        const parentEnd =
-    //          parent.dueDate || parent.endDate || parent.startDate;
-    //        if (!parentEnd) return;
-
-    //        const x = Number(dependencyData.xValue) || 0;
-    //        const freqStr = (
-    //          dependencyData.isDependentFrequency || ""
-    //        ).toLowerCase();
-
-    //        // 🔹 Step 1: Use only parent DATE
-    //        // 🔹 Step 1: Use parent planned end date WITH TIME
-    //        const parentDate = new Date(parentEnd);
-
-    //        let newStartDate;
-
-    //        // ======================
-    //        // HOURS
-    //        // ======================
-    //        if (freqStr.includes("hour")) {
-    //          let calculatedDate = new Date(parentDate);
-
-    //          calculatedDate.setHours(calculatedDate.getHours() + x);
-
-    //          const shiftStart = snapToShiftTime(calculatedDate, workShift, true);
-
-    //          const shiftEnd = snapToShiftTime(calculatedDate, workShift, false);
-
-    //          if (calculatedDate < shiftStart) {
-    //            newStartDate = shiftStart;
-    //          } else if (calculatedDate >= shiftEnd) {
-    //            const nextDay = new Date(calculatedDate);
-    //            nextDay.setDate(nextDay.getDate() + 1);
-
-    //            newStartDate = await nextWorkingShiftDate(nextDay, workShift._id);
-    //          } else {
-    //            newStartDate = calculatedDate;
-    //          }
-    //        }
-
-    //        // ======================
-    //        // DAYS
-    //        // ======================
-    //        else {
-    //          let plannedDate = await addWorkingDaysHoliday(
-    //            parentDate,
-    //            x,
-    //            workShift._id,
-    //          );
-
-    //          // preserve parent's time
-    //          plannedDate.setHours(
-    //            parentDate.getHours(),
-    //            parentDate.getMinutes(),
-    //            parentDate.getSeconds(),
-    //            parentDate.getMilliseconds(),
-    //          );
-
-    //          const shiftStart = snapToShiftTime(plannedDate, workShift, true);
-
-    //          const shiftEnd = snapToShiftTime(plannedDate, workShift, false);
-
-    //          if (plannedDate < shiftStart) {
-    //            plannedDate = shiftStart;
-    //          } else if (plannedDate >= shiftEnd) {
-    //            const nextDay = new Date(plannedDate);
-    //            nextDay.setDate(nextDay.getDate() + 1);
-
-    //            plannedDate = await nextWorkingShiftDate(nextDay, workShift._id);
-    //          }
-
-    //          newStartDate = plannedDate;
-    //        }
-
-    //        commonFields.startDate = newStartDate;
-
-    //        // 🔹 Step 3: Compute dueDate if taskEndDays exist
-    //        if (parsedTaskEndDays) {
-    //          commonFields.dueDate = await addWorkingDaysHoliday(
-    //            commonFields.startDate,
-    //            parsedTaskEndDays,
-    //            workShift._id,
-    //          );
-
-    //          commonFields.dueDate = snapToShiftTime(
-    //            commonFields.dueDate,
-    //            workShift,
-    //            false,
-    //          );
-    //        }
-    //      } else {
-    //        console.log("❌ No parent task found");
-    //      }
-    //    } catch (err) {
-    //      console.error("Error computing dependent dates:", err);
-    //    }
-    // }
     //**HIMAIRA MIS CHANGE */
     if (
       isDep &&
@@ -717,6 +593,12 @@ export const createTask = handleAsync(async (req, res, next) => {
             }
             commonFields.dueDate = dueDate;
           }
+
+          // 🔥 FIX: Apply explicit taskEndTime override to planned-to-planned dependent due date
+          if (commonFields.dueDate && taskEndTime) {
+            const [hours, minutes] = taskEndTime.split(":").map(Number);
+            commonFields.dueDate.setHours(hours, minutes, 0, 0);
+          }
         } else {
           console.log("❌ No parent task found");
         }
@@ -784,19 +666,6 @@ export const createTask = handleAsync(async (req, res, next) => {
         }
       }
       let recurrenceEnd = recurrenceEndDate;
-      //**comment for new change now endtime also be stored with end date in recurring task */
-      // if (cleanField(recurrenceEndDate)) {
-      //    recurrenceEnd = await nextWorkingShiftDate(
-      //      parseDateIST(recurrenceEndDate),
-      //      workShift._id,
-      //    );
-
-      //    recurrenceEnd = snapToShiftTime(
-      //      recurrenceEnd,
-      //      workShift,
-      //      false, // shift end time
-      //    );
-      // }
       newTask = new RecurringTask({
         ...commonFields,
         frequency: modelFrequency,
@@ -811,9 +680,9 @@ export const createTask = handleAsync(async (req, res, next) => {
     } else {
       const delegationTaskEndTime =
         taskEndTime ||
-        (effectiveDueDate
-          ? `${String(effectiveDueDate.getHours()).padStart(2, "0")}:${String(
-              effectiveDueDate.getMinutes(),
+        (commonFields.dueDate
+          ? `${String(commonFields.dueDate.getHours()).padStart(2, "0")}:${String(
+              commonFields.dueDate.getMinutes(),
             ).padStart(2, "0")}`
           : null);
 
