@@ -473,35 +473,33 @@ export const createTask = handleAsync(async (req, res, next) => {
             // DAYS
             // ======================
             else {
-              dueDate = await addWorkingDaysHoliday(
-                childStart,
-                x,
-                workShift._id,
-                false,
-                {},
+              dueDate = new Date(childStart);
+
+              // Add X calendar days first
+              dueDate.setDate(dueDate.getDate() + x);
+
+              // Check holiday / working day
+              const targetIsHoliday = await isHoliday(dueDate, deptId);
+
+              const targetIsWorkingDay = await isWorkingDay(
+                dueDate,
+                workShift,
                 deptId,
               );
 
-              const shiftEnd = snapToShiftTime(dueDate, workShift, false);
-              dueDate.setHours(
-                shiftEnd.getHours(),
-                shiftEnd.getMinutes(),
-                shiftEnd.getSeconds(),
-                shiftEnd.getMilliseconds(),
-              );
-
-              if (dueDate >= shiftEnd) {
-                let nextDay = new Date(dueDate);
-                nextDay.setDate(nextDay.getDate() + 1);
-
-                let nextWorkingDay = await nextWorkingShiftDate(
-                  nextDay,
+              // If weekend / holiday,
+              // move to next valid working day
+              if (targetIsHoliday || !targetIsWorkingDay) {
+                dueDate = await nextWorkingShiftDate(
+                  dueDate,
                   workShift._id,
                   {},
                   deptId,
                 );
-
-                dueDate = snapToShiftTime(nextWorkingDay, workShift, false);
+              } else {
+                // Valid working day:
+                // due at shift end
+                dueDate = snapToShiftTime(dueDate, workShift, false);
               }
             }
 
@@ -559,36 +557,38 @@ export const createTask = handleAsync(async (req, res, next) => {
             // DAYS
             // ======================
             else {
-              dueDate = await addWorkingDaysHoliday(
-                parentDue,
-                x,
-                workShift._id,
-                false,
-                {},
+              dueDate = new Date(parentDue);
+
+              // Add X calendar days first
+              dueDate.setDate(dueDate.getDate() + x);
+
+              // Check holiday / working day
+              const targetIsHoliday = await isHoliday(dueDate, deptId);
+
+              const targetIsWorkingDay = await isWorkingDay(
+                dueDate,
+                workShift,
                 deptId,
               );
 
-              dueDate.setHours(
-                parentDue.getHours(),
-                parentDue.getMinutes(),
-                parentDue.getSeconds(),
-                parentDue.getMilliseconds(),
-              );
-
-              const shiftEnd = snapToShiftTime(dueDate, workShift, false);
-
-              if (dueDate >= shiftEnd) {
-                let nextDay = new Date(dueDate);
-                nextDay.setDate(nextDay.getDate() + 1);
-
-                let nextWorkingDay = await nextWorkingShiftDate(
-                  nextDay,
+              // Weekend / holiday
+              // => move to next working day
+              if (targetIsHoliday || !targetIsWorkingDay) {
+                dueDate = await nextWorkingShiftDate(
+                  dueDate,
                   workShift._id,
                   {},
                   deptId,
                 );
-
-                dueDate = snapToShiftTime(nextWorkingDay, workShift, false);
+              } else {
+                // Valid working day
+                // => keep parent's time
+                dueDate.setHours(
+                  parentDue.getHours(),
+                  parentDue.getMinutes(),
+                  parentDue.getSeconds(),
+                  parentDue.getMilliseconds(),
+                );
               }
             }
             commonFields.dueDate = dueDate;
