@@ -16,7 +16,7 @@ import { startOfDay, endOfDay, addDays, format } from "date-fns";
 async function resolveDepartmentId(userOrDeptId) {
   if (!userOrDeptId) return null;
 
-  // If passed an object (User doc or Department doc)
+  // 1. Handle passed Object (User doc or Department doc)
   if (typeof userOrDeptId === "object") {
     if (userOrDeptId.department) {
       const dept = userOrDeptId.department;
@@ -25,14 +25,22 @@ async function resolveDepartmentId(userOrDeptId) {
     return userOrDeptId._id || null;
   }
 
-  // If passed a String ID, check if it belongs to a User
+  // 2. First Check: Treat string as a direct Department ID
+  const directDept = await Department.findById(userOrDeptId)
+    .select("_id")
+    .lean();
+  if (directDept) {
+    return directDept._id;
+  }
+
+  // 3. Fallback Check: Look up User to get their assigned Department
   const user = await User.findById(userOrDeptId).select("department").lean();
   if (user && user.department) {
     const dept = user.department;
     return Array.isArray(dept) ? dept[0] : dept;
   }
 
-  // Fallback: Treat string as direct Department ID
+  // 4. Final Fallback (e.g., if neither doc was found)
   return userOrDeptId;
 }
 

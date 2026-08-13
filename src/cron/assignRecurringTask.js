@@ -148,12 +148,15 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
 
         const baseTodayDate = nowIST.clone().startOf("day").toDate();
 
-        // Pass assignedTo ID so department resolution works
+        // 🔥 TARGET DEPT ID RESOLUTION
+        const taskDeptId = task.departmentOfAssignToUser || task.assignedTo;
+
+        // Pass department ID so department resolution works
         let todayShiftStart = await nextWorkingShiftDate(
           baseTodayDate,
           workShift._id,
           {},
-          task.assignedTo,
+          taskDeptId,
         );
 
         // FORCE FIX: Align back to todayStr
@@ -185,15 +188,12 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
           }
         }
 
-        // Pass user context and await isWorkingDay
-        const isTodayHoliday = await isHoliday(
-          todayShiftStart,
-          task.assignedTo,
-        );
+        // Pass department context and await isWorkingDay
+        const isTodayHoliday = await isHoliday(todayShiftStart, taskDeptId);
         const isTodayWorking = await isWorkingDay(
           todayShiftStart,
           workShift,
-          task.assignedTo,
+          taskDeptId,
         );
 
         if (isTodayHoliday || !isTodayWorking) {
@@ -209,13 +209,13 @@ export const generateRecurringTasks = async (recurringTaskId = null) => {
         let shiftDueEnd;
 
         if (task.taskEndDays) {
-          // Pass user context for department working schedule and holiday checks
+          // Pass department context for department working schedule and holiday checks
           shiftDueEnd = await addWorkingDays(
             todayShiftStart,
             task.taskEndDays,
             workShift._id,
             {},
-            task.assignedTo,
+            taskDeptId,
           );
         } else if (task.endDate) {
           shiftDueEnd = new Date(todayShiftStart);

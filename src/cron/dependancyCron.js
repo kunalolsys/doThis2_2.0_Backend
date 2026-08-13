@@ -51,24 +51,32 @@ export const runDependencyCron = async () => {
           if (assignedUser?.assignShift) {
             const workShift = assignedUser.assignShift;
 
-            // Align start date to user shift and department schedule
+            // 🔥 RESOLVE DEPARTMENT ID FOR CHILD TASK
+            const taskDeptId =
+              childTask.departmentOfAssignToUser ||
+              assignedUser?.department?.[0]?._id ||
+              assignedUser?.department?.[0] ||
+              assignedUser?.department ||
+              assignedUser._id;
+
+            // Align start date to user shift and department schedule (Passed taskDeptId)
             const shiftStart = await nextWorkingShiftDate(
               new Date(),
               workShift._id,
               {},
-              assignedUser._id,
+              taskDeptId,
             );
 
             childTask.startDate = shiftStart;
 
-            // Set due date using department-aware workshift days
+            // Set due date using department-aware workshift days (Passed taskDeptId)
             if (childTask.taskEndDays && childTask.taskEndDays > 0) {
               childTask.dueDate = await addWorkingDays(
                 shiftStart,
                 childTask.taskEndDays,
                 workShift._id,
                 {},
-                assignedUser._id,
+                taskDeptId,
               );
             } else {
               childTask.dueDate = snapToShiftTime(shiftStart, workShift, false);

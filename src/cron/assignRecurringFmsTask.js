@@ -71,10 +71,13 @@ const isTaskDueToday = async (task, instance) => {
 
     const todayDate = today.toDate();
 
+    // 🔥 DEPT ID PASSED INSTEAD OF USER ID
+    const deptId = task.departmentOfAssignToUser || task.assignedTo;
+
     // Parallelize working day and holiday check to cut DB query latency in half
     const [isWorking, holiday] = await Promise.all([
-      checkIsWorkingDay(todayDate, null, task.assignedTo),
-      isHoliday(todayDate, task.assignedTo),
+      checkIsWorkingDay(todayDate, null, deptId),
+      isHoliday(todayDate, deptId),
     ]);
 
     if (holiday || !isWorking) return false;
@@ -162,12 +165,16 @@ export const generateDependentChildren = async (
         const isSameShift =
           String(doer?.assignShift?._id) === String(parentWorkShift?._id);
 
+        // 🔥 CHILD DEPT ID PASSED INSTEAD OF USER ID
+        const childDeptId =
+          childTemplate.departmentOfAssignToUser || childTemplate.assignedTo;
+
         if (!isSameShift && doer?.assignShift) {
           const start = await nextWorkingShiftDate(
             new Date(parentStart),
             doer.assignShift._id,
             {},
-            doer._id,
+            childDeptId,
           );
 
           startDate = snapToShiftTime(start, doer.assignShift, true);
@@ -197,7 +204,7 @@ export const generateDependentChildren = async (
                 nextDay,
                 doer.assignShift._id,
                 {},
-                doer._id,
+                childDeptId,
               );
 
               const nextShiftStart = snapToShiftTime(
@@ -214,7 +221,7 @@ export const generateDependentChildren = async (
               doer.assignShift._id,
               false,
               {},
-              doer._id,
+              childDeptId,
             );
 
             if (dueDate) {
@@ -238,7 +245,7 @@ export const generateDependentChildren = async (
                   nextDay,
                   doer.assignShift._id,
                   {},
-                  doer._id,
+                  childDeptId,
                 );
 
                 dueDate = snapToShiftTime(
@@ -406,11 +413,14 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
               continue;
             }
 
+            // 🔥 DEPT ID PASSED INSTEAD OF USER ID
+            const taskDeptId = task.departmentOfAssignToUser || task.assignedTo;
+
             const shiftStart = await nextWorkingShiftDate(
               new Date(),
               user.assignShift._id,
               {},
-              user._id,
+              taskDeptId,
             );
             const shiftEnd = snapToShiftTime(
               shiftStart,

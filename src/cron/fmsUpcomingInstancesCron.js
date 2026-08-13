@@ -5,6 +5,7 @@ import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import FmsTask from "../models/FmsTask.js";
 import User from "../models/User.js";
 import {
+  addWorkingDaysHoliday,
   nextWorkingShiftDate,
   snapToShiftTime,
   isWorkingDay as checkIsWorkingDay,
@@ -73,10 +74,12 @@ const isWithinInstanceWindow = (instance, todayMoment) => {
 const isTaskDueForTodayByInstanceMode = async (task, instance, todayMoment) => {
   const todayDate = todayMoment.toDate();
 
-  // Evaluate working day status and holidays using department/user-aware dateCalculator
+  // Evaluate working day status and holidays using task department ID
+  const taskDeptId = task.departmentOfAssignToUser || task.assignedTo;
+
   const [isWorking, holiday] = await Promise.all([
-    checkIsWorkingDay(todayDate, null, task.assignedTo),
-    isHoliday(todayDate, task.assignedTo),
+    checkIsWorkingDay(todayDate, null, taskDeptId),
+    isHoliday(todayDate, taskDeptId),
   ]);
 
   if (holiday || !isWorking) {
@@ -153,11 +156,13 @@ const generateDependentChildren = async (
           parentInstanceTask.plannedStartDate;
         if (!parentDate) continue;
 
+        const childDeptId = childTemplate.departmentOfAssignToUser || doer._id;
+
         const shiftStart = await nextWorkingShiftDate(
           parentDate,
           doer.assignShift._id,
           {},
-          doer._id,
+          childDeptId,
         );
         const shiftEnd = snapToShiftTime(shiftStart, doer.assignShift, false);
 
@@ -304,11 +309,13 @@ export const generateUpcomingFmsInstanceTasks = async () => {
 
             if (!user?.assignShift) continue;
 
+            const taskDeptId = task.departmentOfAssignToUser || user._id;
+
             const shiftStart = await nextWorkingShiftDate(
               new Date(),
               user.assignShift._id,
               {},
-              user._id,
+              taskDeptId,
             );
             const shiftEnd = snapToShiftTime(
               shiftStart,

@@ -76,9 +76,9 @@ const makeTasksVisible = async () => {
           const taskDeptId = task.departmentOfAssignToUser || deptId;
 
           // =====================================================
-          // ✅ TODAY MUST BE VALID WORKING DAY FOR DEPT/USER
+          // ✅ TODAY MUST BE VALID WORKING DAY FOR DEPT (FIXED)
           // =====================================================
-          const isTodayHoliday = await isHoliday(today, user._id);
+          const isTodayHoliday = await isHoliday(today, taskDeptId || user._id);
           const isTodayWorking = await isWorkingDay(
             today,
             workShift._id,
@@ -90,7 +90,7 @@ const makeTasksVisible = async () => {
           }
 
           // =====================================================
-          // ✅ FIND FIRST VALID WORKING DAY AFTER TASK START DATE
+          // ✅ FIND FIRST VALID WORKING DAY AFTER TASK START DATE (FIXED)
           // =====================================================
           const nextShiftDate = await nextWorkingShiftDate(
             task.startDate,

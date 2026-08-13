@@ -58,15 +58,26 @@ const makeFmsTasksVisible = async () => {
         }).lean();
 
         let validTasks = 0;
+
+        // 🔥 TARGET DEPT ID RESOLUTION FOR USER
+        const userDeptId =
+          Array.isArray(user.department) && user.department.length > 0
+            ? user.department[0]._id || user.department[0]
+            : typeof user.department === "object"
+              ? user.department?._id
+              : user.department || user._id;
+
         for (const task of fmsTasksToCheck) {
           const taskDate = startOfDay(new Date(task.plannedStartDate));
 
-          // Pass user context for department holidays & schedule checks + await isWorkingDay
-          const isTaskHoliday = await isHoliday(taskDate, user._id);
+          // 🔥 Pass department ID context for department holidays & schedule checks
+          const targetDeptId = task.departmentOfAssignToUser || userDeptId;
+
+          const isTaskHoliday = await isHoliday(taskDate, targetDeptId);
           const isTaskWorkingDay = await isWorkingDay(
             taskDate,
             workShift,
-            user._id,
+            targetDeptId,
           );
 
           if (!isTaskHoliday && isTaskWorkingDay) {
