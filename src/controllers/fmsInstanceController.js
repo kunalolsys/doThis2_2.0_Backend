@@ -1,5 +1,5 @@
 import FmsInstance from "../models/FmsInstance.js";
-import mongoose from 'mongoose'
+import mongoose from "mongoose";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import FmsTemplate from "../models/FmsTemplate.js";
 import FmsTask from "../models/FmsTask.js";
@@ -19,7 +19,7 @@ import { createLog } from "./logController.js";
 import { updateTaskStatuses } from "../cron/taskStatusUpdate.js";
 import { updateInstanceProgress } from "../cron/fmsInstanceTaskProgressCron.js";
 import Counter from "../models/Counter.js";
-import { addDays } from "date-fns";
+import { startOfDay, endOfDay, addDays, format } from "date-fns";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 import Role from "../models/Role.js";
 const calculateInstanceStatus = (startDate) => {
@@ -98,20 +98,22 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   let instanceStartDate = launchDate;
   let instanceEndDate = endDate ? new Date(endDate) : instanceEnd;
 
-  if (managerUser?.assignShift) {
-    instanceStartDate = await nextWorkingShiftDate(
-      launchDate,
-      managerUser.assignShift._id,
-    );
+  // if (managerUser?.assignShift) {
+  //   instanceStartDate = await nextWorkingShiftDate(
+  //     launchDate,
+  //     managerUser.assignShift._id,
+  //     {},
+  //     managerUser.department || managerUser._id,
+  //   );
 
-    if (instanceEndDate) {
-      instanceEndDate = snapToShiftTime(
-        instanceEndDate,
-        managerUser.assignShift,
-        false, // shift end time
-      );
-    }
-  }
+  //   if (instanceEndDate) {
+  //     instanceEndDate = snapToShiftTime(
+  //       instanceEndDate,
+  //       managerUser.assignShift,
+  //       false, // shift end time
+  //     );
+  //   }
+  // }
 
   // Create FmsInstance
   const instance = await FmsInstance.create({
@@ -154,6 +156,10 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       "assignShift",
     );
 
+    // 🟢 Priority given to task's direct department context
+    const taskDeptContext =
+      tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
+
     let dates = {
       startDate: null,
       dueDate: null,
@@ -177,7 +183,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
 
     if (freq === "anytime") {
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate = parsedEndDate;
@@ -192,7 +203,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       };
     } else if (!tmplTask.isDependent && freq.startsWith("start")) {
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate = shiftStart;
@@ -205,7 +221,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
         const targetDate = addDays(shiftStart, tmplTask.xValue || 0);
 
         dueDate = doer?.assignShift
-          ? await nextWorkingShiftDate(targetDate, doer.assignShift._id)
+          ? await nextWorkingShiftDate(
+              targetDate,
+              doer.assignShift._id,
+              {},
+              taskDeptContext,
+            )
           : targetDate;
       }
 
@@ -221,7 +242,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       }
 
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate;
@@ -249,7 +275,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
 
         dueDate = doer?.assignShift
           ? snapToShiftTime(
-              await nextWorkingShiftDate(targetDate, doer.assignShift._id),
+              await nextWorkingShiftDate(
+                targetDate,
+                doer.assignShift._id,
+                {},
+                taskDeptContext,
+              ),
               doer.assignShift,
               false,
             )
@@ -306,6 +337,8 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
         const start = await nextWorkingShiftDate(
           baseDate,
           doer.assignShift._id,
+          {},
+          taskDeptContext,
         );
 
         startDate = snapToShiftTime(start, doer.assignShift, true);
@@ -333,6 +366,8 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               doer.assignShift._id,
+              {},
+              taskDeptContext,
             );
 
             const nextShiftStart = snapToShiftTime(
@@ -348,6 +383,9 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
             parentDue,
             x,
             doer.assignShift._id,
+            tmplTask.isDependent,
+            {},
+            taskDeptContext, // 🟢 Evaluates against Task Department Rules
           );
 
           dueDate.setHours(
@@ -366,6 +404,8 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               doer.assignShift._id,
+              {},
+              taskDeptContext,
             );
 
             dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
@@ -388,6 +428,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
           plannedDueDate: t.plannedDueDate,
           plannedStartDate: t.plannedStartDate,
         })),
+        taskDeptContext,
       );
     } else if (tmplTask.startTimeSetting === "actual-to-planned") {
       dates = {
@@ -615,40 +656,44 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
 export const completeInstanceTask = handleAsync(async (req, res, next) => {
   const { id: instanceId, taskId: taskIdParam } = req.params;
   const { status } = req.body;
+
   const task = await FmsInstanceTask.findOne({
     fmsInstanceId: instanceId,
     taskId: taskIdParam,
   });
-  // .populate('assignedTo assignShift');
 
   if (!task) return next(new AppError("Task not found", 404));
 
-  // Mark complete
+  // Mark complete validation
   if (!isFmsTaskFullyComplete(task)) {
     return res.status(400).json({
       error: "Complete checklist and mandatory forms first",
     });
   }
-  task.actualCompleteDate = new Date();
-  task.completedAt = new Date();
+
+  const completionDate = new Date();
+  task.actualCompleteDate = completionDate;
+  task.completedAt = completionDate;
   task.status = "Completed";
-  task.updatedBy = req.cookies.userId || req.user._id || null;
-  task.completedBy = req.cookies.userId || req.user._id || null;
+  task.updatedBy = req.cookies?.userId || req.user?._id || null;
+  task.completedBy = req.cookies?.userId || req.user?._id || null;
   await task.save();
   await updateInstanceProgress();
-  // 🔥 FIND CHILDREN (reverse: who depends ON this parent)
+
+  // FIND CHILDREN (reverse: who depends ON this parent task)
   const children = await FmsInstanceTask.find({
     fmsInstanceId: instanceId,
     startTimeSetting: "actual-to-planned",
-    dependentOn: task.taskId, // IMPORTANT LINK
-    // waitingForParent: true,
+    dependentOn: task.taskId,
   }).populate({
     path: "assignedTo",
     populate: { path: "assignShift" },
   });
+
   const assignedParentUser = await User.findById(task.assignedTo).populate(
     "assignShift",
   );
+
   if (!assignedParentUser) {
     return next(new AppError(`User with ID ${task.assignedTo} not found`, 404));
   }
@@ -759,42 +804,46 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
       if (!shift) continue;
 
+      // 🟢 Priority given to task's direct department context
+      const taskDeptContext =
+        child.departmentOfAssignToUser || doer?.department || doer?._id;
+
       const parentStart = task.plannedStartDate;
       const parentDue = task.plannedDueDate;
       let startDate;
       let dueDate;
+
       if (!parentStart || !parentDue) continue;
+
       const isSameShift = String(shift?._id) === String(parentWorkShift?._id);
+
       if (!isSameShift) {
         console.log("⚠️ Shift mismatch → using child shift window only");
 
         const baseDate = new Date(parentStart);
 
-        const start = await nextWorkingShiftDate(baseDate, shift._id);
+        const start = await nextWorkingShiftDate(
+          baseDate,
+          shift._id,
+          {},
+          taskDeptContext,
+        );
 
         startDate = snapToShiftTime(start, shift, true);
         dueDate = snapToShiftTime(start, shift, false);
-
-        // ❗ DO NOT return
-        // just skip dependency math
       } else {
         const x = Number(child.xValue || 0);
         const freq = (child.frequency || "").toLowerCase();
 
-        // ====================================
-        // START DATE = PARENT START DATE
-        // ====================================
+        // Start Date comes from parent's actual completion
         startDate = new Date(task.actualCompleteDate);
-
         dueDate = new Date(parentDue);
 
         // ====================================
-        // HOURS
+        // HOURS CALCULATION
         // ====================================
         if (freq.includes("hour")) {
           let calculatedDue = new Date(parentDue);
-
-          // parent due + x hours
           calculatedDue.setHours(calculatedDue.getHours() + x);
 
           const shiftEnd = snapToShiftTime(parentDue, shift, false);
@@ -810,6 +859,8 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               shift._id,
+              {},
+              taskDeptContext,
             );
 
             const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
@@ -817,12 +868,18 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
             dueDate = new Date(nextShiftStart.getTime() + overflowMs);
           }
         }
-
         // ====================================
-        // DAYS
+        // DAYS CALCULATION
         // ====================================
         else {
-          dueDate = await addWorkingDaysHoliday(parentDue, x, shift._id);
+          dueDate = await addWorkingDaysHoliday(
+            parentDue,
+            x,
+            shift._id,
+            child.isDependent,
+            {},
+            taskDeptContext, // 🟢 Evaluates against Task Department Rules
+          );
 
           dueDate.setHours(
             parentDue.getHours(),
@@ -840,18 +897,20 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               shift._id,
+              {},
+              taskDeptContext,
             );
 
             dueDate = snapToShiftTime(nextWorkingDay, shift, false);
           }
         }
       }
+
       // ====================================
-      // UPDATE CHILD
+      // UPDATE CHILD TASK
       // ====================================
       child.plannedStartDate = startDate;
       child.plannedDueDate = dueDate;
-
       child.actualStartDate = null;
       child.waitingForParent = false;
       child.status = calculateTaskStatus(startDate, dueDate);
@@ -863,6 +922,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
       console.error("FAILED CHILD:", child.taskId, err);
     }
   }
+
   res.json({
     success: true,
     message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
@@ -1411,24 +1471,20 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
   // =========================
   if (role === "admin" || role === "owner" || role === "pc") {
     if (selectedDoer && selectedDoer !== "all") {
-      fmsAndConditions.push({ assignedTo: new mongoose.Types.ObjectId(selectedDoer) });
+      fmsAndConditions.push({
+        assignedTo: new mongoose.Types.ObjectId(selectedDoer),
+      });
     }
     if (selectedManager && selectedManager !== "all") {
       const managerObjId = new mongoose.Types.ObjectId(selectedManager);
       fmsAndConditions.push({
-        $or: [
-          { updatedBy: managerObjId },
-          { assignedTo: managerObjId },
-        ],
+        $or: [{ updatedBy: managerObjId }, { assignedTo: managerObjId }],
       });
     }
     if (selectedSrManager && selectedSrManager !== "all") {
       const srManagerObjId = new mongoose.Types.ObjectId(selectedSrManager);
       fmsAndConditions.push({
-        $or: [
-          { updatedBy: srManagerObjId },
-          { assignedTo: srManagerObjId },
-        ],
+        $or: [{ updatedBy: srManagerObjId }, { assignedTo: srManagerObjId }],
       });
     }
   } else if (role === "sr.manager" || role === "srmanager") {
@@ -1443,7 +1499,7 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
     const memberIds = members.map((m) => m._id);
 
     const allIds = [userId, ...managerIds, ...memberIds].map(
-      (id) => new mongoose.Types.ObjectId(id)
+      (id) => new mongoose.Types.ObjectId(id),
     );
     fmsAndConditions.push({ assignedTo: { $in: allIds } });
   } else if (role === "manager") {
@@ -1453,7 +1509,7 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
     const memberIds = members.map((m) => m._id);
 
     const allIds = [userId, ...memberIds].map(
-      (id) => new mongoose.Types.ObjectId(id)
+      (id) => new mongoose.Types.ObjectId(id),
     );
     fmsAndConditions.push({ assignedTo: { $in: allIds } });
   } else {

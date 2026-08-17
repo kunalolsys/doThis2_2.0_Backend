@@ -658,9 +658,23 @@ export const getSingleTaskBucket = async (req, res) => {
 export const distributeTaskBucket = async (req, res) => {
   try {
     const { id } = req.params;
-    const { selectedUsers = [] } = req.body;
+    const { selectedUsers = [], assignments = [] } = req.body;
 
-    const userId = req.cookies.userId || req.user._id;
+    const userId = req.cookies?.userId || req.user?._id;
+
+    // Build department lookup map from assignments array: { [userId]: departmentId }
+    const departmentMap = {};
+    if (Array.isArray(assignments) && assignments.length > 0) {
+      assignments.forEach((item) => {
+        if (item.userId && item.departmentId) {
+          departmentMap[String(item.userId)] = item.departmentId;
+        }
+      });
+    }
+
+    // Resolve list of target user IDs
+    const targetUserIds =
+      selectedUsers.length > 0 ? selectedUsers : Object.keys(departmentMap);
 
     // =====================================================
     // GET BUCKET
@@ -678,7 +692,7 @@ export const distributeTaskBucket = async (req, res) => {
     // GET USERS
     // =====================================================
     const users = await User.find({
-      _id: { $in: selectedUsers },
+      _id: { $in: targetUserIds },
     });
 
     if (!users.length) {
@@ -753,6 +767,21 @@ export const distributeTaskBucket = async (req, res) => {
         });
       }
 
+      // 🟢 Resolve department: prioritize selected department, fallback to user department array
+      const deptId =
+        departmentMap[String(user._id)] ||
+        assignedUser?.department?.[0]?._id ||
+        assignedUser?.department?.[0] ||
+        assignedUser?.department ||
+        null;
+
+      if (!deptId) {
+        return res.status(400).json({
+          success: false,
+          message: `Department is required for ${assignedUser?.name}`,
+        });
+      }
+
       const workShift = assignedUser.assignShift;
 
       // ============================
@@ -763,14 +792,9 @@ export const distributeTaskBucket = async (req, res) => {
             bucket.startDate,
             workShift._id,
             {},
-            assignedUser._id,
+            deptId,
           )
-        : await nextWorkingShiftDate(
-            new Date(),
-            workShift._id,
-            {},
-            assignedUser._id,
-          );
+        : await nextWorkingShiftDate(new Date(), workShift._id, {}, deptId);
 
       // ============================
       // 2. DUE DATE (TASK END DAYS LOGIC)
@@ -784,12 +808,12 @@ export const distributeTaskBucket = async (req, res) => {
           workShift._id,
           false,
           {},
-          assignedUser._id,
+          deptId,
         );
       }
 
       // ============================
-      // BASE PAYLOAD (FIXED)
+      // BASE PAYLOAD (FIXED WITH SELECTED DEPT)
       // ============================
       const basePayload = {
         bucketId: bucket._id,
@@ -803,7 +827,7 @@ export const distributeTaskBucket = async (req, res) => {
         createdBy: userId,
         updatedBy: userId,
 
-        departmentOfAssignToUser: assignedUser?.department?.[0] || null,
+        departmentOfAssignToUser: deptId,
 
         startDate: effectiveStartDate,
         dueDate: effectiveDueDate,
@@ -937,25 +961,30 @@ export const distributeTaskBucket = async (req, res) => {
     // CHECK DISTRIBUTION STATUS
     // =====================================================
 
-    // all reporting users under current manager
     const reportingUsers = await User.find({
       reportingManager: userId,
     }).select("_id");
 
     const reportingUserIds = reportingUsers.map((u) => String(u._id));
 
-    // users who received this bucket task
-    const distributedTasks = await DelegationTask.find({
-      bucketId: bucket._id,
-      assignedTo: { $in: reportingUserIds },
-    }).select("assignedTo");
+    // users who received this bucket task (across delegation and recurring)
+    const [delegationDistributed, recurringDistributed] = await Promise.all([
+      DelegationTask.find({
+        bucketId: bucket._id,
+        assignedTo: { $in: reportingUserIds },
+      }).select("assignedTo"),
+      RecurringTask.find({
+        bucketId: bucket._id,
+        assignedTo: { $in: reportingUserIds },
+      }).select("assignedTo"),
+    ]);
 
-    const distributedUserSet = new Set(
-      distributedTasks.map((t) => String(t.assignedTo)),
-    );
+    const distributedUserSet = new Set([
+      ...delegationDistributed.map((t) => String(t.assignedTo)),
+      ...recurringDistributed.map((t) => String(t.assignedTo)),
+    ]);
 
     const totalUsers = reportingUserIds.length;
-
     const distributedCount = distributedUserSet.size;
 
     // =====================================================
@@ -1093,6 +1122,7 @@ export const getBucketReportingUsers = async (req, res) => {
     })
       .populate("role", "name")
       .populate("reportingManager", "name")
+      .populate("department", "name")
       .select("name email role reportingManager");
 
     const userIds = users.map((u) => u._id);

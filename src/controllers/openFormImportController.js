@@ -96,6 +96,8 @@ export const launchFmsInstanceInternal = async ({
     instanceStartDate = await nextWorkingShiftDate(
       launchDate,
       managerUser.assignShift._id,
+      {},
+      managerUser.department || managerUser._id,
     );
 
     if (instanceEndDate) {
@@ -142,6 +144,10 @@ export const launchFmsInstanceInternal = async ({
       "assignShift",
     );
 
+    // 🟢 Priority given to task's direct department context
+    const taskDeptContext =
+      tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
+
     let dates = { startDate: null, dueDate: null };
     const freq = (tmplTask.frequency || "").trim().toLowerCase();
 
@@ -159,7 +165,12 @@ export const launchFmsInstanceInternal = async ({
 
     if (freq === "anytime") {
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate = parsedEndDate;
@@ -170,7 +181,12 @@ export const launchFmsInstanceInternal = async ({
       dates = { startDate: shiftStart, dueDate };
     } else if (!tmplTask.isDependent && freq.startsWith("start")) {
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate = shiftStart;
@@ -181,7 +197,12 @@ export const launchFmsInstanceInternal = async ({
       } else {
         const targetDate = addDays(shiftStart, tmplTask.xValue || 0);
         dueDate = doer?.assignShift
-          ? await nextWorkingShiftDate(targetDate, doer.assignShift._id)
+          ? await nextWorkingShiftDate(
+              targetDate,
+              doer.assignShift._id,
+              {},
+              taskDeptContext,
+            )
           : targetDate;
       }
 
@@ -194,7 +215,12 @@ export const launchFmsInstanceInternal = async ({
       }
 
       const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(launchDate, doer.assignShift._id)
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
         : launchDate;
 
       let dueDate;
@@ -214,7 +240,12 @@ export const launchFmsInstanceInternal = async ({
 
         dueDate = doer?.assignShift
           ? snapToShiftTime(
-              await nextWorkingShiftDate(targetDate, doer.assignShift._id),
+              await nextWorkingShiftDate(
+                targetDate,
+                doer.assignShift._id,
+                {},
+                taskDeptContext,
+              ),
               doer.assignShift,
               false,
             )
@@ -255,6 +286,8 @@ export const launchFmsInstanceInternal = async ({
         const start = await nextWorkingShiftDate(
           baseDate,
           doer.assignShift._id,
+          {},
+          taskDeptContext,
         );
         startDate = snapToShiftTime(start, doer.assignShift, true);
         dueDate = snapToShiftTime(start, doer.assignShift, false);
@@ -278,6 +311,8 @@ export const launchFmsInstanceInternal = async ({
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               doer.assignShift._id,
+              {},
+              taskDeptContext,
             );
             const nextShiftStart = snapToShiftTime(
               nextWorkingDay,
@@ -291,6 +326,9 @@ export const launchFmsInstanceInternal = async ({
             parentDue,
             x,
             doer.assignShift._id,
+            tmplTask.isDependent,
+            {},
+            taskDeptContext,
           );
           dueDate.setHours(
             parentDue.getHours(),
@@ -306,6 +344,8 @@ export const launchFmsInstanceInternal = async ({
             const nextWorkingDay = await nextWorkingShiftDate(
               nextDay,
               doer.assignShift._id,
+              {},
+              taskDeptContext,
             );
             dueDate = snapToShiftTime(nextWorkingDay, doer.assignShift, false);
           }
@@ -324,6 +364,7 @@ export const launchFmsInstanceInternal = async ({
           plannedDueDate: t.plannedDueDate,
           plannedStartDate: t.plannedStartDate,
         })),
+        taskDeptContext,
       );
     } else if (tmplTask.startTimeSetting === "actual-to-planned") {
       dates = { startDate: null, dueDate: null };
@@ -386,10 +427,6 @@ export const launchFmsInstanceInternal = async ({
   }
 
   await generateRecurringFmsTasks(instance._id);
-
-  // await FmsTemplate.findByIdAndUpdate(templateId, {
-  //   isLaunched: true,
-  // });
 
   return instance;
 };
