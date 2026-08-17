@@ -59,7 +59,7 @@ mongoose
 
         startTaskStatusCron();
         runDependencyCron();
-        startAnnualHolidayCron();
+        // startAnnualHolidayCron();
         if (isDoThisEnabled) {
           startCronJobs();
           startVisibilityCron();
