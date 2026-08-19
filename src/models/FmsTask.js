@@ -37,16 +37,15 @@ const FmsTaskSchema = new mongoose.Schema(
     frequency: {
       type: String,
       enum: [
+        "None", // 🟢 ALLOW NONE FOR ROW 1 / STANDARD TASKS
         "Anytime",
         "Daily",
         "Weekly",
         "Monthly",
         "Start+X in days",
         "Start+X in hours",
-        // "Start-X in days",
-        // "Start-X in hours",
-        // "D+X",
-        // "D-X",
+        "Form Event+X in days", // 🟢 FORM EVENT RELATIVE DATES
+        "Form Event+X in hours", // 🟢 FORM EVENT RELATIVE HOURS
         "Task+X in days",
         "Task+X in hours",
         "Task-X in days",
@@ -56,7 +55,11 @@ const FmsTaskSchema = new mongoose.Schema(
         "Event-X in days",
         "Event-X in hours",
       ],
-      required: true,
+      default: "None",
+    },
+    linkedWithForm: {
+      type: Boolean,
+      default: false, // 🟢 LINK WITH FORM TOGGLE
     },
     xValue: {
       type: Number,
@@ -74,10 +77,8 @@ const FmsTaskSchema = new mongoose.Schema(
     },
     isRecurringTask: { type: Boolean, default: false },
     taskEndDays: { type: Number, default: 0, min: 0 },
-    // TENTATIVE - finalized at launch (NULL during template phase)
     tentativeStartDate: Date,
     tentativeDueDate: Date,
-    // Modals
     checklist: [
       {
         text: { type: String, required: true },
@@ -90,25 +91,25 @@ const FmsTaskSchema = new mongoose.Schema(
         fieldType: {
           type: String,
           enum: [
-            "text", // simple text
-            "textarea", // long text / description
-            "number", // numeric input
-            "email", // email input
-            "password", // password field
-            "phone", // mobile number
-            "date", // date picker
-            "datetime", // date + time
-            "time", // only time
-            "file", // file upload
-            "image", // image upload
-            "dropdown", // select (single)
-            "multiselect", // select (multiple)
-            "checkbox", // true/false or multiple options
-            "radio", // single choice
-            "boolean", // true/false toggle
-            "url", // link input
-            "json", // structured data
-            "richtext", // formatted editor (bold, etc.)
+            "text",
+            "textarea",
+            "number",
+            "email",
+            "password",
+            "phone",
+            "date",
+            "datetime",
+            "time",
+            "file",
+            "image",
+            "dropdown",
+            "multiselect",
+            "checkbox",
+            "radio",
+            "boolean",
+            "url",
+            "json",
+            "richtext",
           ],
         },
         options: [
@@ -118,25 +119,20 @@ const FmsTaskSchema = new mongoose.Schema(
           },
         ],
         isMandatory: { type: Boolean, default: false },
-        completed: { type: Boolean, default: false }, // NEW: track if filled
+        completed: { type: Boolean, default: false },
       },
     ],
-    // Audit
     assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    // ── Decision Step ───────────────────────────────────────────────────────
     decisionStep: {
       type: Boolean,
       default: false,
     },
-    // "terminate" → stop the whole FMS on Yes
-    // "trigger_fms" → launch another FMS on Yes
     decisionYesAction: {
       type: String,
       enum: ["terminate", "trigger_fms", null],
       default: null,
     },
-    // Which FMS template to trigger (only for trigger_fms)
     triggerFmsTemplate: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "FmsTemplate",
@@ -146,26 +142,9 @@ const FmsTaskSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Indexes
 FmsTaskSchema.index({ fmsTemplateId: 1, taskId: 1 });
 FmsTaskSchema.index({ fmsTemplateId: 1, isDependent: 1 });
 FmsTaskSchema.index({ dependentOn: 1 });
-
-// Pre-save: taskId only
-// FmsTaskSchema.pre("save", async function (next) {
-//   if (this.isNew && !this.taskId) {
-//     const template = await FmsTemplate.findById(this.fmsTemplateId);
-
-//     const counter = await Counter.findByIdAndUpdate(
-//       { _id: `fmsTask_${this.fmsTemplateId}` },
-//       { $inc: { seq: 1 } },
-//       { upsert: true, new: true }
-//     );
-
-//     this.taskId = `${template.fmsId}-${String(counter.seq).padStart(2, "0")}`;
-//   }
-//   next();
-// });
 
 FmsTaskSchema.virtual("template", {
   ref: "FmsTemplate",

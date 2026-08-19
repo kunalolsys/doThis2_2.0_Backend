@@ -15,7 +15,7 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
 
   const created = [];
   const errors = [];
-  const createdTasksIds = []; // Track task IDs for template update
+  const createdTasksIds = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -26,11 +26,16 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
       const description = row.description?.trim();
       if (!description) throw new Error("taskDescription required");
 
-      // ✅ FIX: Strict Boolean Normalization for decisionStep
       const isDecisionStep =
         row.decisionStep === true ||
         row.decisionStep === "yes" ||
         row.decisionStep === "true";
+
+      // 🟢 Normalization for Linked With Form Boolean
+      const linkedWithForm =
+        row.linkedWithForm === true ||
+        row.linkedWithForm === "yes" ||
+        row.linkedWithForm === "true";
 
       const taskData = {
         fmsTemplateId: row.fmsTemplateId,
@@ -38,13 +43,16 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         taskId: row.taskId,
         departmentOfAssignToUser: row.departmentOfAssignToUser,
         assignedTo: row.assignedTo,
-        frequency: row.frequency == "none" ? undefined : row.frequency,
+        frequency:
+          !row.frequency || row.frequency.toLowerCase() === "none"
+            ? "None"
+            : row.frequency,
+        linkedWithForm, // 🟢 LINKED WITH FORM HANDLED
         xValue: parseFloat(row.xValue || 0),
         isDependent: row.isDependent || false,
         dependentOn: row.dependentOn || null,
         startTimeSetting: row.startTimeSetting || null,
 
-        // ✅ DECISION FIELDS ADDED HERE
         decisionStep: isDecisionStep,
         decisionYesAction: isDecisionStep
           ? row.decisionYesAction || null
@@ -62,7 +70,6 @@ export const createFmsTasks = handleAsync(async (req, res, next) => {
         createdForm: row.createdForm || [],
       };
 
-      // Validate references
       const dept = await Department.findById(taskData.departmentOfAssignToUser);
       if (!dept) throw new Error("Invalid department");
 
@@ -136,14 +143,24 @@ export const getFmsTasksByTemplate = handleAsync(async (req, res) => {
 
 //**UPDATE FMS TASK */
 export const updateFmsTask = handleAsync(async (req, res, next) => {
-  // console.log(req.body,req.params.id,req.params.taskId )
+  const updateData = { ...req.body };
+
+  if (updateData.linkedWithForm !== undefined) {
+    updateData.linkedWithForm =
+      updateData.linkedWithForm === true ||
+      updateData.linkedWithForm === "yes" ||
+      updateData.linkedWithForm === "true";
+  }
+
   const task = await FmsTask.findOneAndUpdate(
     { fmsTemplateId: req.params.id, taskId: req.params.taskId },
-    req.body,
+    updateData,
     { new: true },
   ).populate("fmsTemplateId");
+
   res.json({ success: true, data: task });
 });
+
 export const deleteFmsTask = handleAsync(async (req, res, next) => {
   const { id: templateId, taskId } = req.params;
 
@@ -173,15 +190,13 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
       ),
     );
   }
-  // Remove from template's tasks array
+
   await FmsTemplate.findByIdAndUpdate(templateId, {
     $pull: { tasks: task._id },
   });
 
-  // Delete the task
   await task.deleteOne();
 
-  // Log deletion
   await createLog({
     action: "DELETE_FMS_TASK",
     performedBy: req.cookies.userId || req.user._id || null,
@@ -203,7 +218,6 @@ export const deleteFmsTask = handleAsync(async (req, res, next) => {
 });
 
 //**IMPORT FMS TASK */
-
 export const importFmsTasksUniversal = handleAsync(async (req, res) => {
   const templateId = req.params.id;
   const file = req.files?.[0];
@@ -215,7 +229,6 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
   const format = file.originalname.split(".").pop().toLowerCase();
   let rows = [];
 
-  // ✅ 1. Parse file safely
   try {
     if (format === "csv") {
       const csv = file.buffer.toString();
@@ -236,25 +249,24 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
   const created = [];
   const errors = [];
 
-  // ✅ 2. Process each row
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
 
     try {
-      // 🔥 Mandatory fields check
       if (!row.description) throw new Error("Missing taskDescription");
       if (!row.doer) throw new Error("Missing assignedTo (doer)");
       if (!row.department) throw new Error("Missing department");
-      if (!row.frequency) throw new Error("Missing frequency");
 
-      // ✅ Validate frequency enum
       const allowedFrequencies = [
+        "None",
         "Anytime",
         "Daily",
         "Weekly",
         "Monthly",
         "Start+X in days",
         "Start+X in hours",
+        "Form Event+X in days",
+        "Form Event+X in hours",
         "Task+X in days",
         "Task+X in hours",
         "Task-X in days",
@@ -265,11 +277,11 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
         "Event-X in hours",
       ];
 
-      if (!allowedFrequencies.includes(row.frequency)) {
-        throw new Error(`Invalid frequency: ${row.frequency}`);
+      const freq = row.frequency || "None";
+      if (!allowedFrequencies.includes(freq)) {
+        throw new Error(`Invalid frequency: ${freq}`);
       }
 
-      // ✅ Parse checklist safely
       let checklist = [];
       if (row.checkList) {
         try {
@@ -285,7 +297,6 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
         }
       }
 
-      // ✅ Parse createdForm safely
       let createdForm = [];
       if (row.createdForm) {
         try {
@@ -302,31 +313,28 @@ export const importFmsTasksUniversal = handleAsync(async (req, res) => {
         }
       }
 
-      // ✅ Resolve User & Department (IMPORTANT)
       const user = await User.findOne({ email: row.doer });
       if (!user) throw new Error(`User not found: ${row.doer}`);
 
       const dept = await Department.findOne({ name: row.department });
       if (!dept) throw new Error(`Department not found: ${row.department}`);
 
-      // ✅ Build dynamic object (handles ALL fields)
       const taskData = {
         fmsTemplateId: templateId,
         description: row.description,
         assignedTo: user._id,
         departmentOfAssignToUser: dept._id,
-        frequency: row.frequency,
+        frequency: freq,
+        linkedWithForm:
+          row.linkedWithForm === "true" || row.linkedWithForm === true,
         xValue: Number(row.value) || 0,
         checklist,
         createdForm,
-
-        // 🔥 Optional fields (auto pick if present)
         isDependent: row.isDependent === "true" || row.isDependent === true,
         dependentOn: row.dependentOn || null,
         startTimeSetting: row.startTimeSetting || undefined,
         isRecurringTask: row.isRecurringTask === "true",
         taskEndDays: Number(row.taskEndDays) || 0,
-
         createdBy: req.cookies.userId || req.user._id || null,
       };
 

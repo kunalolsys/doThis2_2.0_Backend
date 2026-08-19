@@ -22,6 +22,7 @@ import Counter from "../models/Counter.js";
 import { startOfDay, endOfDay, addDays, format } from "date-fns";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
 import Role from "../models/Role.js";
+
 const calculateInstanceStatus = (startDate) => {
   const now = new Date();
 
@@ -31,7 +32,8 @@ const calculateInstanceStatus = (startDate) => {
 
   return "Ongoing";
 };
-//**TO LAUNCH FMS */
+
+//**TO LAUNCH FMS (MANUAL / DIRECT LAUNCH) */
 export const launchFmsInstance = handleAsync(async (req, res, next) => {
   const { templateId } = req.params;
   const { launchDate: launchDateStr, endDate } = req.body;
@@ -91,29 +93,9 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
   );
 
   const sequence = String(counter.seq).padStart(5, "0");
-  const managerUser = await User.findById(template.manager._id).populate(
-    "assignShift",
-  );
 
   let instanceStartDate = launchDate;
   let instanceEndDate = endDate ? new Date(endDate) : instanceEnd;
-
-  // if (managerUser?.assignShift) {
-  //   instanceStartDate = await nextWorkingShiftDate(
-  //     launchDate,
-  //     managerUser.assignShift._id,
-  //     {},
-  //     managerUser.department || managerUser._id,
-  //   );
-
-  //   if (instanceEndDate) {
-  //     instanceEndDate = snapToShiftTime(
-  //       instanceEndDate,
-  //       managerUser.assignShift,
-  //       false, // shift end time
-  //     );
-  //   }
-  // }
 
   // Create FmsInstance
   const instance = await FmsInstance.create({
@@ -156,7 +138,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       "assignShift",
     );
 
-    // 🟢 Priority given to task's direct department context
+    // Priority given to task's direct department context
     const taskDeptContext =
       tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
 
@@ -181,7 +163,46 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       continue;
     }
 
-    if (freq === "anytime") {
+    // 🟢 HANDLE "LINKED WITH FORM" TASKS DURING MANUAL LAUNCH (Treated as Normal Task without X-Value offset)
+    if (tmplTask.linkedWithForm === true || freq.startsWith("form event")) {
+      const shiftStart = doer?.assignShift
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
+        : launchDate;
+
+      let dueDate = doer?.assignShift
+        ? snapToShiftTime(shiftStart, doer.assignShift, false)
+        : shiftStart;
+
+      dates = {
+        startDate: shiftStart,
+        dueDate,
+      };
+    }
+    // 🟢 STANDARD WORKFLOW: HANDLE NORMAL TASKS
+    else if (freq === "none" || freq === "") {
+      const shiftStart = doer?.assignShift
+        ? await nextWorkingShiftDate(
+            launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
+        : launchDate;
+
+      let dueDate = doer?.assignShift
+        ? snapToShiftTime(shiftStart, doer.assignShift, false)
+        : shiftStart;
+
+      dates = {
+        startDate: shiftStart,
+        dueDate,
+      };
+    } else if (freq === "anytime") {
       const shiftStart = doer?.assignShift
         ? await nextWorkingShiftDate(
             launchDate,
@@ -316,15 +337,24 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       }
 
       const parentWorkShift = assignedParentUser.assignShift;
-      const parentStart = parent.plannedStartDate;
-      const parentDue = parent.plannedDueDate;
+      const rawParentStart = parent.plannedStartDate;
+      const rawParentDue = parent.plannedDueDate;
+
+      const parentStart = doer?.assignShift
+        ? await nextWorkingShiftDate(
+            rawParentStart || launchDate,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          )
+        : rawParentStart || launchDate;
+
+      const parentDue = doer?.assignShift
+        ? snapToShiftTime(rawParentDue || parentStart, doer.assignShift, false)
+        : rawParentDue || parentStart;
+
       let startDate;
       let dueDate;
-
-      if (!parentStart || !parentDue) {
-        console.log(`❌ Parent dates missing for ${tmplTask.taskId}`);
-        continue;
-      }
 
       const isSameShift =
         String(doer?.assignShift?._id) === String(parentWorkShift?._id);
@@ -385,8 +415,12 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
             doer.assignShift._id,
             tmplTask.isDependent,
             {},
-            taskDeptContext, // 🟢 Evaluates against Task Department Rules
+            taskDeptContext,
           );
+
+          if (!dueDate) {
+            dueDate = parentDue;
+          }
 
           dueDate.setHours(
             parentDue.getHours(),
@@ -443,7 +477,6 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       tmplTask.decisionStep === "yes" ||
       tmplTask.decisionStep === "true";
 
-    // 🟢 PREPARE INSTANCE TASK DATA (WITH DECISION GATE FIELDS)
     const instanceTaskData = {
       fmsInstanceId: instance._id,
       fmsTaskId: tmplTask._id,
@@ -457,6 +490,7 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       assignedBy: tmplTask.assignedBy,
 
       frequency: tmplTask.frequency,
+      linkedWithForm: Boolean(tmplTask.linkedWithForm),
       xValue: tmplTask.xValue,
 
       isDependent: tmplTask.isDependent,
@@ -476,7 +510,6 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
       isVisible: false,
       updatedBy: userId,
 
-      // ── Decision Step Fields Cloned From Template Task ──
       decisionStep: isDecisionStep,
       decisionYesAction: isDecisionStep
         ? tmplTask.decisionYesAction || null
@@ -486,7 +519,6 @@ export const launchFmsInstance = handleAsync(async (req, res, next) => {
           ? tmplTask.triggerFmsTemplate || null
           : null,
 
-      // ── Runtime Execution Defaults ──
       decisionAnswer: null,
       decisionRemark: null,
       decisionSubmissionId: null,
@@ -553,12 +585,10 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
     taskId: taskIdParam,
   });
 
-  // ✅ 1. Handle not found
   if (!task) {
     return res.status(404).json({ error: "Task not found" });
   }
 
-  // ✅ 2. Safe updates
   if (req.body.checklist) {
     task.checklist = req.body.checklist;
   }
@@ -570,18 +600,15 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
     };
   }
 
-  // ✅ 3. Always calculate progress
   const checklistComplete = task.checklist?.length
     ? task.checklist.every((item) => item.completed)
     : true;
 
-  // ✅ Check mandatory form fields properly
   const formsComplete = (task.createdForm || []).every((field) => {
     if (!field.isMandatory) return true;
 
     const value = task.formData?.[field.fieldName];
 
-    // ❗ handle empty cases properly
     if (value === undefined || value === null || value === "") {
       return false;
     }
@@ -589,7 +616,6 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
     return true;
   });
 
-  // ✅ 4. Validate only when marking completed
   if (req.body.status === "Completed") {
     if (!checklistComplete || !formsComplete) {
       return res.status(400).json({
@@ -602,20 +628,17 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
     task.actualCompleteDate = new Date();
   }
 
-  // ✅ 5. Update status
   if (req.body.status) {
     task.status = req.body.status;
   }
   if (req.body.assignedTo) {
     task.assignedTo = req.body.assignedTo;
   }
-  // Handle Not Done
   if (req.body.status === "Not Done") {
     task.status = "Not Done";
     task.notDoneRemark = req.body.notDoneRemark || "";
     task.notDoneBy = req.cookies.userId || req.user?._id;
 
-    // Recursively mark all dependent children as Not Done
     const markChildrenNotDone = async (parentTaskId) => {
       const children = await FmsInstanceTask.find({
         fmsInstanceId: instanceId,
@@ -630,7 +653,6 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
 
         await child.save();
 
-        // Continue for grandchildren
         await markChildrenNotDone(child.taskId);
       }
     };
@@ -639,7 +661,6 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
   }
   await task.save();
 
-  // ✅ 6. Better progress calculation
   const progress =
     ((Number(checklistComplete) + Number(formsComplete)) / 2) * 100;
 
@@ -655,7 +676,6 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
 //**COMPLETE TASK */
 export const completeInstanceTask = handleAsync(async (req, res, next) => {
   const { id: instanceId, taskId: taskIdParam } = req.params;
-  const { status } = req.body;
 
   const task = await FmsInstanceTask.findOne({
     fmsInstanceId: instanceId,
@@ -664,7 +684,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
   if (!task) return next(new AppError("Task not found", 404));
 
-  // Mark complete validation
   if (!isFmsTaskFullyComplete(task)) {
     return res.status(400).json({
       error: "Complete checklist and mandatory forms first",
@@ -680,7 +699,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   await task.save();
   await updateInstanceProgress();
 
-  // FIND CHILDREN (reverse: who depends ON this parent task)
   const children = await FmsInstanceTask.find({
     fmsInstanceId: instanceId,
     startTimeSetting: "actual-to-planned",
@@ -699,102 +717,7 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   }
 
   const parentWorkShift = assignedParentUser.assignShift;
-  //**GLOBAL CHANGES */
-  // for (const child of children) {
-  //   try {
-  //     const workShift = await User.findById(child.assignedTo).populate(
-  //       "assignShift",
-  //     );
-  //     const shift = workShift?.assignShift;
 
-  //     if (!shift) continue;
-
-  //     const parentDate = new Date(task.actualCompleteDate);
-  //     if (!parentDate || isNaN(parentDate)) continue;
-
-  //     const x = Number(child.xValue || 0);
-  //     const freq = (child.frequency || "").toLowerCase();
-
-  //     let startDate = new Date(parentDate);
-
-  //     // ======================================================
-  //     // STEP 1: OFFSET FROM ACTUAL COMPLETION
-  //     // ======================================================
-  //     if (freq.includes("hour")) {
-  //       if (freq.includes("task+x")) {
-  //         startDate = new Date(
-  //           parentDate.getTime() + (x || 0) * 60 * 60 * 1000,
-  //         );
-  //       } else {
-  //         startDate = new Date(
-  //           parentDate.getTime() + (x || 0) * 60 * 60 * 1000 * -1,
-  //         );
-  //       }
-  //     } else {
-  //       if (freq.includes("task+x")) {
-  //         startDate = addDays(parentDate, x);
-  //       } else {
-  //         startDate = addDays(parentDate, -x);
-  //       }
-  //     }
-  //     let rawStartDate = new Date(startDate); // 👈 STORE ORIGINAL BEFORE SHIFT LOGIC
-  //     startDate = new Date(rawStartDate);
-
-  //     // ======================================================
-  //     // SHIFT BOUNDARY FIX
-  //     // ======================================================
-
-  //     const shiftStart = snapToShiftTime(startDate, shift, true);
-  //     const shiftEnd = snapToShiftTime(startDate, shift, false);
-
-  //     // if before shift start → push to shift start
-  //     if (startDate < shiftStart) {
-  //       startDate = shiftStart;
-  //     }
-
-  //     // if after shift end → move to next working day
-  //     if (startDate >= shiftEnd) {
-  //       const next = new Date(startDate);
-  //       next.setDate(next.getDate() + 1);
-
-  //       startDate = await nextWorkingShiftDate(next, shift._id);
-  //       startDate = snapToShiftTime(startDate, shift, true);
-  //     }
-
-  //     // final corrected start
-  //     // startDate = actualStart;
-  //     // ======================================================
-  //     // STEP 3: DUE DATE = SHIFT END
-  //     // ======================================================
-  //     let dueDate = snapToShiftTime(startDate, shift, false);
-
-  //     if (!dueDate || isNaN(dueDate)) {
-  //       const fallback = new Date(startDate);
-  //       const [h, m] = shift.endTime.split(":").map(Number);
-  //       fallback.setHours(h, m, 0, 0);
-  //       dueDate = fallback;
-  //     }
-
-  //     // ======================================================
-  //     // STEP 4: UPDATE CHILD
-  //     // ======================================================
-  //     child.plannedStartDate = startDate;
-  //     child.plannedDueDate = dueDate;
-
-  //     child.actualStartDate = rawStartDate;
-  //     // child.actualDueDate = null;
-
-  //     child.waitingForParent = false;
-  //     child.status = calculateTaskStatus(startDate, dueDate);
-
-  //     await child.save();
-
-  //     console.log("UPDATED CHILD:", child.taskId, startDate, dueDate);
-  //   } catch (err) {
-  //     console.error("FAILED CHILD:", child.taskId, err);
-  //   }
-  // }
-  //**HIMAIRA CHANGE */
   for (const child of children) {
     try {
       const workShift = await User.findById(child.assignedTo).populate(
@@ -804,9 +727,10 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
       if (!shift) continue;
 
-      // 🟢 Priority given to task's direct department context
       const taskDeptContext =
-        child.departmentOfAssignToUser || doer?.department || doer?._id;
+        child.departmentOfAssignToUser ||
+        workShift?.department ||
+        workShift?._id;
 
       const parentStart = task.plannedStartDate;
       const parentDue = task.plannedDueDate;
@@ -835,13 +759,9 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
         const x = Number(child.xValue || 0);
         const freq = (child.frequency || "").toLowerCase();
 
-        // Start Date comes from parent's actual completion
         startDate = new Date(task.actualCompleteDate);
         dueDate = new Date(parentDue);
 
-        // ====================================
-        // HOURS CALCULATION
-        // ====================================
         if (freq.includes("hour")) {
           let calculatedDue = new Date(parentDue);
           calculatedDue.setHours(calculatedDue.getHours() + x);
@@ -867,19 +787,19 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
             dueDate = new Date(nextShiftStart.getTime() + overflowMs);
           }
-        }
-        // ====================================
-        // DAYS CALCULATION
-        // ====================================
-        else {
+        } else {
           dueDate = await addWorkingDaysHoliday(
             parentDue,
             x,
             shift._id,
             child.isDependent,
             {},
-            taskDeptContext, // 🟢 Evaluates against Task Department Rules
+            taskDeptContext,
           );
+
+          if (!dueDate) {
+            dueDate = parentDue;
+          }
 
           dueDate.setHours(
             parentDue.getHours(),
@@ -906,9 +826,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
         }
       }
 
-      // ====================================
-      // UPDATE CHILD TASK
-      // ====================================
       child.plannedStartDate = startDate;
       child.plannedDueDate = dueDate;
       child.actualStartDate = null;
@@ -928,12 +845,13 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
   });
 });
+
 //**UPDATE FORMDATA FOR TASK */
 export const updateFormData = async (req, res, next) => {
   try {
     const { id, taskId } = req.params;
     const userId = req.cookies.userId || req.user._id || null;
-    const incomingData = req.body; // { fieldName: value }
+    const incomingData = req.body;
 
     const task = await FmsInstanceTask.findOne({
       fmsInstanceId: id,
@@ -947,16 +865,13 @@ export const updateFormData = async (req, res, next) => {
       });
     }
 
-    // ✅ Validate fields against createdForm
     const createdForm = task.createdForm || [];
-
     const updatedFormData = { ...(task.formData || {}) };
 
     for (const field of createdForm) {
       const value = incomingData[field.fieldName];
 
       if (value !== undefined) {
-        // ✅ Basic type validation
         switch (field.fieldType) {
           case "number":
             if (isNaN(value)) {
@@ -992,13 +907,10 @@ export const updateFormData = async (req, res, next) => {
         }
 
         updatedFormData[field.fieldName] = value;
-
-        // ✅ Mark field as completed
         field.completed = true;
       }
     }
 
-    // ❗ Check mandatory fields
     for (const field of createdForm) {
       if (
         field.isMandatory &&
@@ -1012,10 +924,9 @@ export const updateFormData = async (req, res, next) => {
       }
     }
 
-    // ✅ Save updates
     task.formData = updatedFormData;
     task.updatedBy = userId;
-    task.markModified("createdForm"); // important for nested update
+    task.markModified("createdForm");
     task.markModified("formData");
 
     await task.save();
@@ -1033,6 +944,7 @@ export const updateFormData = async (req, res, next) => {
     next(error);
   }
 };
+
 //**UPDATE CHECKLIST FOR TASK */
 export const updateChecklistItem = handleAsync(async (req, res, next) => {
   const { id, taskId } = req.params;
@@ -1098,6 +1010,7 @@ export const updateChecklistItem = handleAsync(async (req, res, next) => {
     },
   });
 });
+
 //**HOLD FMS INSTANCE */
 export const holdFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
@@ -1109,25 +1022,21 @@ export const holdFmsInstance = handleAsync(async (req, res) => {
   instance.status = "Onhold";
   instance.isStopped = true;
 
-  // Only pause active tasks (not completed)
   await instance.save();
   await FmsInstanceTask.updateMany(
     {
       fmsInstanceId: instance._id,
-      // status: { $nin: ["Completed", "Cancelled"] },
     },
     { status: "Onhold" },
   );
-  // await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
-  //   fmsHoldReason: reason || "Manual stop",
-  //   holdBy: currentUser,
-  // });
+
   instance.holdReason = reason || "Manual hold";
   instance.holdBy = currentUser;
 
   await instance.save();
   res.json({ success: true, message: "FMS put on hold" });
 });
+
 //**RESUME FMS INSTANCE */
 export const resumeFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
@@ -1143,7 +1052,6 @@ export const resumeFmsInstance = handleAsync(async (req, res) => {
   instance.status = newStatus;
   instance.isStopped = false;
 
-  // Restore paused tasks
   await instance.save();
   await FmsInstanceTask.updateMany(
     {
@@ -1162,6 +1070,7 @@ export const resumeFmsInstance = handleAsync(async (req, res) => {
 
   res.json({ success: true, message: "FMS resumed successfully" });
 });
+
 //**STOP FMS INSTANCE */
 export const stopFmsInstance = handleAsync(async (req, res) => {
   const instance = await FmsInstance.findById(req.params.id);
@@ -1175,20 +1084,15 @@ export const stopFmsInstance = handleAsync(async (req, res) => {
   instance.isStopped = true;
 
   await instance.save();
-  // Stop all non-completed tasks
   await FmsInstanceTask.updateMany(
     {
       fmsInstanceId: instance._id,
-      // status: { $nin: ["Completed", "Cancelled"] },
     },
     {
       status: "Stopped",
     },
   );
-  // await FmsTemplate.findByIdAndUpdate(instance.fmsTemplateId, {
-  //   fmsStoppedReason: reason || "Manual stop",
-  //   stoppedBy: currentUser,
-  // });
+
   instance.stoppedReason = reason || "Manual stop";
   instance.stoppedBy = currentUser;
 
@@ -1211,22 +1115,15 @@ export const getFmsInstances = handleAsync(async (req, res) => {
 
   const userId = req.cookies?.userId || req.user?._id;
 
-  // Extract user role safely from req.body, req.user, or req.cookies
   const roleInput = bodyRole || req.user?.role || req.cookies?.role;
   const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
   const userRole = String(rawRole || "").toLowerCase();
 
-  // Base Query
   const query = { isTerminated: false };
 
-  // =========================
-  // 👥 ROLE BASED ACCESS
-  // =========================
   if (userRole === "admin" || userRole === "pc") {
-    // ✅ ADMIN / PC sees ALL FMS instances across all users.
-    // No query.createdBy filter needed.
+    // Admin / PC sees all
   } else if (userRole === "sr. manager" || userRole === "srmanager") {
-    // Sr. Manager sees instances created by themselves or Managers
     const managerRole = await Role.findOne({ name: "Manager" })
       .select("_id")
       .lean();
@@ -1244,15 +1141,9 @@ export const getFmsInstances = handleAsync(async (req, res) => {
       query.createdBy = userId;
     }
   } else {
-    // 👤 Regular Users only see their own created instances
     query.createdBy = userId;
   }
 
-  // =========================
-  // 🔍 OPTIONAL FILTERS
-  // =========================
-
-  // Filter by isTerminated (if explicitly provided in request body)
   if (typeof isTerminated !== "undefined") {
     query.isTerminated =
       isTerminated === true ||
@@ -1261,7 +1152,6 @@ export const getFmsInstances = handleAsync(async (req, res) => {
       isTerminated === "1";
   }
 
-  // Search by instanceId OR instanceName
   if (search) {
     query.$or = [
       { instanceId: { $regex: search, $options: "i" } },
@@ -1269,17 +1159,14 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     ];
   }
 
-  // Filter by instanceId
   if (instanceId) {
     query.instanceId = { $regex: instanceId, $options: "i" };
   }
 
-  // Filter by instanceName
   if (instanceName) {
     query.instanceName = { $regex: instanceName, $options: "i" };
   }
 
-  // Status filter (upcoming, ongoing, completed, onhold, stopped)
   if (
     status &&
     ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
@@ -1296,9 +1183,6 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     query.status = statusMap[status.toLowerCase()];
   }
 
-  // =========================
-  // 🚀 DB EXECUTION
-  // =========================
   const skip = (Number(page) - 1) * Number(limit);
 
   const [instances, total] = await Promise.all([
@@ -1325,6 +1209,7 @@ export const getFmsInstances = handleAsync(async (req, res) => {
     },
   });
 });
+
 //**GET FMS COUNTS FOR DASHBOARD */
 export const getFmsInstancesCount = handleAsync(async (req, res) => {
   const matchStage = {
@@ -1341,7 +1226,6 @@ export const getFmsInstancesCount = handleAsync(async (req, res) => {
     },
   ]);
 
-  // Normalize response
   const counts = {
     upcoming: 0,
     ongoing: 0,
@@ -1373,6 +1257,7 @@ export const getFmsInstancesCount = handleAsync(async (req, res) => {
     data: counts,
   });
 });
+
 //**GET LAUNCHED FMS BY ID */
 export const getFmsInstanceById = handleAsync(async (req, res, next) => {
   const instance = await FmsInstance.findById(req.params.id)
@@ -1389,7 +1274,7 @@ export const getFMSInstanceTaskById = handleAsync(async (req, res, next) => {
   const task = await FmsInstanceTask.findById(id)
     .populate("assignedTo", "name email department assignShift")
     .populate("assignedBy", "name email")
-    .populate("updatedBy", "name email") // use as assignedBy fallback
+    .populate("updatedBy", "name email")
     .populate("departmentOfAssignToUser", "name");
   if (!task) return next(new AppError("Task not found", 404));
 
@@ -1428,11 +1313,9 @@ export const getInstanceTasks = handleAsync(async (req, res) => {
     })
     .sort("taskId");
 
-  // Send the native tasks exactly as they are in the database
   res.json({ success: true, data: tasks });
 });
 
-//** helper functions */
 const calculateTaskStatus = (startDate, dueDate) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -1448,7 +1331,8 @@ const calculateTaskStatus = (startDate, dueDate) => {
   }
   return "Pending";
 };
-//**GET FMS TEMPALTE BY FMS INSTANCE TASKS */
+
+//**GET FMS TEMPLATE BY FMS INSTANCE TASKS */
 export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
   const {
     userId,
@@ -1460,15 +1344,11 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
 
   const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
 
-  // Base FMS Task Filter matching getRoleBasedTasks
   const fmsAndConditions = [
     { isTerminated: { $ne: true } },
     { status: { $nin: ["Terminated"] } },
   ];
 
-  // =========================
-  // 1. ROLE-BASED ACCESS MATCHING
-  // =========================
   if (role === "admin" || role === "owner" || role === "pc") {
     if (selectedDoer && selectedDoer !== "all") {
       fmsAndConditions.push({
@@ -1520,14 +1400,8 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
     }
   }
 
-  // =========================
-  // 2. AGGREGATION PIPELINE
-  // =========================
   const templates = await FmsInstanceTask.aggregate([
-    // Match only tasks visible to this user/role
     { $match: { $and: fmsAndConditions } },
-
-    // Lookup FmsInstance
     {
       $lookup: {
         from: "fmsinstances",
@@ -1537,8 +1411,6 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
       },
     },
     { $unwind: "$instance" },
-
-    // Lookup FmsTemplate
     {
       $lookup: {
         from: "fmstemplates",
@@ -1548,11 +1420,7 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
       },
     },
     { $unwind: "$template" },
-
-    // Filter out deleted templates
     { $match: { "template.isDeleted": false } },
-
-    // Group to return unique templates only
     {
       $group: {
         _id: "$template._id",
@@ -1560,8 +1428,6 @@ export const getAssignedTaskTemplates = handleAsync(async (req, res) => {
         templateName: { $first: "$template.templateName" },
       },
     },
-
-    // Sort alphabetically by template name
     { $sort: { templateName: 1 } },
   ]);
 
