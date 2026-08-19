@@ -699,13 +699,11 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
   await task.save();
   await updateInstanceProgress();
 
+  // FETCH CHILD TASKS WAITING FOR ACTUAL COMPLETION OF THIS PARENT
   const children = await FmsInstanceTask.find({
     fmsInstanceId: instanceId,
     startTimeSetting: "actual-to-planned",
     dependentOn: task.taskId,
-  }).populate({
-    path: "assignedTo",
-    populate: { path: "assignShift" },
   });
 
   const assignedParentUser = await User.findById(task.assignedTo).populate(
@@ -732,100 +730,76 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
         workShift?.department ||
         workShift?._id;
 
-      const parentStart = task.plannedStartDate;
-      const parentDue = task.plannedDueDate;
-      let startDate;
-      let dueDate;
+      let startDate = new Date(task.actualCompleteDate);
+      let dueDate = new Date(startDate);
 
-      if (!parentStart || !parentDue) continue;
+      // Check if parent was completed post-shift -> rollover start date to next working shift start
+      const parentShiftEnd = snapToShiftTime(startDate, shift, false);
+      if (startDate >= parentShiftEnd) {
+        let nextDay = new Date(startDate);
+        nextDay.setDate(nextDay.getDate() + 1);
 
-      const isSameShift = String(shift?._id) === String(parentWorkShift?._id);
-
-      if (!isSameShift) {
-        console.log("⚠️ Shift mismatch → using child shift window only");
-
-        const baseDate = new Date(parentStart);
-
-        const start = await nextWorkingShiftDate(
-          baseDate,
+        const nextWorkingShift = await nextWorkingShiftDate(
+          nextDay,
           shift._id,
           {},
           taskDeptContext,
         );
 
-        startDate = snapToShiftTime(start, shift, true);
-        dueDate = snapToShiftTime(start, shift, false);
-      } else {
-        const x = Number(child.xValue || 0);
-        const freq = (child.frequency || "").toLowerCase();
+        startDate = snapToShiftTime(nextWorkingShift, shift, true);
+        dueDate = new Date(startDate);
+      }
 
-        startDate = new Date(task.actualCompleteDate);
-        dueDate = new Date(parentDue);
+      const x = Number(child.xValue || 0);
+      const freq = (child.frequency || "").toLowerCase();
 
-        if (freq.includes("hour")) {
-          let calculatedDue = new Date(parentDue);
-          calculatedDue.setHours(calculatedDue.getHours() + x);
+      // 🟢 HOURS-BASED CALCULATION (Relative to Completion Time)
+      if (freq.includes("hour")) {
+        let calculatedDue = new Date(startDate.getTime() + x * 60 * 60 * 1000);
 
-          const shiftEnd = snapToShiftTime(parentDue, shift, false);
+        const currentShiftEnd = snapToShiftTime(startDate, shift, false);
 
-          if (calculatedDue < shiftEnd) {
-            dueDate = calculatedDue;
-          } else {
-            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-
-            let nextDay = new Date(parentDue);
-            nextDay.setDate(nextDay.getDate() + 1);
-
-            const nextWorkingDay = await nextWorkingShiftDate(
-              nextDay,
-              shift._id,
-              {},
-              taskDeptContext,
-            );
-
-            const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
-
-            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
-          }
+        if (calculatedDue <= currentShiftEnd) {
+          dueDate = calculatedDue;
         } else {
-          dueDate = await addWorkingDaysHoliday(
-            parentDue,
-            x,
+          // Carry overflow hours into the start of the next working shift
+          const overflowMs =
+            calculatedDue.getTime() - currentShiftEnd.getTime();
+
+          let nextDay = new Date(startDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingDay = await nextWorkingShiftDate(
+            nextDay,
             shift._id,
-            child.isDependent,
             {},
             taskDeptContext,
           );
 
-          if (!dueDate) {
-            dueDate = parentDue;
-          }
+          const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
 
-          dueDate.setHours(
-            parentDue.getHours(),
-            parentDue.getMinutes(),
-            parentDue.getSeconds(),
-            parentDue.getMilliseconds(),
-          );
-
-          const shiftEnd = snapToShiftTime(dueDate, shift, false);
-
-          if (dueDate >= shiftEnd) {
-            let nextDay = new Date(dueDate);
-            nextDay.setDate(nextDay.getDate() + 1);
-
-            const nextWorkingDay = await nextWorkingShiftDate(
-              nextDay,
-              shift._id,
-              {},
-              taskDeptContext,
-            );
-
-            dueDate = snapToShiftTime(nextWorkingDay, shift, false);
-          }
+          dueDate = new Date(nextShiftStart.getTime() + overflowMs);
         }
       }
+      // 🟢 DAYS-BASED CALCULATION (Relative to Completion Date)
+      else {
+        const addedDaysDate = await addWorkingDaysHoliday(
+          startDate,
+          x,
+          shift._id,
+          child.isDependent,
+          {},
+          taskDeptContext,
+        );
 
+        if (addedDaysDate) {
+          dueDate = addedDaysDate;
+        }
+
+        dueDate = snapToShiftTime(dueDate, shift, false);
+      }
+
+      // UPDATE CHILD TASK DATES & UNLOCK WAITING STATUS
       child.plannedStartDate = startDate;
       child.plannedDueDate = dueDate;
       child.actualStartDate = null;
@@ -834,15 +808,17 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
       await child.save();
 
-      console.log("UPDATED CHILD:", child.taskId, startDate, dueDate);
+      console.log(
+        `✅ UNLOCKED CHILD TASK ${child.taskId}: Start=${startDate} | Due=${dueDate}`,
+      );
     } catch (err) {
-      console.error("FAILED CHILD:", child.taskId, err);
+      console.error(`❌ FAILED TO UPDATE CHILD TASK ${child.taskId}:`, err);
     }
   }
 
   res.json({
     success: true,
-    message: `Task ${task.taskId} completed. Triggered ${children.length} children`,
+    message: `Task ${task.taskId} completed. Triggered ${children.length} child task(s).`,
   });
 });
 

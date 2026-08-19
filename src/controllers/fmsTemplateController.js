@@ -11,6 +11,7 @@ import csv from "csv-parser";
 import XLSX from "xlsx";
 import { Parser } from "json2csv";
 import Role from "../models/Role.js";
+import OpenForm from "../models/OpenForm.js";
 export const createTemplate = handleAsync(async (req, res, next) => {
   const {
     templateName,
@@ -277,7 +278,7 @@ export const getTemplates = handleAsync(async (req, res) => {
   // =========================
   // 🚀 DB EXECUTION
   // =========================
-  const [templates, total] = await Promise.all([
+  const [templates, total, linkedForms] = await Promise.all([
     FmsTemplate.find(filter)
       .populate("manager srManager user", "name email")
       .sort({ createdAt: -1 })
@@ -285,11 +286,30 @@ export const getTemplates = handleAsync(async (req, res) => {
       .limit(parseInt(limit))
       .lean(),
     FmsTemplate.countDocuments(filter),
+
+    // 🟢 FETCH LINKED TEMPLATE IDs FROM OPEN FORMS
+    OpenForm.find({
+      isDeleted: { $ne: true },
+      linkedTemplate: { $ne: null },
+    })
+      .select("linkedTemplate")
+      .lean(),
   ]);
+
+  // Create a Set of linked template string IDs for O(1) checking
+  const linkedTemplateSet = new Set(
+    linkedForms.map((form) => form.linkedTemplate?.toString()).filter(Boolean),
+  );
+
+  // 🟢 MAP TEMPLATES AND ATTACH `isLinkedWithForm` DYNAMICALLY
+  const formattedTemplates = templates.map((tmpl) => ({
+    ...tmpl,
+    isLinkedWithForm: linkedTemplateSet.has(tmpl._id.toString()),
+  }));
 
   res.status(200).json({
     success: true,
-    data: templates,
+    data: formattedTemplates,
     pagination: {
       total,
       page: parseInt(page),
@@ -307,23 +327,39 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
   const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
   const userRole = String(rawRole || "").toLowerCase();
 
-  // Base filter: Return non-deleted templates (includes drafts where isDeleted is false/null/undefined)
+  // 🟢 1. FETCH ALL TEMPLATE IDs ALREADY LINKED WITH ANY ACTIVE OPEN FORM
+  const linkedFormTemplates = await OpenForm.find({
+    isDeleted: { $ne: true },
+    linkedTemplate: { $ne: null },
+  })
+    .select("linkedTemplate")
+    .lean();
+
+  const linkedTemplateIds = linkedFormTemplates
+    .map((form) => form.linkedTemplate)
+    .filter(Boolean);
+
+  // 🟢 2. BASE FILTER: EXCLUDE DELETED AND ALREADY LINKED TEMPLATES
   const filter = {
     isDeleted: { $ne: true },
+    _id: { $nin: linkedTemplateIds }, // Exclude templates that are already linked
   };
 
   // =========================
   // 👥 ROLE BASED FILTERING
   // =========================
   if (userRole === "admin" || userRole === "pc") {
-    // ✅ ADMIN / PC sees ALL templates across all users (Drafts & Launched)
-    // No filter.user constraint applied!
+    // ✅ ADMIN / PC sees ALL available (unlinked) templates across all users
   } else if (userRole === "sr. manager" || userRole === "srmanager") {
-    // Sr. Manager sees templates created by themselves or Managers
-    const managerRole = await Role.findOne({ name: "Manager" }).select("_id").lean();
+    // Sr. Manager sees unlinked templates created by themselves or Managers
+    const managerRole = await Role.findOne({ name: "Manager" })
+      .select("_id")
+      .lean();
 
     if (managerRole) {
-      const managerUsers = await User.find({ role: managerRole._id }).select("_id").lean();
+      const managerUsers = await User.find({ role: managerRole._id })
+        .select("_id")
+        .lean();
       const managerIds = managerUsers.map((u) => u._id);
 
       filter.user = {
@@ -333,7 +369,7 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
       filter.user = userId;
     }
   } else {
-    // 👤 Regular Users / Doers only see their own created templates
+    // 👤 Regular Users / Doers only see their own unlinked templates
     filter.user = userId;
   }
 
@@ -341,7 +377,9 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
   // 🚀 DB EXECUTION
   // =========================
   const templates = await FmsTemplate.find(filter)
-    .select("_id templateName fmsId description fmsDuration endDate isLaunched isDraft status")
+    .select(
+      "_id templateName fmsId description fmsDuration endDate isLaunched isDraft status",
+    )
     .populate("manager", "name email")
     .populate("srManager", "name email")
     .sort({ createdAt: -1 })

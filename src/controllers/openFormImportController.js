@@ -741,7 +741,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
     req.body.triggerFms === true ||
     req.body.triggerFms === "1" ||
     req.body.triggerFms === 1;
-  const remark = req.body.remark || "Bulk import";
   const userId = req.cookies?.userId || req.user?._id || null;
 
   const importLog = [];
@@ -785,7 +784,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       return next(new AppError("File is empty or unreadable", 400));
     }
 
-    // ── 2. HEADER & FIELD MAPPING ──────────────────────────────────────────
+    // 2. HEADER & FIELD MAPPING
     const labelToField = new Map(
       validFields.map((f) => [f.label.toLowerCase().trim(), f]),
     );
@@ -801,7 +800,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
 
     const sheetHeaders = Object.keys(rows[0] || {});
 
-    // Guard Checks
     const isErrorLogFile =
       sheetHeaders.includes("row") &&
       sheetHeaders.includes("status") &&
@@ -853,7 +851,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       );
     }
 
-    // ── 3. FETCH DYNAMIC MASTER OPTIONS IN PARALLEL ────────────────────────
+    // 3. MASTER OPTIONS
     const masterOptionsMap = {};
     const masterFields = validFields.filter(
       (f) => f.optionType === "MASTER" && f.masterSource,
@@ -863,15 +861,14 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       masterFields.map(async (field) => {
         const source = field.masterSource;
         if (!masterOptionsMap[source]) {
-          // Call directly without passing user request headers
           masterOptionsMap[source] = await fetchMasterOptions(source);
         }
       }),
     );
 
-    // ── 4. IN-MEMORY VALIDATION & BATCH PREPARATION ───────────────────────
+    // 4. IN-MEMORY VALIDATION & BATCH PREPARATION
     const seenInBatch = new Set();
-    const candidateRows = []; // Valid rows ready for DB checks
+    const candidateRows = [];
     const requiredFields = validFields.filter((f) => f.isRequired);
 
     for (let i = 0; i < rows.length; i++) {
@@ -906,7 +903,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         }
       }
 
-      if (!hasAnyValueInRow) continue; // Skip completely blank lines
+      if (!hasAnyValueInRow) continue;
 
       if (rowErrors.length > 0) {
         importLog.push({
@@ -918,7 +915,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         continue;
       }
 
-      // Check for duplicates inside the uploaded file itself
       const batchKey = JSON.stringify(responsesMap);
       if (seenInBatch.has(batchKey)) {
         importLog.push({
@@ -931,7 +927,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       }
       seenInBatch.add(batchKey);
 
-      // Build Enriched Submission Data Structure
       const enrichedSubmissionData = {};
       for (const field of form.fields) {
         enrichedSubmissionData[field.fieldId] = {
@@ -942,7 +937,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         };
       }
 
-      // Construct a DB query matcher for existing record lookup
       const duplicateMatchQuery = {};
       for (const reqField of requiredFields) {
         if (responsesMap[reqField.fieldId] !== undefined) {
@@ -960,7 +954,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       });
     }
 
-    // ── 5. OPTIMIZED BATCH DUPLICATE CHECK (1 DB QUERY) ───────────────────
+    // 5. BATCH DUPLICATE CHECK
     const existingSet = new Set();
     const queryConditions = candidateRows
       .map((c) => c.duplicateMatchQuery)
@@ -983,7 +977,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       }
     }
 
-    // Filter out existing DB records
     const rowsToInsert = [];
     for (const item of candidateRows) {
       const key = requiredFields
@@ -1002,7 +995,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       }
     }
 
-    // ── 6. BULK INSERT TO DB (BULK WRITE) ─────────────────────────────────
+    // 6. BULK INSERT
     if (rowsToInsert.length > 0) {
       const docsToCreate = rowsToInsert.map((item) => ({
         formId: form._id,
@@ -1011,34 +1004,358 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
         status: "Submitted",
       }));
 
-      // Insert all valid documents in a single operation
       const createdDocs = await FormSubmission.insertMany(docsToCreate, {
         ordered: false,
       });
 
-      // ── 7. OPTIONAL FMS TRIGGER (PARALLEL EXECUTION) ────────────────────
-      const templateId = form.linkedTemplate?._id || form.linkedTemplate;
+      const template = form.linkedTemplate;
 
-      if (triggerFms && templateId) {
+      // 7. 🟢 ALL TASKS CREATED AT ONCE WITH SHIFT-AWARE HOURS OVERFLOW
+      if (triggerFms && template) {
+        const templateTasks = await FmsTask.find({
+          fmsTemplateId: template._id,
+        }).sort("taskId");
+
         await Promise.all(
           createdDocs.map(async (doc, idx) => {
             try {
-              const newInstance = await launchFmsInstanceInternal({
-                templateId,
-                launchDate: new Date(),
-                createdBy: userId,
-                triggerType: "FORM_SUBMISSION",
+              const formSubmissionDate = new Date();
+
+              const counter = await Counter.findOneAndUpdate(
+                { _id: "fms_instance" },
+                { $inc: { seq: 1 } },
+                { upsert: true, new: true },
+              );
+
+              const instanceEnd =
+                template.fmsDuration === "Fixed Period"
+                  ? template.endDate
+                  : null;
+
+              const instance = await FmsInstance.create({
+                fmsTemplateId: template._id,
+                instanceName: `${template.templateName}`,
                 formId: form._id,
                 submissionId: doc._id,
+                triggerType: "FORM_SUBMISSION",
+                startDate: formSubmissionDate,
+                endDate: instanceEnd,
+                manager: template.manager,
+                srManager: template.srManager || null,
+                createdBy: userId,
+                status: "Ongoing",
+                fmsDuration: template.fmsDuration,
                 runtimeContext: doc.submissionData,
               });
 
-              if (newInstance) {
+              const instanceTasks = [];
+
+              for (let i = 0; i < templateTasks.length; i++) {
+                const tmplTask = templateTasks[i];
+
+                const doer = await User.findById(tmplTask.assignedTo).populate(
+                  "assignShift",
+                );
+                if (!doer || !doer.assignShift) continue;
+
+                const taskDeptContext =
+                  tmplTask.departmentOfAssignToUser ||
+                  doer?.department ||
+                  doer?._id;
+
+                let dates = { startDate: null, dueDate: null };
+                const rawFreq = (tmplTask.frequency || "").trim();
+                const freq = rawFreq.toLowerCase();
+
+                // Standalone / Recurring / Anytime / None
+                if (
+                  RECURRING_FREQUENCIES.includes(rawFreq) ||
+                  freq === "anytime" ||
+                  freq === "none"
+                ) {
+                  let shiftStart = await nextWorkingShiftDate(
+                    formSubmissionDate,
+                    doer.assignShift._id,
+                    {},
+                    taskDeptContext,
+                  );
+
+                  const shiftEnd = snapToShiftTime(
+                    formSubmissionDate,
+                    doer.assignShift,
+                    false,
+                  );
+                  if (formSubmissionDate >= shiftEnd) {
+                    let nextDay = new Date(formSubmissionDate);
+                    nextDay.setDate(nextDay.getDate() + 1);
+
+                    shiftStart = await nextWorkingShiftDate(
+                      nextDay,
+                      doer.assignShift._id,
+                      {},
+                      taskDeptContext,
+                    );
+                  }
+
+                  dates = {
+                    startDate: snapToShiftTime(
+                      shiftStart,
+                      doer.assignShift,
+                      true,
+                    ),
+                    dueDate: snapToShiftTime(
+                      shiftStart,
+                      doer.assignShift,
+                      false,
+                    ),
+                  };
+                }
+                // Form Event / Linked with Form
+                else if (
+                  tmplTask.linkedWithForm ||
+                  freq.startsWith("form event")
+                ) {
+                  let taskStartDate = new Date(formSubmissionDate);
+
+                  const shiftEnd = snapToShiftTime(
+                    formSubmissionDate,
+                    doer.assignShift,
+                    false,
+                  );
+                  if (formSubmissionDate >= shiftEnd) {
+                    let nextDay = new Date(formSubmissionDate);
+                    nextDay.setDate(nextDay.getDate() + 1);
+
+                    const nextWorkingShift = await nextWorkingShiftDate(
+                      nextDay,
+                      doer.assignShift._id,
+                      {},
+                      taskDeptContext,
+                    );
+
+                    taskStartDate = snapToShiftTime(
+                      nextWorkingShift,
+                      doer.assignShift,
+                      true,
+                    );
+                  }
+
+                  let dueDate = new Date(taskStartDate);
+                  const xValue = Number(tmplTask.xValue || 0);
+
+                  if (freq.includes("hour")) {
+                    let calculatedDue = new Date(
+                      taskStartDate.getTime() + xValue * 60 * 60 * 1000,
+                    );
+                    const shiftEndDue = snapToShiftTime(
+                      taskStartDate,
+                      doer.assignShift,
+                      false,
+                    );
+
+                    if (calculatedDue <= shiftEndDue) {
+                      dueDate = calculatedDue;
+                    } else {
+                      const overflowMs =
+                        calculatedDue.getTime() - shiftEndDue.getTime();
+                      let nextDay = new Date(taskStartDate);
+                      nextDay.setDate(nextDay.getDate() + 1);
+
+                      const nextWorkingDay = await nextWorkingShiftDate(
+                        nextDay,
+                        doer.assignShift._id,
+                        {},
+                        taskDeptContext,
+                      );
+
+                      const nextShiftStart = snapToShiftTime(
+                        nextWorkingDay,
+                        doer.assignShift,
+                        true,
+                      );
+                      dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+                    }
+                  } else {
+                    const addedDaysDate = await addWorkingDaysHoliday(
+                      taskStartDate,
+                      xValue,
+                      doer.assignShift._id,
+                      tmplTask.isDependent,
+                      {},
+                      taskDeptContext,
+                    );
+
+                    dueDate = snapToShiftTime(
+                      addedDaysDate || taskStartDate,
+                      doer.assignShift,
+                      false,
+                    );
+                  }
+
+                  dates = { startDate: taskStartDate, dueDate };
+                }
+                // 🟢 DEPENDENT TASKS FIX FOR SHIFT OVERFLOW HOURS
+                else if (tmplTask.isDependent) {
+                  if (tmplTask.startTimeSetting === "actual-to-planned") {
+                    dates = { startDate: null, dueDate: null };
+                  } else {
+                    const parentTask = instanceTasks.find(
+                      (t) => t.originalTaskId === tmplTask.dependentOn,
+                    );
+
+                    const baseStart =
+                      parentTask?.plannedStartDate || formSubmissionDate;
+                    const baseDue = parentTask?.plannedDueDate || baseStart;
+                    const xValue = Number(tmplTask.xValue || 0);
+
+                    if (freq.includes("hour")) {
+                      dates.startDate = new Date(baseStart);
+
+                      const shiftEnd = snapToShiftTime(
+                        baseDue,
+                        doer.assignShift,
+                        false,
+                      );
+                      const rawDueTime =
+                        baseDue.getTime() + xValue * 60 * 60 * 1000;
+
+                      // If hours exceed current shift end, carry overflow to next working shift start
+                      if (rawDueTime > shiftEnd.getTime()) {
+                        const overflowMs = rawDueTime - shiftEnd.getTime();
+
+                        let nextDay = new Date(baseDue);
+                        nextDay.setDate(nextDay.getDate() + 1);
+
+                        const nextWorkingDay = await nextWorkingShiftDate(
+                          nextDay,
+                          doer.assignShift._id,
+                          {},
+                          taskDeptContext,
+                        );
+
+                        const nextShiftStart = snapToShiftTime(
+                          nextWorkingDay,
+                          doer.assignShift,
+                          true,
+                        );
+
+                        dates.dueDate = new Date(
+                          nextShiftStart.getTime() + overflowMs,
+                        );
+                      } else {
+                        dates.dueDate = new Date(rawDueTime);
+                      }
+                    } else {
+                      dates.startDate = new Date(baseStart);
+                      const addedDue = await addWorkingDaysHoliday(
+                        baseDue,
+                        xValue,
+                        doer.assignShift._id,
+                        true,
+                        {},
+                        taskDeptContext,
+                      );
+                      dates.dueDate = snapToShiftTime(
+                        addedDue || baseDue,
+                        doer.assignShift,
+                        false,
+                      );
+                    }
+                  }
+                }
+                // Fallback Standard
+                else {
+                  const previousTasks = instanceTasks.map((t) => ({
+                    taskId: t.originalTaskId,
+                    plannedDueDate: t.plannedDueDate,
+                    plannedStartDate: t.plannedStartDate,
+                  }));
+
+                  dates = await fmsDateCalculator.calculateFmsTaskDates(
+                    tmplTask.toObject(),
+                    formSubmissionDate,
+                    instanceEnd,
+                    doer.assignShift?._id,
+                    previousTasks,
+                    taskDeptContext,
+                  );
+                }
+
+                // Proper dynamic taskId (e.g. FMS00001-T1)
+                const runtimeTaskId = `${instance.instanceId}-${tmplTask.taskId}`;
+
+                const isDecisionStep =
+                  tmplTask.decisionStep === true ||
+                  tmplTask.decisionStep === "yes" ||
+                  tmplTask.decisionStep === "true";
+
+                const instanceTaskData = {
+                  fmsInstanceId: instance._id,
+                  fmsTaskId: tmplTask._id,
+                  formId: form._id,
+                  submissionId: doc._id,
+                  submissionData: doc.submissionData,
+
+                  taskId: runtimeTaskId,
+                  originalTaskId: tmplTask.taskId,
+
+                  description: tmplTask.description,
+                  departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
+                  assignedTo: tmplTask.assignedTo,
+                  assignedBy: tmplTask.assignedBy,
+
+                  frequency: tmplTask.frequency,
+                  linkedWithForm: Boolean(tmplTask.linkedWithForm),
+                  xValue: tmplTask.xValue,
+
+                  isDependent: tmplTask.isDependent,
+                  dependentOn: tmplTask.dependentOn
+                    ? `${instance.instanceId}-${tmplTask.dependentOn}`
+                    : null,
+
+                  startTimeSetting: tmplTask.startTimeSetting,
+                  taskEndDays: tmplTask.taskEndDays || 0,
+
+                  plannedStartDate: dates.startDate,
+                  plannedDueDate: dates.dueDate,
+
+                  status:
+                    tmplTask.startTimeSetting === "actual-to-planned"
+                      ? "Upcoming"
+                      : "Pending",
+
+                  isVisible: false,
+                  waitingForParent:
+                    tmplTask.startTimeSetting === "actual-to-planned",
+
+                  decisionStep: isDecisionStep,
+                  decisionYesAction: isDecisionStep
+                    ? tmplTask.decisionYesAction || null
+                    : null,
+                  triggerFmsTemplate:
+                    isDecisionStep &&
+                    tmplTask.decisionYesAction === "trigger_fms"
+                      ? tmplTask.triggerFmsTemplate || null
+                      : null,
+
+                  checklist: tmplTask.checklist || [],
+                  createdForm: tmplTask.createdForm || [],
+
+                  createdBy: userId,
+                  updatedBy: userId,
+                };
+
+                const instanceTask =
+                  await FmsInstanceTask.create(instanceTaskData);
+                instanceTasks.push(instanceTask);
+              }
+
+              if (instance) {
                 await FormSubmission.updateOne(
                   { _id: doc._id },
                   {
                     $set: {
-                      triggeredInstance: newInstance._id,
+                      triggeredInstance: instance._id,
                       status: "Triggered",
                     },
                   },
@@ -1050,7 +1367,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
                 status: "imported",
                 reason: "OK",
                 submissionId: doc._id,
-                triggeredInstanceId: newInstance?._id || null,
+                triggeredInstanceId: instance?._id || null,
               });
             } catch (fmsErr) {
               importLog.push({
@@ -1063,7 +1380,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
           }),
         );
       } else {
-        // Log successful import when FMS trigger is disabled
         createdDocs.forEach((doc, idx) => {
           importLog.push({
             row: rowsToInsert[idx].rowNum,
@@ -1075,7 +1391,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
       }
     }
 
-    // ── 8. BUILD RESPONSE LOGS & CSV SUMMARY ──────────────────────────────
+    // 8. SUMMARY RESPONSE
     const importedRows = importLog.filter((l) => l.status === "imported");
     const skippedRows = importLog.filter((l) => l.status === "skipped");
     const errorRows = importLog.filter((l) => l.status === "error");

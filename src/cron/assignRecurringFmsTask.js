@@ -349,10 +349,11 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
 
   try {
     const query = instanceId
-      ? { _id: instanceId }
+      ? { _id: instanceId, triggerType: { $ne: "FORM_SUBMISSION" } } // 🟢 Exclude FORM_SUBMISSION on direct call
       : {
           status: { $nin: ["Onhold", "Stopped", "Completed", "Cancelled"] },
           isStopped: false,
+          triggerType: { $ne: "FORM_SUBMISSION" }, // 🟢 Exclude FORM_SUBMISSION during scheduled cron run
         };
 
     const instances = await FmsInstance.find(query)
@@ -360,7 +361,9 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
       .lean();
 
     if (!instances.length) {
-      console.log("ℹ️ No active FMS instances found.");
+      console.log(
+        "ℹ️ No eligible active FMS instances found for recurring generation.",
+      );
       return;
     }
 
@@ -368,6 +371,14 @@ export const generateRecurringFmsTasks = async (instanceId = null) => {
 
     for (const instance of instances) {
       try {
+        // 🟢 Double-check triggerType guard at the instance iteration level
+        if (instance.triggerType === "FORM_SUBMISSION") {
+          console.log(
+            `⏭️ Skipping form-triggered instance: ${instance.instanceId}`,
+          );
+          continue;
+        }
+
         if (!instance.fmsTemplateId?._id) continue;
 
         console.log(`\n📂 Processing FMS Instance: ${instance.instanceId}`);

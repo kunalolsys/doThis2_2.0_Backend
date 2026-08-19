@@ -569,6 +569,46 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         previousTasks,
         taskDeptContext,
       );
+
+      // 🟢 FIX: Handle hours overflow for planned-to-planned tasks
+      if (
+        tmplTask.isDependent &&
+        tmplTask.startTimeSetting === "planned-to-planned" &&
+        freq.includes("hour") &&
+        dates.startDate &&
+        dates.dueDate
+      ) {
+        const xValue = Number(tmplTask.xValue || 0);
+        const shiftEnd = snapToShiftTime(
+          dates.startDate,
+          doer.assignShift,
+          false,
+        );
+        const rawDueTime = dates.startDate.getTime() + xValue * 60 * 60 * 1000;
+
+        // If total hours exceed shift end time
+        if (rawDueTime > shiftEnd.getTime()) {
+          const overflowMs = rawDueTime - shiftEnd.getTime();
+
+          let nextDay = new Date(dates.startDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingDay = await nextWorkingShiftDate(
+            nextDay,
+            doer.assignShift._id,
+            {},
+            taskDeptContext,
+          );
+
+          const nextShiftStart = snapToShiftTime(
+            nextWorkingDay,
+            doer.assignShift,
+            true,
+          );
+
+          dates.dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+        }
+      }
     }
 
     // UNIQUE RUNTIME TASK ID
