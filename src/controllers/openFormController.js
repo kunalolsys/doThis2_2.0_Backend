@@ -11,7 +11,11 @@ import fmsDateCalculator from "../utils/fmsDateCalculator.js";
 import User from "../models/User.js";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 import Role from "../models/Role.js";
-import { addWorkingDaysHoliday, nextWorkingShiftDate, snapToShiftTime } from "../utils/dateCalculator.js";
+import {
+  addWorkingDaysHoliday,
+  nextWorkingShiftDate,
+  snapToShiftTime,
+} from "../utils/dateCalculator.js";
 
 const generateSlug = (text) => {
   return text
@@ -394,7 +398,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   }
 
   // =====================================================
-  // 7. CREATE INSTANCE TASKS WITH FORM-HIT RELATIVE DATES
+  // 7. CREATE INSTANCE TASKS WITH SHIFT-AWARE RELATIVE DATES
   // =====================================================
   const instanceTasks = [];
 
@@ -441,25 +445,82 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
 
     // 🟢 CASE A: TASK LINKED WITH FORM OR "FORM EVENT+X" FREQUENCY
     if (tmplTask.linkedWithForm || freq.startsWith("form event")) {
-      const shiftStart = doer?.assignShift
-        ? await nextWorkingShiftDate(
-            formSubmissionDate,
+      let taskStartDate = new Date(formSubmissionDate);
+
+      // Check Shift Window (e.g., 9 AM to 6 PM)
+      if (doer?.assignShift) {
+        const shiftEnd = snapToShiftTime(
+          formSubmissionDate,
+          doer.assignShift,
+          false,
+        );
+
+        // 🔴 Shift ke baad submit hua (After 6 PM) -> Shift Start Date to Next Working Day
+        if (formSubmissionDate >= shiftEnd) {
+          let nextDay = new Date(formSubmissionDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingShift = await nextWorkingShiftDate(
+            nextDay,
             doer.assignShift._id,
             {},
             taskDeptContext,
-          )
-        : formSubmissionDate;
+          );
 
-      let dueDate = shiftStart;
+          taskStartDate = snapToShiftTime(
+            nextWorkingShift,
+            doer.assignShift,
+            true,
+          );
+        }
+      }
+
+      let dueDate = new Date(taskStartDate);
       const xValue = Number(tmplTask.xValue || 0);
 
+      // 🟢 HOURS BASED CALCULATION
       if (freq.includes("hour")) {
-        // Add X Hours relative to form submission time
-        dueDate = new Date(shiftStart.getTime() + xValue * 60 * 60 * 1000);
-      } else {
-        // Add X Working Days relative to form submission time
-        dueDate = await addWorkingDaysHoliday(
-          shiftStart,
+        let calculatedDue = new Date(
+          taskStartDate.getTime() + xValue * 60 * 60 * 1000,
+        );
+
+        if (doer?.assignShift) {
+          const shiftEnd = snapToShiftTime(
+            taskStartDate,
+            doer.assignShift,
+            false,
+          );
+
+          if (calculatedDue < shiftEnd) {
+            dueDate = calculatedDue;
+          } else {
+            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+            let nextDay = new Date(taskStartDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              doer.assignShift._id,
+              {},
+              taskDeptContext,
+            );
+
+            const nextShiftStart = snapToShiftTime(
+              nextWorkingDay,
+              doer.assignShift,
+              true,
+            );
+
+            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+          }
+        } else {
+          dueDate = calculatedDue;
+        }
+      }
+      // 🟢 DAYS BASED CALCULATION
+      else {
+        const addedDaysDate = await addWorkingDaysHoliday(
+          taskStartDate,
           xValue,
           doer.assignShift._id,
           tmplTask.isDependent,
@@ -467,15 +528,17 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           taskDeptContext,
         );
 
-        if (!dueDate) {
-          dueDate = shiftStart;
+        if (addedDaysDate) {
+          dueDate = addedDaysDate;
         }
 
-        dueDate = snapToShiftTime(dueDate, doer.assignShift, false);
+        if (doer?.assignShift) {
+          dueDate = snapToShiftTime(dueDate, doer.assignShift, false);
+        }
       }
 
       dates = {
-        startDate: shiftStart,
+        startDate: taskStartDate,
         dueDate,
       };
     }
