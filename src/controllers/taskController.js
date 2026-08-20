@@ -1207,7 +1207,7 @@ export const getAllTasksWithStats = async (req, res) => {
     // =========================
     // 📊 STATUS COUNTS
     // =========================
-    const visibleTasks = allTasks.filter((t) => t.isVisible !== false);
+    const visibleTasks = allTasks;
 
     const statusCounts = {
       Pending: visibleTasks.filter((t) => t.status === "Pending").length,
@@ -1277,20 +1277,14 @@ export const filterTasks = handleAsync(async (req, res) => {
   const skip = (page - 1) * limit;
 
   const { stat, taskCategory, status, taskType } = filters;
-  // Validate dates if provided
-  // if (startDate && !startDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {
-  //    console.log(startDate)
-  //    return res.status(400).json({ success: false, message: "startDate must be YYYY-MM-DD" });
-  // }
-  // if (endDate && !endDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {
-  //    return res.status(400).json({ success: false, message: "endDate must be YYYY-MM-DD" });
-  // }
 
   const query = { isDeleted: { $ne: true } };
   const andConditions = [];
 
-  const todayStart = startOfDay(new Date());
-  const todayEnd = endOfDay(new Date());
+  const now = new Date(); // 🟢 Exact current timestamp
+  const todayStart = startOfDay(now);
+  const todayEnd = endOfDay(now);
+
   if (creatorOrAssignorId) {
     andConditions.push({
       $or: [
@@ -1334,23 +1328,20 @@ export const filterTasks = handleAsync(async (req, res) => {
     });
   }
 
-  // 📊 STAT FILTER
+  // 📊 STAT FILTER (🟢 FIXED STANDARD TASK OVERDUE FILTER)
   if (stat === "overdue") {
     andConditions.push({
       $or: [
+        { status: "Overdue" },
         {
-          taskType: "DelegationTask",
-          dueDate: { $lt: todayStart },
+          dueDate: { $lt: now },
+          status: { $nin: ["Completed", "Stopped", "Not Done"] },
         },
         {
-          taskType: "RecurringTask",
-          endDate: { $lt: todayStart },
+          endDate: { $lt: now },
+          status: { $nin: ["Completed", "Stopped", "Not Done"] },
         },
       ],
-    });
-
-    andConditions.push({
-      status: { $ne: "Completed" },
     });
   }
   if (stat === "dueToday") {
@@ -1398,33 +1389,23 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   // 🔁 TASK TYPE
   if (taskType === "RecurringTask") {
-    // ONLY generated recurring delegation tasks
     query.taskType = "DelegationTask";
-
     query.frequency = {
       $exists: true,
       $ne: null,
     };
   } else if (taskType === "DelegationTask") {
-    // ONLY normal delegation tasks
     query.taskType = "DelegationTask";
-
     query.$or = [{ frequency: { $exists: false } }, { frequency: null }];
   } else if (taskType === "All") {
-    //this is for task reassigning page
-    // Show both recurring + normal delegation tasks
     query.taskType = "DelegationTask";
   } else if (taskType === "recurring") {
-    //this is for task reassigning page
-    // Show both recurring + normal delegation tasks
     query.taskType = "RecurringTask";
   } else {
-    // hide recurring templates
     query.taskType = { $ne: "RecurringTask" };
   }
 
-  // 📅 DATE RANGE FILTER (startDate OR dueDate)
-  // 📅 DATE RANGE FILTER (FIXED)
+  // 📅 DATE RANGE FILTER
   if (startDate || endDate) {
     const filter = {};
 
@@ -1437,11 +1418,11 @@ export const filterTasks = handleAsync(async (req, res) => {
     }
 
     andConditions.push({
-      startDate: filter, // ✅ start must be inside
+      startDate: filter,
     });
 
     andConditions.push({
-      dueDate: filter, // ✅ due must be inside
+      dueDate: filter,
     });
   }
 
@@ -1449,16 +1430,14 @@ export const filterTasks = handleAsync(async (req, res) => {
   if (andConditions.length > 0) {
     query.$and = andConditions;
   }
-  // 🔥 visibility filter
+
   if (query.status !== "Upcoming" && taskType !== "All") {
     andConditions.push({
       isVisible: true,
     });
   }
-  // =========================
-  // MODULE ENABLE CHECK
-  // =========================
 
+  // MODULE ENABLE CHECK
   const moduleSettings = await ModuleSetting.find({
     moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
   }).lean();
@@ -1471,11 +1450,9 @@ export const filterTasks = handleAsync(async (req, res) => {
   const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
   const isDoThisEnabled = isModuleEnabled("DO_THIS2");
 
-  // query.taskType = { $ne: "RecurringTask" };
-  // 🚀 QUERY EXECUTION
   const [tasks, total] = await Promise.all([
     isDoThisEnabled
-      ? Task.find(query) // 🔥 Only visible tasks
+      ? Task.find(query)
           .populate("assignedTo", "name email department assignShift")
           .populate("assignedBy", "name email")
           .populate("departmentOfAssignToUser", "name")
@@ -1483,30 +1460,25 @@ export const filterTasks = handleAsync(async (req, res) => {
           .sort({ createdAt: -1 })
       : Promise.resolve([]),
 
-    // .skip(skip)
-    // .limit(limit)
-    isDoThisEnabled ? Task.countDocuments(query) : Promise.resolve(0), // 🔥 Count only visible
+    isDoThisEnabled ? Task.countDocuments(query) : Promise.resolve(0),
   ]);
-  //**get recurring task in upcoming section  */
-  // 🔥 STEP 2: Get recurring TEMPLATES (not instances)
+
+  // RECURRING TEMPLATES
   const recurringQuery = {
     taskType: "RecurringTask",
   };
 
-  // reuse same AND conditions except date + taskType
   if (andConditions.length > 0) {
     recurringQuery.$and = andConditions.filter((cond) => {
-      // ❌ remove date filters
       return !(cond.startDate || cond.dueDate);
     });
   }
+
   const recurringTemplates = isDoThisEnabled
     ? await Task.find({
         ...recurringQuery,
         taskType: "RecurringTask",
-        // Apply your userId/departmentId filters here
-        assignedTo: userId, // or your filter logic
-        // isVisible: true,
+        assignedTo: userId,
         startDate: { $exists: true },
         frequency: { $ne: "Daily" },
       })
@@ -1516,22 +1488,23 @@ export const filterTasks = handleAsync(async (req, res) => {
         .populate("dependencyConfig.taskDependent", "title")
         .lean()
     : [];
+
   const recurringIds = recurringTemplates.map((t) => t._id);
 
   const existingInstances = await Task.find({
     recurrenceTaskId: { $in: recurringIds },
     taskType: "DelegationTask",
   }).select("recurrenceTaskId startDate");
-  const existingMap = new Map();
 
+  const existingMap = new Map();
   existingInstances.forEach((task) => {
     const key = `${task.recurrenceTaskId}_${format(
       startOfDay(task.startDate),
       "yyyy-MM-dd",
     )}`;
-
     existingMap.set(key, true);
   });
+
   const getNextOccurrence = async (template, existingMap) => {
     const today = startOfDay(new Date());
 
@@ -1545,14 +1518,12 @@ export const filterTasks = handleAsync(async (req, res) => {
             : 120;
 
     const activationDate = startOfDay(new Date(template.startDate));
-
     let searchDate = today > activationDate ? today : activationDate;
 
     const templateEndDate = template.endDate
       ? endOfDay(new Date(template.endDate))
       : null;
 
-    // user shift
     const workShift = await WorkShift.findById(
       template.assignedTo?.assignShift,
     );
@@ -1572,25 +1543,12 @@ export const filterTasks = handleAsync(async (req, res) => {
 
       let isValid = false;
 
-      // ==================================================
-      // DAILY
-      // ==================================================
       if (template.frequency === "Daily") {
         isValid = true;
-      }
-
-      // ==================================================
-      // WEEKLY
-      // ==================================================
-      else if (template.frequency === "Weekly") {
+      } else if (template.frequency === "Weekly") {
         const currentDay = format(date, "EEEE").toLowerCase();
-
         isValid = template.weekDays?.includes(currentDay);
-      }
-      // ==================================================
-      // BI-WEEKLY
-      // ==================================================
-      else if (template.frequency === "Bi-weekly") {
+      } else if (template.frequency === "Bi-weekly") {
         const weekDays = [
           "sunday",
           "monday",
@@ -1609,45 +1567,26 @@ export const filterTasks = handleAsync(async (req, res) => {
           isValid = false;
         } else {
           const repeatAfter = Number(template.repeatAfter || 0);
-
           const currentIndex = date.getDay();
 
-          // First occurrence
           if (currentIndex === startIndex) {
             isValid = true;
-          }
-          // Second occurrence (can fall into next week)
-          else {
+          } else {
             const secondIndex = (startIndex + repeatAfter) % 7;
             isValid = currentIndex === secondIndex;
           }
         }
-      }
-      // ==================================================
-      // FORTNIGHTLY
-      // ==================================================
-      else if (template.frequency === "Fortnightly") {
+      } else if (template.frequency === "Fortnightly") {
         const currentDay = format(date, "EEEE").toLowerCase();
-
         const daysDiff = differenceInCalendarDays(date, activationDate);
 
         isValid =
           daysDiff >= 0 &&
           daysDiff % 14 === 0 &&
           template.weekDays?.includes(currentDay);
-      }
-
-      // ==================================================
-      // MONTHLY
-      // ==================================================
-      else if (template.frequency === "Monthly") {
+      } else if (template.frequency === "Monthly") {
         isValid = date.getDate() === activationDate.getDate();
-      }
-
-      // ==================================================
-      // QUARTERLY
-      // ==================================================
-      else if (template.frequency === "Quarterly") {
+      } else if (template.frequency === "Quarterly") {
         const monthsDiff =
           (date.getFullYear() - activationDate.getFullYear()) * 12 +
           (date.getMonth() - activationDate.getMonth());
@@ -1656,12 +1595,7 @@ export const filterTasks = handleAsync(async (req, res) => {
           monthsDiff >= 0 &&
           monthsDiff % 3 === 0 &&
           date.getDate() === activationDate.getDate();
-      }
-
-      // ==================================================
-      // HALF YEARLY
-      // ==================================================
-      else if (template.frequency === "Half Yearly") {
+      } else if (template.frequency === "Half Yearly") {
         const monthsDiff =
           (date.getFullYear() - activationDate.getFullYear()) * 12 +
           (date.getMonth() - activationDate.getMonth());
@@ -1670,12 +1604,7 @@ export const filterTasks = handleAsync(async (req, res) => {
           monthsDiff >= 0 &&
           monthsDiff % 6 === 0 &&
           date.getDate() === activationDate.getDate();
-      }
-
-      // ==================================================
-      // YEARLY
-      // ==================================================
-      else if (template.frequency === "Yearly") {
+      } else if (template.frequency === "Yearly") {
         isValid =
           date.getMonth() === activationDate.getMonth() &&
           date.getDate() === activationDate.getDate();
@@ -1683,40 +1612,24 @@ export const filterTasks = handleAsync(async (req, res) => {
 
       if (!isValid) continue;
 
-      // ==================================================
-      // CHECK HOLIDAY / WORKING DAY
-      // ==================================================
-
       const isHolidayDate = await isHoliday(date, targetUserId);
-
       const isWorking = await isWorkingDay(date, workShift, targetUserId);
 
       if (isHolidayDate || !isWorking) {
-        // Weekly/Fortnightly:
-        // skip this weekday and continue searching
-        if (template.frequency === "Weekly") {
-          continue;
-        }
-
-        // Monthly/Quarterly/HalfYearly/Yearly:
-        // push to next working day
+        if (template.frequency === "Weekly") continue;
         date = await getNextWorkingDate(date, workShift, targetUserId);
       }
-      // ==================================================
-      // SKIP already created occurrence
-      // ==================================================
 
       const key = `${template._id}_${format(startOfDay(date), "yyyy-MM-dd")}`;
 
-      if (existingMap.has(key)) {
-        continue;
-      }
+      if (existingMap.has(key)) continue;
 
       return date;
     }
 
     return null;
   };
+
   const futureRecurring = await Promise.all(
     recurringTemplates.map(async (template) => {
       const nextOccurrence = await getNextOccurrence(template, existingMap);
@@ -1725,26 +1638,19 @@ export const filterTasks = handleAsync(async (req, res) => {
 
       return {
         ...template,
-
         originalTaskType: template.taskType,
-
         taskType: "FutureRecurringTask",
-
         displayTaskType: "DelegationTask",
-
         startDate: nextOccurrence,
-
         dueDate: nextOccurrence,
-
         status: "Upcoming",
-
         isVirtualRecurring: true,
       };
     }),
   );
 
   let filteredRecurring = futureRecurring.filter(Boolean);
-  // let filteredRecurring = futureRecurring;
+
   if (startDate || endDate) {
     const startBoundary = startDate ? startOfDay(parseISO(startDate)) : null;
     const endBoundary = endDate ? endOfDay(parseISO(endDate)) : null;
@@ -1758,40 +1664,30 @@ export const filterTasks = handleAsync(async (req, res) => {
       return true;
     });
   }
-  // After calculating futureRecurring & filteredRecurring...
 
-  // 🔥 APPLY SAME FILTERS as main query
   let finalVirtualRecurring = filteredRecurring;
 
-  // 1. STATUS FILTER
   if (status && status !== "all") {
     finalVirtualRecurring = finalVirtualRecurring.filter(
       (task) => task.status === status,
     );
   }
 
-  // 2. TASK TYPE FILTER
   if (taskType) {
     finalVirtualRecurring = finalVirtualRecurring.filter(
       (task) => task.taskType === taskType || task.isVirtualRecurring,
     );
   }
 
-  // 3. OTHER FILTERS (search, stat, etc.)
   if (search) {
     finalVirtualRecurring = finalVirtualRecurring.filter((task) =>
       task.title.toLowerCase().includes(search.toLowerCase()),
     );
   }
 
-  // MERGE
-  // const allTasks = [...tasks, ...finalVirtualRecurring];
-
-  // 🔥 STEP 4: MERGE in response
-  //**GETING FMS TASKS */
+  // FMS TASKS QUERY
   const fmsQuery = {};
 
-  // USER FILTERS
   if (creatorOrAssignorId) {
     fmsQuery.$or = [
       { updatedBy: creatorOrAssignorId },
@@ -1807,7 +1703,6 @@ export const filterTasks = handleAsync(async (req, res) => {
   }
   if (createdBy) fmsQuery.updatedBy = createdBy;
 
-  // SEARCH
   if (search) {
     fmsQuery.$or = [
       { description: { $regex: search, $options: "i" } },
@@ -1815,13 +1710,8 @@ export const filterTasks = handleAsync(async (req, res) => {
     ];
   }
 
-  // STATUS
   if (status && status !== "all") fmsQuery.status = status;
 
-  // TASK TYPE (ignore for FMS)
-  // delete query.taskType;
-
-  // DATE RANGE
   if (startDate || endDate) {
     const dateFilter = {};
     if (startDate) dateFilter.$gte = startOfDay(parseISO(startDate));
@@ -1832,12 +1722,15 @@ export const filterTasks = handleAsync(async (req, res) => {
     ];
   }
 
-  // =========================
-  // 📊 STATUS / STAT FILTER
-  // =========================
+  // 📊 STAT FILTER (🟢 FIXED FMS TASK OVERDUE FILTER)
   if (stat === "overdue") {
-    fmsQuery.plannedDueDate = { $lt: todayStart };
-    fmsQuery.status = { $nin: ["Completed", "Stopped"] };
+    fmsQuery.$or = [
+      { status: "Overdue" },
+      {
+        plannedDueDate: { $lt: now },
+        status: { $nin: ["Completed", "Stopped", "Not Done"] },
+      },
+    ];
   }
 
   if (stat === "dueToday") {
@@ -1852,9 +1745,6 @@ export const filterTasks = handleAsync(async (req, res) => {
     fmsQuery.status = "Pending";
   }
 
-  // =========================
-  // 📌 TAB CATEGORY
-  // =========================
   if (!stat) {
     if (taskCategory === "today_backlog") {
       const start = startOfDay(new Date());
@@ -1873,100 +1763,60 @@ export const filterTasks = handleAsync(async (req, res) => {
     }
   }
 
-  // =========================
-  // 📊 DIRECT STATUS FILTER
-  // =========================
   if (taskCategory !== "upcoming" && status && status !== "all") {
     fmsQuery.status = status;
   }
-  // VISIBILITY
-  // if (query.status !== "Upcoming") fmsQuery.isVisible = true;
+
   const [fmsTasks, fmsTotal] = await Promise.all([
     isFmsEnabled
       ? FmsInstanceTask.find(fmsQuery)
           .populate("assignedTo", "name email department assignShift")
           .populate("assignedBy", "name email")
-          .populate("updatedBy", "name email") // use as assignedBy fallback
+          .populate("updatedBy", "name email")
           .populate("departmentOfAssignToUser", "name")
           .sort({ createdAt: -1 })
           .lean()
       : Promise.resolve([]),
-    // .skip(skip)
-    // .limit(limit)
     isFmsEnabled
       ? FmsInstanceTask.countDocuments(fmsQuery)
       : Promise.resolve(0),
   ]);
+
   const mappedFmsTasks = isFmsEnabled
     ? fmsTasks.map((task) => ({
         ...task,
         _id: task._id,
         TaskId: task.taskId,
-
         title: task.description,
         description: task.description,
-
         startDate: task.plannedStartDate,
         dueDate: task.plannedDueDate,
-
         status: task.status,
-
         assignedTo: task.assignedTo,
         assignedBy: task.assignedBy || null,
-
         departmentOfAssignToUser: task.departmentOfAssignToUser,
-
         taskType: "FmsInstanceTask",
-
         isVisible: task.isVisible,
-
         checklist: task.checklist || [],
-
         createdAt: task.createdAt,
       }))
     : [];
+
   let allTasks = [...tasks];
 
-  // // ✅ ONLY FMS TASKS
-  // if (taskType === "FmsInstanceTask") {
-  //    allTasks = isFmsEnabled ? [...mappedFmsTasks] : [];
-  // }
-  // //**This is for FMS task with normal task in task reassignment */
-  // // else if (taskType == "All") {
-  // //    allTasks.push(...tasks);
-  // //    allTasks.push(...mappedFmsTasks);
-  // // }
-  // // ✅ ONLY NORMAL TASKS
-  // else if (taskType) {
-  //    allTasks = isDoThisEnabled ? [...tasks] : [];
-  // }
-  // // ✅ ALL TASKS
-  // else {
-  //    if (isDoThisEnabled) {
-  //      allTasks.push(...tasks);
-  //    }
-
-  //    if (isFmsEnabled) {
-  //      allTasks.push(...mappedFmsTasks);
-  //    }
-  // }
-  // const actualTotal = total + fmsTotal;
   const totalTasks = allTasks.length;
-
   const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
 
   let recurringResponse = [];
-  // const shouldShowFutureRecurring = taskType != "DelegationTask";
-
   const shouldShowFutureRecurring =
     taskCategory === "upcoming" && (!taskType || taskType === "RecurringTask");
 
   if (shouldShowFutureRecurring) {
     recurringResponse = finalVirtualRecurring;
   }
+
   res.json({
     success: true,
-    // data: tasks,
     data: paginatedTasks,
     upcomingRecurringTasks: isDoThisEnabled ? recurringResponse : [],
     totalTasks: totalTasks,
@@ -1994,8 +1844,9 @@ export const filterFMSTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const todayStart = startOfDay(new Date());
-  const todayEnd = endOfDay(new Date());
+  const now = new Date(); // 🟢 Exact current date & time
+  const todayStart = startOfDay(now);
+  const todayEnd = endOfDay(now);
 
   // =========================
   // MODULE ENABLE CHECK
@@ -2059,12 +1910,16 @@ export const filterFMSTasks = handleAsync(async (req, res) => {
   }
 
   // =========================
-  // 📊 STATUS / STAT FILTER
+  // 📊 STATUS / STAT FILTER (🟢 FIXED OVERDUE FILTER)
   // =========================
   if (stat === "overdue") {
-    fmsQuery.plannedDueDate = { $lt: todayStart };
-    // Excluded "Not Done" so it doesn't show in overdue
-    fmsQuery.status = { $nin: ["Completed", "Stopped", "Not Done"] };
+    fmsQuery.$or = [
+      { status: "Overdue" },
+      {
+        plannedDueDate: { $lt: now },
+        status: { $nin: ["Completed", "Stopped", "Not Done"] },
+      },
+    ];
   }
 
   if (stat === "dueToday") {
@@ -3084,10 +2939,7 @@ export const getFMSTaskStats = handleAsync(async (req, res) => {
   const { userId, role, creatorOrAssignorId, departmentId, createdBy } =
     req.body;
 
-  const baseConditions = [];
-
-  const todayStart = startOfDay(new Date());
-  const todayEnd = endOfDay(new Date());
+  const now = new Date(); // 🟢 Exact current timestamp with hours & minutes
 
   const moduleSettings = await ModuleSetting.find({
     moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
@@ -3099,7 +2951,6 @@ export const getFMSTaskStats = handleAsync(async (req, res) => {
   };
 
   const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
-  const isDoThisEnabled = isModuleEnabled("DO_THIS2");
 
   const fmsQuery = {
     isTerminated: { $ne: true },
@@ -3141,11 +2992,17 @@ export const getFMSTaskStats = handleAsync(async (req, res) => {
         })
       : Promise.resolve(0),
 
+    // 🟢 FIXED OVERDUE COUNT (Check status OR exact time past plannedDueDate)
     isFmsEnabled
       ? FmsInstanceTask.countDocuments({
           ...fmsQuery,
-          plannedDueDate: { $lt: todayStart },
-          status: { $nin: ["Completed", "Stopped", "Not Done"] },
+          $or: [
+            { status: "Overdue" },
+            {
+              plannedDueDate: { $lt: now },
+              status: { $nin: ["Completed", "Stopped", "Not Done"] },
+            },
+          ],
         })
       : Promise.resolve(0),
   ]);
@@ -3185,8 +3042,9 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const todayStart = startOfDay(new Date());
-  const todayEnd = endOfDay(new Date());
+  const now = new Date(); // 🟢 Exact current date & time
+  const todayStart = startOfDay(now);
+  const todayEnd = endOfDay(now);
 
   const moduleSettings = await ModuleSetting.find({
     moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
@@ -3286,13 +3144,20 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
       });
     }
 
+    // 🟢 FIXED OVERDUE FILTER (Check status OR exact time past due date)
     if (stat === "overdue") {
       andConditions.push({
         $or: [
-          { taskType: "DelegationTask", dueDate: { $lt: todayEnd } },
-          { taskType: "RecurringTask", endDate: { $lt: todayEnd } },
+          { status: "Overdue" },
+          {
+            dueDate: { $lt: now },
+            status: { $nin: ["Completed", "Stopped", "Not Done"] },
+          },
+          {
+            endDate: { $lt: now },
+            status: { $nin: ["Completed", "Stopped", "Not Done"] },
+          },
         ],
-        status: { $ne: "Completed" },
       });
     }
 
@@ -3416,10 +3281,16 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
       fmsAndConditions.push({ status });
     }
 
+    // 🟢 FIXED FMS OVERDUE FILTER
     if (stat === "overdue") {
       fmsAndConditions.push({
-        plannedDueDate: { $lt: todayStart },
-        status: { $nin: ["Completed", "Stopped", "Not Done"] },
+        $or: [
+          { status: "Overdue" },
+          {
+            plannedDueDate: { $lt: now },
+            status: { $nin: ["Completed", "Stopped", "Not Done"] },
+          },
+        ],
       });
     }
 
@@ -3818,12 +3689,15 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   const existingTask = await Task.findById(id)
     .populate("assignedTo", "name email assignShift")
     .populate("assignedBy", "name email");
+
   if (!existingTask) return next(new AppError("Task not found", 404));
+
   let conversation = null;
 
   if (existingTask.conversationId) {
     conversation = await Conversations.findById(existingTask.conversationId);
   }
+
   if (!conversation) {
     conversation = await Conversations.create({
       taskId: existingTask._id,
@@ -3837,6 +3711,7 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     existingTask.conversationId = conversation._id;
     await existingTask.save();
   }
+
   const oldData = existingTask.toObject();
 
   const updateData = {
@@ -3845,6 +3720,7 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
   };
 
   if (completeStatus) {
+    // 1. CHECKLIST VALIDATION
     if (existingTask.checklist && existingTask.checklist.length > 0) {
       const allChecklistDone = existingTask.checklist.every(
         (item) => item?.isCompleted === true,
@@ -3858,6 +3734,8 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
         });
       }
     }
+
+    // 2. SOCKET & NOTIFICATIONS
     const io = getIO();
 
     if (
@@ -3883,27 +3761,21 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     ) {
       const emailTemplate = taskCompletedTemplate({
         assignedByName: existingTask.assignedBy?.name || "Manager",
-
         completedBy: existingTask.assignedTo?.name || "User",
-
         taskId: existingTask.TaskId,
-
         title: existingTask.title,
-
         remark: existingTask.remark || "",
         completedAt: existingTask.completedAt || "",
-
         frontendUrl,
       });
 
       sendEmail({
         to: existingTask.assignedBy.email,
-
         subject: emailTemplate.subject,
-
         html: emailTemplate.html,
       });
     }
+
     sendNotification({
       type: "TASK_COMPLETED",
       task: existingTask,
@@ -3962,8 +3834,10 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     message,
   });
 
-  const justCompleted = completeStatus === true && oldData.status !== true;
+  const justCompleted =
+    completeStatus === true && oldData.status !== "Completed";
 
+  // 3. UNLOCK & CALCULATE DEPENDENT TASKS (ACTUAL-TO-PLANNED)
   if (justCompleted) {
     const dependentTasks = await Task.find({
       "dependencyConfig.taskDependent": updatedTask._id,
@@ -3975,9 +3849,11 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
     });
 
     console.log("Dependent tasks found:", dependentTasks.length);
+
     const assignedParentUser = await User.findById(
       updatedTask.assignedTo,
     ).populate("assignShift");
+
     if (!assignedParentUser) {
       return next(
         new AppError(`User with ID ${updatedTask.assignedTo} not found`, 404),
@@ -4017,91 +3893,24 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
         let childDue;
 
         // =========================================================
-        // CHILD START DATE
+        // CHILD START DATE CALCULATION
         // =========================================================
+        const completionTime = new Date(updatedTask.completedAt);
+        const childShiftEnd = snapToShiftTime(completionTime, workShift, false);
 
         if (!isSameShift) {
           console.log("⚠️ Shift mismatch → using child shift calendar");
-
-          // Child starts on the first working day available
-          // from parent's START date.
           const childStartDay = await nextWorkingShiftDate(
             parentStart,
             workShift._id,
             {},
             targetChildDeptId,
           );
-
           childStart = snapToShiftTime(childStartDay, workShift, true);
         } else {
-          // Same shift → child starts when parent is completed.
-          childStart = new Date(updatedTask.completedAt);
-        }
-
-        // =========================================================
-        // HOURS
-        // =========================================================
-        //
-        // T + X hours:
-        //
-        // x = 1 → next working day + 1 hour
-        // x = 2 → 2nd working day + 2 hours
-        // x = 3 → 3rd working day + 3 hours
-        //
-        // The DATE is calculated using the working-day calendar.
-        // The TIME is calculated separately.
-        // =========================================================
-
-        if (freqStr.includes("hour")) {
-          let targetWorkingDay;
-
-          if (!isSameShift) {
-            // Start from child start date.
-            // x = 1 means NEXT working day.
-            targetWorkingDay = await addWorkingDaysHoliday(
-              childStart,
-              x,
-              workShift._id,
-              false,
-              {},
-              targetChildDeptId,
-            );
-          } else {
-            // Same shift:
-            // Start from parent completion date.
-            // x = 1 means NEXT working day.
-            targetWorkingDay = await addWorkingDaysHoliday(
-              childStart,
-              x,
-              workShift._id,
-              false,
-              {},
-              targetChildDeptId,
-            );
-          }
-
-          const targetShiftStart = snapToShiftTime(
-            targetWorkingDay,
-            workShift,
-            true,
-          );
-
-          // Add X hours to the TARGET working day's shift start.
-          let calculatedDue = new Date(targetShiftStart);
-
-          calculatedDue.setHours(calculatedDue.getHours() + x);
-
-          const shiftEnd = snapToShiftTime(targetShiftStart, workShift, false);
-
-          // Still inside the shift
-          if (calculatedDue <= shiftEnd) {
-            childDue = calculatedDue;
-          } else {
-            // Remaining hours move to the next working day.
-            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-
-            let nextDay = new Date(targetShiftStart);
-
+          // Post-Shift completion check (e.g. completed after 11:00 AM shift end)
+          if (completionTime >= childShiftEnd) {
+            let nextDay = new Date(completionTime);
             nextDay.setDate(nextDay.getDate() + 1);
 
             const nextWorkingDay = await nextWorkingShiftDate(
@@ -4111,36 +3920,63 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
               targetChildDeptId,
             );
 
-            const nextShiftStart = snapToShiftTime(
-              nextWorkingDay,
-              workShift,
-              true,
-            );
-
-            childDue = new Date(nextShiftStart.getTime() + overflowMs);
+            childStart = snapToShiftTime(nextWorkingDay, workShift, true);
+          } else {
+            childStart = completionTime;
           }
         }
 
         // =========================================================
-        // DAYS
+        // HOURS DEPENDENCY (WITH SHIFT OVERFLOW)
+        // e.g. X = 3 hours on 9-11 AM Shift (2h window)
+        // -> 2h consumed today (11 AM) + 1h overflow -> 10:00 AM Next Shift Day
         // =========================================================
-        //
-        // T + X days:
-        //
-        // x = 1 → NEXT working day
-        // x = 2 → 2nd working day after child start
-        // x = 3 → 3rd working day after child start
-        //
-        // Weekends and holidays are skipped.
-        //
-        // Due time = CHILD SHIFT END TIME
+        if (freqStr.includes("hour")) {
+          let remainingMs = x * 60 * 60 * 1000;
+          let tempStart = new Date(childStart);
+          let tempShiftEnd = snapToShiftTime(tempStart, workShift, false);
+
+          while (remainingMs > 0) {
+            const availableMsInShift =
+              tempShiftEnd.getTime() - tempStart.getTime();
+
+            if (remainingMs <= availableMsInShift) {
+              childDue = new Date(tempStart.getTime() + remainingMs);
+              remainingMs = 0;
+            } else {
+              // Consume available hours in current shift
+              remainingMs -= Math.max(0, availableMsInShift);
+
+              // Rollover remaining hours to start of next working day shift
+              let nextDay = new Date(tempStart);
+              nextDay.setDate(nextDay.getDate() + 1);
+
+              const nextWorkingDay = await nextWorkingShiftDate(
+                nextDay,
+                workShift._id,
+                {},
+                targetChildDeptId,
+              );
+
+              tempStart = snapToShiftTime(nextWorkingDay, workShift, true);
+              tempShiftEnd = snapToShiftTime(nextWorkingDay, workShift, false);
+            }
+          }
+
+          console.log(
+            `⏱️ HOURS dependency | ` +
+              `Start: ${childStart.toISOString()} | ` +
+              `X: ${x} hrs | ` +
+              `Due: ${childDue.toISOString()}`,
+          );
+        }
+
+        // =========================================================
+        // DAYS DEPENDENCY
         // =========================================================
         else {
-          // x must be at least 1 for T+X days
           const daysToAdd = Math.max(1, x);
 
-          // Start counting AFTER childStart.
-          // addWorkingDaysHoliday must treat childStart as day 0.
           childDue = await addWorkingDaysHoliday(
             childStart,
             daysToAdd,
@@ -4150,8 +3986,6 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
             targetChildDeptId,
           );
 
-          // Make sure the resulting date is a valid working day.
-          // This also protects against holiday/weekend calculation issues.
           const dueIsHoliday = await isHoliday(childDue, targetChildDeptId);
           const dueIsWorkingDay = await isWorkingDay(
             childDue,
@@ -4168,23 +4002,19 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
             );
           }
 
-          // IMPORTANT:
-          // For DAYS dependency, always use CHILD SHIFT END TIME.
-          // Do NOT use completedAt time or parent time.
           childDue = snapToShiftTime(childDue, workShift, false);
 
           console.log(
             `📅 DAYS dependency | ` +
               `Start: ${childStart.toISOString()} | ` +
-              `X: ${daysToAdd} | ` +
+              `X: ${daysToAdd} days | ` +
               `Due: ${childDue.toISOString()}`,
           );
         }
 
         // =========================================================
-        // SAVE CHILD TASK
+        // SAVE UPDATED CHILD TASK
         // =========================================================
-
         const childTask = await Task.findById(depTask._id);
 
         if (childTask) {
@@ -4196,14 +4026,8 @@ export const toggleTaskCompletion = handleAsync(async (req, res, next) => {
           await childTask.save();
 
           console.log(`✅ Updated dependent task ${depTask.TaskId}`);
-
           console.log(`   Start: ${childStart.toISOString()}`);
-
           console.log(`   Due: ${childDue.toISOString()}`);
-
-          console.log(`   X: ${x}`);
-
-          console.log(`   Frequency: ${freqStr}`);
         }
       } catch (err) {
         console.error(`❌ Error updating child task ${depTask.TaskId}:`, err);

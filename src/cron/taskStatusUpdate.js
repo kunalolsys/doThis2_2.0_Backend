@@ -7,11 +7,11 @@ import FmsInstance from "../models/FmsInstance.js";
 // const SCHEDULE = "*/5 * * * *";
 const SCHEDULE = "*/10 * * * * *";
 function resolveDueDate(task) {
-  if (task.plannedDueDate) return task.plannedDueDate; // FMS Priority
-  if (task.dueDate) return task.dueDate;
-  if (task.endDate) return task.endDate;
+  if (task.plannedDueDate) return new Date(task.plannedDueDate); // FMS Priority
+  if (task.dueDate) return new Date(task.dueDate);
+  if (task.endDate) return new Date(task.endDate);
   if (task.startDate && typeof task.taskEndDays === "number") {
-    return addDays(task.startDate, task.taskEndDays || 0);
+    return addDays(new Date(task.startDate), task.taskEndDays || 0);
   }
   return null;
 }
@@ -26,9 +26,7 @@ function isChecklistComplete(task) {
 
 async function updateTaskStatuses() {
   try {
-    const now = new Date();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date(); // 🟢 Exact current date & time
 
     // 1️⃣ REGULAR TASKS
     const regularTasks = await Task.find({}).lean();
@@ -38,23 +36,18 @@ async function updateTaskStatuses() {
       const start = t.startDate ? new Date(t.startDate) : null;
       const due = resolveDueDate(t);
 
-      if (start) start.setHours(0, 0, 0, 0);
-      if (due) due.setHours(0, 0, 0, 0);
-
       const completed = t.status === "Completed";
       // || isChecklistComplete(t);
       let newStatus = t.status || "Pending";
 
       if (completed) {
         newStatus = "Completed";
-      } else if (start && start > today) {
+      } else if (start && start > now) {
         newStatus = "Upcoming";
-      } else if (start && due && today >= start && today <= due) {
+      } else if (due && due < now) {
+        newStatus = "Overdue"; // 🟢 Correctly triggers when time surpasses due time (e.g. 11:37 AM > 11:00 AM)
+      } else if (start && due && now >= start && now <= due) {
         newStatus = "Pending";
-      } else if (due && due.getTime() > today.getTime()) {
-        newStatus = "Delayed";
-      } else if (due && due < today) {
-        newStatus = "Overdue";
       } else {
         newStatus = "Pending";
       }
@@ -63,6 +56,7 @@ async function updateTaskStatuses() {
         regularUpdates.push({ id: t._id, status: newStatus });
       }
     }
+
     const blockedInstances = await FmsInstance.find({
       $or: [
         { status: { $in: ["Onhold", "Stopped"] } },
@@ -74,6 +68,7 @@ async function updateTaskStatuses() {
     const blockedInstanceIds = new Set(
       blockedInstances.map((i) => i._id.toString()),
     );
+
     // 2️⃣ FMS INSTANCE TASKS (NEW!)
     const fmsTasks = await FmsInstanceTask.find({}).lean();
     const fmsUpdates = [];
@@ -103,6 +98,7 @@ async function updateTaskStatuses() {
 
         continue; // ⛔ skip normal logic
       }
+
       // Skip already completed/cancelled/notdone
       if (
         t.status === "Completed" ||
@@ -114,17 +110,14 @@ async function updateTaskStatuses() {
       const start = t.plannedStartDate ? new Date(t.plannedStartDate) : null;
       const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;
 
-      if (start) start.setHours(0, 0, 0, 0);
-      if (due) due.setHours(0, 0, 0, 0);
-
       let newStatus = t.status || "Upcoming";
 
-      if (start && start > today) {
+      if (start && start > now) {
         newStatus = "Upcoming";
-      } else if (due && due.getTime() > today.getTime()) {
-        newStatus = "Delayed";
-      } else if (due && due < today) {
-        newStatus = "Overdue";
+      } else if (due && due < now) {
+        newStatus = "Overdue"; // 🟢 Correct exact time comparison for FMS
+      } else if (start && due && now >= start && now <= due) {
+        newStatus = "Pending";
       } else {
         newStatus = "Pending";
       }
@@ -135,18 +128,8 @@ async function updateTaskStatuses() {
     }
 
     // 3️⃣ BULK UPDATES
-    const allBulkOps = [];
-
     if (regularUpdates.length > 0) {
       console.log(`[REGULAR] ${regularUpdates.length} task updates`);
-      allBulkOps.push(
-        ...regularUpdates.map((u) => ({
-          updateOne: {
-            filter: { _id: u.id },
-            update: { $set: { status: u.status } },
-          },
-        })),
-      );
       await Task.bulkWrite(
         regularUpdates.map((u) => ({
           updateOne: {

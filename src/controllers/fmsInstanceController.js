@@ -714,26 +714,25 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     return next(new AppError(`User with ID ${task.assignedTo} not found`, 404));
   }
 
-  const parentWorkShift = assignedParentUser.assignShift;
-
   for (const child of children) {
     try {
-      const workShift = await User.findById(child.assignedTo).populate(
+      const workShiftUser = await User.findById(child.assignedTo).populate(
         "assignShift",
       );
-      const shift = workShift?.assignShift;
+      const shift = workShiftUser?.assignShift;
 
       if (!shift) continue;
 
       const taskDeptContext =
         child.departmentOfAssignToUser ||
-        workShift?.department ||
-        workShift?._id;
+        workShiftUser?.department ||
+        workShiftUser?._id;
 
       let startDate = new Date(task.actualCompleteDate);
       let dueDate = new Date(startDate);
 
-      // Check if parent was completed post-shift -> rollover start date to next working shift start
+      // 🟢 1. POST-SHIFT COMPLETION ROLLOVER
+      // Agar parent task shift end ke baad complete hua hai, to child ka start agle working day ke shift start par hoga
       const parentShiftEnd = snapToShiftTime(startDate, shift, false);
       if (startDate >= parentShiftEnd) {
         let nextDay = new Date(startDate);
@@ -753,39 +752,43 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
       const x = Number(child.xValue || 0);
       const freq = (child.frequency || "").toLowerCase();
 
-      // 🟢 HOURS-BASED CALCULATION (Relative to Completion Time)
+      // 🟢 2. HOURS-BASED CALCULATION (WITH MULTI-SHIFT OVERFLOW LOOP)
       if (freq.includes("hour")) {
-        let calculatedDue = new Date(startDate.getTime() + x * 60 * 60 * 1000);
+        let remainingMs = x * 60 * 60 * 1000;
+        let tempStart = new Date(startDate);
+        let tempShiftEnd = snapToShiftTime(tempStart, shift, false);
 
-        const currentShiftEnd = snapToShiftTime(startDate, shift, false);
+        while (remainingMs > 0) {
+          const availableMsInShift = tempShiftEnd.getTime() - tempStart.getTime();
 
-        if (calculatedDue <= currentShiftEnd) {
-          dueDate = calculatedDue;
-        } else {
-          // Carry overflow hours into the start of the next working shift
-          const overflowMs =
-            calculatedDue.getTime() - currentShiftEnd.getTime();
+          if (remainingMs <= availableMsInShift) {
+            dueDate = new Date(tempStart.getTime() + remainingMs);
+            remainingMs = 0;
+          } else {
+            // Consume available shift hours
+            remainingMs -= Math.max(0, availableMsInShift);
 
-          let nextDay = new Date(startDate);
-          nextDay.setDate(nextDay.getDate() + 1);
+            // Move to start of next working day's shift
+            let nextDay = new Date(tempStart);
+            nextDay.setDate(nextDay.getDate() + 1);
 
-          const nextWorkingDay = await nextWorkingShiftDate(
-            nextDay,
-            shift._id,
-            {},
-            taskDeptContext,
-          );
+            const nextWorkingDay = await nextWorkingShiftDate(
+              nextDay,
+              shift._id,
+              {},
+              taskDeptContext,
+            );
 
-          const nextShiftStart = snapToShiftTime(nextWorkingDay, shift, true);
-
-          dueDate = new Date(nextShiftStart.getTime() + overflowMs);
+            tempStart = snapToShiftTime(nextWorkingDay, shift, true);
+            tempShiftEnd = snapToShiftTime(nextWorkingDay, shift, false);
+          }
         }
       }
-      // 🟢 DAYS-BASED CALCULATION (Relative to Completion Date)
+      // 🟢 3. DAYS-BASED CALCULATION
       else {
         const addedDaysDate = await addWorkingDaysHoliday(
           startDate,
-          x,
+          Math.max(1, x),
           shift._id,
           child.isDependent,
           {},
@@ -809,10 +812,10 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
       await child.save();
 
       console.log(
-        `✅ UNLOCKED CHILD TASK ${child.taskId}: Start=${startDate} | Due=${dueDate}`,
+        `✅ UNLOCKED CHILD FMS TASK ${child.taskId}: Start=${startDate.toISOString()} | Due=${dueDate.toISOString()}`,
       );
     } catch (err) {
-      console.error(`❌ FAILED TO UPDATE CHILD TASK ${child.taskId}:`, err);
+      console.error(`❌ FAILED TO UPDATE CHILD FMS TASK ${child.taskId}:`, err);
     }
   }
 
@@ -821,7 +824,6 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
     message: `Task ${task.taskId} completed. Triggered ${children.length} child task(s).`,
   });
 });
-
 //**UPDATE FORMDATA FOR TASK */
 export const updateFormData = async (req, res, next) => {
   try {
