@@ -6,42 +6,11 @@ import AppError from "../utils/AppError.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import FmsInstance from "../models/FmsInstance.js";
 
-// Keep controller focused: remove unused helper imports/vars when not used.
-
 const safeObjectId = (id) => {
   if (!id) return null;
   return mongoose.Types.ObjectId.isValid(id)
     ? new mongoose.Types.ObjectId(id)
     : null;
-};
-
-// Define "on time" for FMS as: completed on/before plannedDueDate.
-// late as: completed after plannedDueDate.
-const buildTaskMatch = ({ start, end, instanceId, templateId, status }) => {
-  const match = {
-    isVisible: true,
-  };
-
-  // Time window: use plannedDueDate if available, else actualCompleteDate.
-  match.$or = [
-    { plannedDueDate: { $ne: null, $gte: start, $lte: end } },
-    { actualCompleteDate: { $ne: null, $gte: start, $lte: end } },
-  ];
-
-  if (instanceId) match.fmsInstanceId = instanceId;
-  if (templateId) match.fmsTemplateId = templateId; // may be null/not present
-
-  if (
-    status &&
-    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(status)
-  ) {
-    // In instance model statuses.
-    // We don't have instance.status in this collection, so we will filter later via lookup.
-    // Keeping here as a marker.
-    match.__instanceStatus = status;
-  }
-
-  return match;
 };
 
 export const getFmsReport = handleAsync(async (req, res, next) => {
@@ -59,14 +28,13 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     page = 1,
   } = req.body;
 
-  // normalize
+  // Normalize memberIds
   if (memberIds === "all" || !Array.isArray(memberIds)) memberIds = [];
 
   const instanceObjectId = safeObjectId(instanceId);
   const templateObjectId = safeObjectId(templateId);
-
-  let managerObjectId = safeObjectId(managerId);
-  let srManagerObjectId = safeObjectId(srManagerId);
+  const managerObjectId = safeObjectId(managerId);
+  const srManagerObjectId = safeObjectId(srManagerId);
 
   const userIdSet = new Set();
   if (Array.isArray(memberIds)) {
@@ -86,33 +54,65 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
 
   if (!start || !end) return next(new AppError("Invalid date range", 400));
 
-  // We will compute summary from FmsInstanceTask and optionally filter by instance status via lookup.
+  const now = new Date();
+
+  // 🟢 1. BASE MATCH (Includes tasks with planned dates OR created in range)
   const baseMatch = {
-    isVisible: true,
     $or: [
-      { plannedDueDate: { $ne: null, $gte: start, $lte: end } },
-      // { actualCompleteDate: { $ne: null, $gte: start, $lte: end } },
+      { plannedDueDate: { $gte: start, $lte: end } },
+      { plannedStartDate: { $gte: start, $lte: end } },
+      { actualCompleteDate: { $gte: start, $lte: end } },
+      { createdAt: { $gte: start, $lte: end } }, // 👈 Missing start/end dates vaale tasks bhi count honge
     ],
   };
-
-  if (instanceObjectId) baseMatch.fmsInstanceId = instanceObjectId;
 
   if (userIdArray.length > 0) {
     baseMatch.assignedTo = { $in: userIdArray };
   }
 
-  // Aggregation pipeline
+  // Instance & Template filters
+  if (instanceObjectId) {
+    baseMatch.fmsInstanceId = instanceObjectId;
+  } else if (templateObjectId) {
+    const matchingInstances = await FmsInstance.find({
+      fmsTemplateId: templateObjectId,
+    })
+      .select("_id")
+      .lean();
+
+    const instanceIds = matchingInstances.map((i) => i._id);
+    baseMatch.fmsInstanceId = instanceIds.length
+      ? { $in: instanceIds }
+      : { $in: [new mongoose.Types.ObjectId()] };
+  }
+
+  const getInstanceStatusMatch = () => {
+    if (
+      !instanceStatus ||
+      !["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
+        String(instanceStatus).toLowerCase(),
+      )
+    ) {
+      return null;
+    }
+
+    const s = String(instanceStatus).toLowerCase();
+    const map = {
+      upcoming: "Upcoming",
+      ongoing: { $in: ["Ongoing", "InProcess"] },
+      completed: { $in: ["Completed", "Cancelled"] },
+      onhold: { $in: ["Onhold"] },
+      stopped: { $in: ["Stopped"] },
+    };
+
+    return { $match: { "instance.status": map[s] } };
+  };
+
+  const statusMatchStage = getInstanceStatusMatch();
+
+  // 🟢 2. TOP PERFORMERS AGGREGATION PIPELINE
   const pipeline = [
     { $match: baseMatch },
-
-    // Only completed tasks should contribute to on-time/late scoring.
-    // This fixes cases where a task marked "Overdue/Pending" but not completed
-    // was counted as notDoneOnTime.
-    {
-      $match: { status: "Completed", actualCompleteDate: { $ne: null } },
-    },
-
-    // join instance for status filtering and metadata
     {
       $lookup: {
         from: "fmsinstances",
@@ -122,31 +122,13 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       },
     },
     { $unwind: { path: "$instance", preserveNullAndEmptyArrays: false } },
+  ];
 
-    // optional instance status filter
-    ...(instanceStatus &&
-    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
-      String(instanceStatus).toLowerCase(),
-    )
-      ? [
-          {
-            $match: {
-              "instance.status": (() => {
-                const s = String(instanceStatus).toLowerCase();
-                const map = {
-                  upcoming: "Upcoming",
-                  ongoing: { $in: ["Ongoing", "InProcess"] },
-                  completed: { $in: ["Completed", "Cancelled"] },
-                  onhold: { $in: ["Onhold"] },
-                  stopped: { $in: ["Stopped"] },
-                };
-                return map[s];
-              })(),
-            },
-          },
-        ]
-      : []),
+  if (statusMatchStage) {
+    pipeline.push(statusMatchStage);
+  }
 
+  pipeline.push(
     {
       $group: {
         _id: "$assignedTo",
@@ -156,6 +138,7 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             $cond: [
               {
                 $and: [
+                  { $eq: ["$status", "Completed"] },
                   { $ne: ["$actualCompleteDate", null] },
                   { $lte: ["$actualCompleteDate", "$plannedDueDate"] },
                 ],
@@ -170,8 +153,49 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             $cond: [
               {
                 $and: [
+                  { $eq: ["$status", "Completed"] },
                   { $ne: ["$actualCompleteDate", null] },
                   { $gt: ["$actualCompleteDate", "$plannedDueDate"] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        // 🟢 ACCURATE OVERDUE (Strictly checks plannedDueDate != null and not pending)
+        overdueCount: {
+          $sum: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ["$status", "Overdue"] },
+                  {
+                    $and: [
+                      { $ne: ["$plannedDueDate", null] },
+                      { $lt: ["$plannedDueDate", now] },
+                      {
+                        $not: {
+                          $in: ["$status", ["Completed", "Stopped", "Not Done"]],
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        // 🟢 PENDING / WAITING TASKS (Without dates)
+        pendingCount: {
+          $sum: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ["$status", "Pending"] },
+                  { $eq: ["$waitingForParent", true] },
                 ],
               },
               1,
@@ -231,11 +255,8 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
         },
       },
     },
-    { $match: { score: { $gt: 0 } } },
-    { $sort: { score: -1, totalTasks: -1 } },
-    { $limit: 3 },
-
-    // enrich user + role
+    { $sort: { score: -1, doneOnTime: -1, totalTasks: -1 } },
+    { $limit: 10 },
     {
       $lookup: {
         from: "users",
@@ -265,17 +286,18 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
         totalTasks: 1,
         doneOnTime: 1,
         notDoneOnTime: 1,
+        overdueCount: 1,
+        pendingCount: 1,
         notDone: 1,
         score: 1,
         lateScore: 1,
       },
     },
-  ];
+  );
 
   const topPerformers = await FmsInstanceTask.aggregate(pipeline);
 
-  // Template-wise summary for cleaner UI: group by FMS template (via FmsInstance -> fmsTemplateId)
-  // Assumption (scope): tasks where user is the assignee (FmsInstanceTask.assignedTo)
+  // 🟢 3. TEMPLATE-WISE SUMMARY PIPELINE
   const templatePipeline = [
     { $match: baseMatch },
     {
@@ -287,43 +309,53 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       },
     },
     { $unwind: { path: "$instance", preserveNullAndEmptyArrays: false } },
-    ...(instanceStatus &&
-    ["upcoming", "ongoing", "completed", "onhold", "stopped"].includes(
-      String(instanceStatus).toLowerCase(),
-    )
-      ? [
-          {
-            $match: {
-              "instance.status": (() => {
-                const s = String(instanceStatus).toLowerCase();
-                const map = {
-                  upcoming: "Upcoming",
-                  ongoing: { $in: ["Ongoing", "InProcess"] },
-                  completed: { $in: ["Completed", "Cancelled"] },
-                  onhold: { $in: ["Onhold"] },
-                  stopped: { $in: ["Stopped"] },
-                };
-                return map[s];
-              })(),
-            },
-          },
-        ]
-      : []),
-    ...(templateObjectId
-      ? [{ $match: { "instance.fmsTemplateId": templateObjectId } }]
-      : []),
+  ];
 
+  if (statusMatchStage) {
+    templatePipeline.push(statusMatchStage);
+  }
+
+  templatePipeline.push(
     {
       $group: {
         _id: "$instance.fmsTemplateId",
         assigned: { $sum: 1 },
         completed: {
           $sum: {
+            $cond: [{ $eq: ["$status", "Completed"] }, 1, 0],
+          },
+        },
+        overdue: {
+          $sum: {
             $cond: [
               {
-                $and: [
-                  { $ne: ["$actualCompleteDate", null] },
-                  { $eq: ["$status", "Completed"] },
+                $or: [
+                  { $eq: ["$status", "Overdue"] },
+                  {
+                    $and: [
+                      { $ne: ["$plannedDueDate", null] },
+                      { $lt: ["$plannedDueDate", now] },
+                      {
+                        $not: {
+                          $in: ["$status", ["Completed", "Stopped", "Not Done"]],
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        pending: {
+          $sum: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ["$status", "Pending"] },
+                  { $eq: ["$waitingForParent", true] },
                 ],
               },
               1,
@@ -336,8 +368,8 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$actualCompleteDate", null] },
                   { $eq: ["$status", "Completed"] },
+                  { $ne: ["$actualCompleteDate", null] },
                   { $lte: ["$actualCompleteDate", "$plannedDueDate"] },
                 ],
               },
@@ -351,8 +383,8 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
             $cond: [
               {
                 $and: [
-                  { $ne: ["$actualCompleteDate", null] },
                   { $eq: ["$status", "Completed"] },
+                  { $ne: ["$actualCompleteDate", null] },
                   { $gt: ["$actualCompleteDate", "$plannedDueDate"] },
                 ],
               },
@@ -428,10 +460,14 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       $project: {
         _id: 0,
         fmsTemplateId: "$_id",
-        templateName: "$template.templateName",
-        fmsId: "$template.fmsId",
+        templateName: {
+          $ifNull: ["$template.templateName", "Unknown Template"],
+        },
+        fmsId: { $ifNull: ["$template.fmsId", "—"] },
         assigned: 1,
         completed: 1,
+        overdue: 1,
+        pending: 1,
         onTime: 1,
         late: 1,
         completionRate: 1,
@@ -440,14 +476,13 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       },
     },
     { $sort: { completionRate: -1, completed: -1 } },
-  ];
+  );
 
   const templateStats = await FmsInstanceTask.aggregate(templatePipeline);
 
-  // Detailed tasks list (non-aggregated, with pagination)
+  // 4. DETAILED PAGINATED TASK LIST
   const skip = (Number(page) - 1) * Number(limit);
 
-  // instance status filter for detailed list: derive from FmsInstance
   let instanceFilter = {};
   if (
     instanceStatus &&
@@ -469,9 +504,9 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
       .lean();
     const ids = instances.map((i) => i._id);
     instanceFilter = {
-      ...(ids.length
-        ? { fmsInstanceId: { $in: ids } }
-        : { fmsInstanceId: null }),
+      fmsInstanceId: ids.length
+        ? { $in: ids }
+        : { $in: [new mongoose.Types.ObjectId()] },
     };
   }
 
@@ -479,17 +514,6 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     ...baseMatch,
     ...instanceFilter,
   };
-
-  if (templateObjectId) {
-    // Apply template filter using join to instances IDs
-    const instances = await FmsInstance.find({
-      fmsTemplateId: templateObjectId,
-    })
-      .select("_id")
-      .lean();
-    const ids = instances.map((i) => i._id);
-    detailMatch.fmsInstanceId = ids.length ? { $in: ids } : { $in: [null] };
-  }
 
   const tasks = await FmsInstanceTask.find(detailMatch)
     .sort({ plannedDueDate: 1, taskId: 1 })
@@ -542,7 +566,7 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
     },
     pagination: {
       current: Number(page),
-      pages: Math.ceil(total / Number(limit)),
+      pages: Math.ceil(total / Number(limit)) || 1,
       total,
       limit: Number(limit),
     },
