@@ -11,6 +11,7 @@ import {
   updateOpenForm,
   verifyOpenFormUser,
 } from "../controllers/openFormController.js";
+import { updateFormSubmissionResponse } from "../controllers/updateFormSubmissionResponse.js";
 
 const router = express.Router();
 
@@ -28,4 +29,5 @@ router.get("/:formId/submissions", authenticateJWT, getFormSubmissions);
 router.delete("/:formId", authenticateJWT, deleteOpenForm);
 
 router.get("/submission/:id", authenticateJWT, getSubmissionDetails);
+router.put("/submission/:submissionId/edit", authenticateJWT, updateFormSubmissionResponse); 
 export default router;
