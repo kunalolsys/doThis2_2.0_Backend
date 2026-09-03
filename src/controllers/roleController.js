@@ -191,3 +191,36 @@ export const getSystemModules = handleAsync(async (req, res) => {
     data: SYSTEM_MODULES,
   });
 });
+
+// 🔥 7. Get Current Authenticated User's Permissions (On-Demand Refresh Re-hydration)
+export const getMyPermissions = handleAsync(async (req, res, next) => {
+  const userId = req.user?._id || req.user?.id;
+
+  if (!userId) {
+    return next(new AppError("User authentication token missing", 401));
+  }
+
+  // Populate User's assigned Role
+  const user = await User.findById(userId).populate("role").lean();
+
+  if (!user) {
+    return next(new AppError("User not found", 404));
+  }
+
+  // Super User Bypass Access
+  if (user.role?.name === "super") {
+    return res.status(200).json({
+      success: true,
+      isSuper: true,
+      permissions: [],
+    });
+  }
+
+  const permissions = user.role?.permissions || [];
+
+  return res.status(200).json({
+    success: true,
+    isSuper: false,
+    permissions,
+  });
+});

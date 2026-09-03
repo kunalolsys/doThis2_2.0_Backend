@@ -23,6 +23,7 @@ router.get("/roles", roleController.getAllRoles);
 router.post("/roles", roleController.createRole);
 router.put("/roles/:id", roleController.updateRole);
 router.delete("/roles/:id", roleController.deleteRole);
+router.get("/roles/my-permissions", authenticateJWT, roleController.getMyPermissions);
 
 router.post(
   "/departments/list",
