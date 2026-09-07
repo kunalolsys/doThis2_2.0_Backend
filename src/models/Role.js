@@ -218,7 +218,7 @@ const FIXED_ROLES = [
     permissions: getFullAccessPermissions(),
   },
   {
-    name: "sr_manager",
+    name: "sr._manager",
     displayName: "Sr. Manager",
     canDelete: false,
     isSystemRole: true,
