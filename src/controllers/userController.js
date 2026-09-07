@@ -99,7 +99,7 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("reportingManager", "name")
-    .populate("role", "name")
+    .populate("role", "name displayName")
     .populate("assignShift")
     .sort({ createdAt: -1 })
     .lean();
