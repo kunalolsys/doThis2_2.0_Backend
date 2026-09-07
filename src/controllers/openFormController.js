@@ -7,7 +7,10 @@ import FmsInstance from "../models/FmsInstance.js";
 import FmsInstanceTask from "../models/FmsInstanceTask.js";
 import Counter from "../models/Counter.js";
 import AppError from "../utils/AppError.js";
-import fmsDateCalculator from "../utils/fmsDateCalculator.js";
+import fmsDateCalculator, {
+  calculateCalendarDurationWithShiftSnap,
+  parseFrequencyToHours,
+} from "../utils/fmsDateCalculator.js";
 import User from "../models/User.js";
 import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 import Role from "../models/Role.js";
@@ -88,9 +91,13 @@ export const getAllOpenForms = handleAsync(async (req, res) => {
   if (userRole === "admin" || userRole === "pc") {
     // ✅ ADMIN / PC sees ALL open forms across all users.
     // No query.createdBy filter needed.
-  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+  } else if (
+    userRole === "sr. manager" ||
+    userRole === "srmanager" ||
+    userRole === "sr._manager"
+  ) {
     // Sr. Manager sees forms created by themselves or Managers
-    const managerRole = await Role.findOne({ name: "Manager" })
+    const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
       .lean();
 
@@ -292,6 +299,409 @@ export const verifyOpenFormUser = handleAsync(async (req, res) => {
 });
 
 //**SUBMIT OPEN FORM & TRIGGER INSTANCE */
+// export const submitOpenForm = handleAsync(async (req, res, next) => {
+//   const { slug } = req.params;
+//   const { employeeCode, submissionData } = req.body;
+//   const employee = await User.findOne({ employeeCode });
+
+//   if (!employee) {
+//     return next(new AppError("Invalid employee code", 400));
+//   }
+
+//   // VERIFIED EMPLOYEE ID
+//   const userId = employee._id;
+
+//   // =====================================================
+//   // 1. GET FORM
+//   // =====================================================
+//   const form = await OpenForm.findOne({
+//     slug,
+//     isActive: true,
+//   }).populate("linkedTemplate");
+
+//   if (!form) {
+//     return next(new AppError("Form not found", 404));
+//   }
+
+//   if (!form.isActive) {
+//     return next(new AppError("Form is inactive", 400));
+//   }
+
+//   if (!form.linkedTemplate) {
+//     return next(new AppError("No template linked with form", 400));
+//   }
+
+//   // =====================================================
+//   // 2. VALIDATE SUBMISSION DATA
+//   // =====================================================
+//   const enrichedSubmissionData = {};
+
+//   for (const field of form.fields) {
+//     enrichedSubmissionData[field.fieldId] = {
+//       value: submissionData[field.fieldId],
+//       isTableColumn: field.isTableColumn || false,
+//       label: field.label,
+//       fieldType: field.fieldType,
+//     };
+//   }
+
+//   // =====================================================
+//   // 3. SAVE FORM SUBMISSION
+//   // =====================================================
+//   const submission = await FormSubmission.create({
+//     formId: form._id,
+//     submittedBy: userId,
+//     submissionData: enrichedSubmissionData,
+//     status: "Submitted",
+//   });
+
+//   // =====================================================
+//   // 4. GENERATE INSTANCE COUNTER
+//   // =====================================================
+//   const counter = await Counter.findOneAndUpdate(
+//     { _id: "fms_instance" },
+//     { $inc: { seq: 1 } },
+//     { upsert: true, new: true }
+//   );
+
+//   const sequence = String(counter.seq).padStart(5, "0");
+
+//   // =====================================================
+//   // 5. CREATE FMS INSTANCE
+//   // =====================================================
+//   const formSubmissionDate = new Date(); // Exact Form Hit/Submission Date & Time
+//   const template = form.linkedTemplate;
+
+//   const instanceEnd =
+//     template.fmsDuration === "Fixed Period" ? template.endDate : null;
+
+//   const instanceStatus = calculateInstanceStatus(formSubmissionDate);
+
+//   const instance = await FmsInstance.create({
+//     fmsTemplateId: template._id,
+//     instanceName: `${template.templateName}`,
+//     formId: form._id,
+//     submissionId: submission._id,
+//     triggerType: "FORM_SUBMISSION",
+//     startDate: formSubmissionDate,
+//     endDate: instanceEnd,
+//     manager: template.manager,
+//     srManager: template.srManager || null,
+//     createdBy: userId,
+//     status: instanceStatus,
+//     fmsDuration: template.fmsDuration,
+//     runtimeContext: enrichedSubmissionData,
+//   });
+
+//   // =====================================================
+//   // 6. FETCH TEMPLATE TASKS
+//   // =====================================================
+//   const templateTasks = await FmsTask.find({
+//     fmsTemplateId: template._id,
+//   }).sort("taskId");
+
+//   if (!templateTasks.length) {
+//     return next(new AppError("No tasks found in linked template", 400));
+//   }
+
+//   // =====================================================
+//   // 7. CREATE ALL INSTANCE TASKS AT ONCE (INCLUDING RECURRING)
+//   // =====================================================
+//   const instanceTasks = [];
+
+//   for (let i = 0; i < templateTasks.length; i++) {
+//     const tmplTask = templateTasks[i];
+
+//     // GET USER SHIFT & DEPARTMENT CONTEXT
+//     const doer = await User.findById(tmplTask.assignedTo).populate(
+//       "assignShift"
+//     );
+
+//     if (!doer || !doer.assignShift) {
+//       continue;
+//     }
+
+//     const taskDeptContext =
+//       tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
+
+//     let dates = {
+//       startDate: null,
+//       dueDate: null,
+//     };
+
+//     const rawFreq = (tmplTask.frequency || "").trim();
+//     const freq = rawFreq.toLowerCase();
+
+//     // 🟢 CASE A: RECURRING TASKS (Daily, Weekly, Monthly, Anytime)
+//     if (RECURRING_FREQUENCIES.includes(rawFreq) || freq === "anytime") {
+//       let shiftStart = await nextWorkingShiftDate(
+//         formSubmissionDate,
+//         doer.assignShift._id,
+//         {},
+//         taskDeptContext
+//       );
+
+//       // If submitted post-shift, move start date to next working shift
+//       const shiftEnd = snapToShiftTime(
+//         formSubmissionDate,
+//         doer.assignShift,
+//         false
+//       );
+//       if (formSubmissionDate >= shiftEnd) {
+//         let nextDay = new Date(formSubmissionDate);
+//         nextDay.setDate(nextDay.getDate() + 1);
+
+//         shiftStart = await nextWorkingShiftDate(
+//           nextDay,
+//           doer.assignShift._id,
+//           {},
+//           taskDeptContext
+//         );
+//       }
+
+//       dates = {
+//         startDate: snapToShiftTime(shiftStart, doer.assignShift, true),
+//         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
+//       };
+//     }
+//     // 🟢 CASE B: TASK LINKED WITH FORM OR "FORM EVENT+X" FREQUENCY
+//     else if (tmplTask.linkedWithForm || freq.startsWith("form event")) {
+//       let taskStartDate = new Date(formSubmissionDate);
+
+//       // Check Shift Window
+//       if (doer?.assignShift) {
+//         const shiftEnd = snapToShiftTime(
+//           formSubmissionDate,
+//           doer.assignShift,
+//           false
+//         );
+
+//         // Post-Shift Submission -> Move Start Date to Next Working Day Shift Start
+//         if (formSubmissionDate >= shiftEnd) {
+//           let nextDay = new Date(formSubmissionDate);
+//           nextDay.setDate(nextDay.getDate() + 1);
+
+//           const nextWorkingShift = await nextWorkingShiftDate(
+//             nextDay,
+//             doer.assignShift._id,
+//             {},
+//             taskDeptContext
+//           );
+
+//           taskStartDate = snapToShiftTime(
+//             nextWorkingShift,
+//             doer.assignShift,
+//             true
+//           );
+//         }
+//       }
+
+//       let dueDate = new Date(taskStartDate);
+//       const xValue = Number(tmplTask.xValue || 0);
+
+//       if (freq.includes("hour")) {
+//         let calculatedDue = new Date(
+//           taskStartDate.getTime() + xValue * 60 * 60 * 1000
+//         );
+
+//         if (doer?.assignShift) {
+//           const shiftEnd = snapToShiftTime(
+//             taskStartDate,
+//             doer.assignShift,
+//             false
+//           );
+
+//           if (calculatedDue <= shiftEnd) {
+//             dueDate = calculatedDue;
+//           } else {
+//             const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
+
+//             // 🟢 FIXED: Next working day safely search with holiday check
+//             let nextDay = new Date(taskStartDate);
+//             nextDay.setDate(nextDay.getDate() + 1);
+
+//             const nextWorkingShift = await nextWorkingShiftDate(
+//               nextDay,
+//               doer.assignShift._id,
+//               {},
+//               taskDeptContext
+//             );
+
+//             dueDate = new Date(nextWorkingShift.getTime() + overflowMs);
+//           }
+//         } else {
+//           dueDate = calculatedDue;
+//         }
+//       } else {
+//         // 🟢 DAYS CONDITION: Uses working-days & holiday-aware calculation
+//         const addedDaysDate = await addWorkingDaysHoliday(
+//           taskStartDate,
+//           xValue,
+//           doer.assignShift._id,
+//           tmplTask.isDependent,
+//           {},
+//           taskDeptContext
+//         );
+
+//         if (addedDaysDate) {
+//           dueDate = addedDaysDate;
+//         } else if (doer?.assignShift) {
+//           dueDate = snapToShiftTime(dueDate, doer.assignShift, false);
+//         }
+//       }
+
+//       dates = {
+//         startDate: taskStartDate,
+//         dueDate,
+//       };
+//     }
+//     // 🟢 CASE C: STANDARD / CALCULATED DEPENDENT DATES
+//     else {
+//       const previousTasks = instanceTasks.map((task) => ({
+//         taskId: task.originalTaskId,
+//         plannedDueDate: task.plannedDueDate,
+//         plannedStartDate: task.plannedStartDate,
+//       }));
+
+//       dates = await fmsDateCalculator.calculateFmsTaskDates(
+//         tmplTask.toObject(),
+//         formSubmissionDate,
+//         instanceEnd,
+//         doer.assignShift?._id,
+//         previousTasks,
+//         taskDeptContext
+//       );
+
+//       // 🟢 FIX: Handle hours overflow for planned-to-planned tasks
+//       if (
+//         tmplTask.isDependent &&
+//         tmplTask.startTimeSetting === "planned-to-planned" &&
+//         freq.includes("hour") &&
+//         dates.startDate &&
+//         dates.dueDate
+//       ) {
+//         const xValue = Number(tmplTask.xValue || 0);
+//         const shiftEnd = snapToShiftTime(
+//           dates.startDate,
+//           doer.assignShift,
+//           false
+//         );
+//         const rawDueTime = dates.startDate.getTime() + xValue * 60 * 60 * 1000;
+
+//         // If total hours exceed shift end time
+//         if (rawDueTime > shiftEnd.getTime()) {
+//           const overflowMs = rawDueTime - shiftEnd.getTime();
+
+//           let nextDay = new Date(dates.startDate);
+//           nextDay.setDate(nextDay.getDate() + 1);
+
+//           const nextWorkingShift = await nextWorkingShiftDate(
+//             nextDay,
+//             doer.assignShift._id,
+//             {},
+//             taskDeptContext
+//           );
+
+//           dates.dueDate = new Date(nextWorkingShift.getTime() + overflowMs);
+//         }
+//       }
+//     }
+
+//     // UNIQUE RUNTIME TASK ID
+//     const runtimeTaskId = `${instance.instanceId}-${tmplTask.taskId}`;
+
+//     // STRICT BOOLEAN FOR DECISION STEP
+//     const isDecisionStep =
+//       tmplTask.decisionStep === true ||
+//       tmplTask.decisionStep === "yes" ||
+//       tmplTask.decisionStep === "true";
+
+//     // CREATE INSTANCE TASK DATA
+//     const instanceTaskData = {
+//       fmsInstanceId: instance._id,
+//       fmsTaskId: tmplTask._id,
+//       formId: form._id,
+//       submissionId: submission._id,
+//       submissionData: enrichedSubmissionData,
+
+//       taskId: runtimeTaskId,
+//       originalTaskId: tmplTask.taskId,
+
+//       description: tmplTask.description,
+//       departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
+//       assignedTo: tmplTask.assignedTo,
+//       assignedBy: tmplTask.assignedBy,
+
+//       frequency: tmplTask.frequency,
+//       linkedWithForm: Boolean(tmplTask.linkedWithForm),
+//       xValue: tmplTask.xValue,
+
+//       isDependent: tmplTask.isDependent,
+//       dependentOn: tmplTask.dependentOn
+//         ? `${instance.instanceId}-${tmplTask.dependentOn}`
+//         : null,
+
+//       startTimeSetting: tmplTask.startTimeSetting,
+//       taskEndDays: tmplTask.taskEndDays || 0,
+
+//       plannedStartDate: dates.startDate,
+//       plannedDueDate: dates.dueDate,
+
+//       status: calculateTaskStatus(dates.startDate, dates.dueDate),
+//       isVisible: false,
+//       waitingForParent: tmplTask.startTimeSetting === "actual-to-planned",
+
+//       decisionStep: isDecisionStep,
+//       decisionYesAction: isDecisionStep
+//         ? tmplTask.decisionYesAction || null
+//         : null,
+//       triggerFmsTemplate:
+//         isDecisionStep && tmplTask.decisionYesAction === "trigger_fms"
+//           ? tmplTask.triggerFmsTemplate || null
+//           : null,
+
+//       checklist: tmplTask.checklist || [],
+//       createdForm: tmplTask.createdForm || [],
+
+//       createdBy: userId,
+//       updatedBy: userId,
+//     };
+
+//     const instanceTask = await FmsInstanceTask.create(instanceTaskData);
+//     instanceTasks.push(instanceTask);
+//   }
+
+//   // =====================================================
+//   // 8. LINK SUBMISSION WITH INSTANCE
+//   // =====================================================
+//   submission.triggeredInstance = instance._id;
+//   submission.status = "Triggered";
+
+//   await submission.save();
+
+//   // =====================================================
+//   // 9. FINAL RESPONSE
+//   // =====================================================
+//   return res.status(201).json({
+//     success: true,
+//     message:
+//       "Form submitted and FMS triggered successfully with all tasks generated.",
+//     data: {
+//       formId: form._id,
+//       submissionId: submission._id,
+//       templateId: template._id,
+//       instanceId: instance._id,
+//       totalTasks: instanceTasks.length,
+//       tasks: instanceTasks.map((task) => ({
+//         taskId: task.taskId,
+//         originalTaskId: task.originalTaskId,
+//         status: task.status,
+//         plannedStartDate: task.plannedStartDate,
+//         plannedDueDate: task.plannedDueDate,
+//       })),
+//     },
+//   });
+// });
 export const submitOpenForm = handleAsync(async (req, res, next) => {
   const { slug } = req.params;
   const { employeeCode, submissionData } = req.body;
@@ -457,11 +867,16 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
       };
     }
-    // 🟢 CASE B: TASK LINKED WITH FORM OR "FORM EVENT+X" FREQUENCY
-    else if (tmplTask.linkedWithForm || freq.startsWith("form event")) {
+    // 🟢 CASE B: TASK LINKED WITH FORM OR EVENT-BASED FREQUENCIES (Form Event + X Days / Hours)
+    else if (
+      tmplTask.linkedWithForm ||
+      freq.includes("form event") ||
+      freq.includes("event") ||
+      freq.startsWith("start")
+    ) {
       let taskStartDate = new Date(formSubmissionDate);
 
-      // Check Shift Window
+      // Post-Shift Check (e.g., Submitted after 6:00 PM) -> Move Start Date to Next Working Shift Start
       if (doer?.assignShift) {
         const shiftEnd = snapToShiftTime(
           formSubmissionDate,
@@ -469,7 +884,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           false,
         );
 
-        // Post-Shift Submission (After 6 PM) -> Move Start Date to Next Working Day Shift Start
         if (formSubmissionDate >= shiftEnd) {
           let nextDay = new Date(formSubmissionDate);
           nextDay.setDate(nextDay.getDate() + 1);
@@ -489,64 +903,19 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         }
       }
 
-      let dueDate = new Date(taskStartDate);
-      const xValue = Number(tmplTask.xValue || 0);
+      // Dynamic Frequency Parsing (+/- Days or Hours)
+      const totalHours = parseFrequencyToHours(
+        tmplTask.frequency,
+        tmplTask.xValue,
+      );
 
-      if (freq.includes("hour")) {
-        let calculatedDue = new Date(
-          taskStartDate.getTime() + xValue * 60 * 60 * 1000,
-        );
-
-        if (doer?.assignShift) {
-          const shiftEnd = snapToShiftTime(
-            taskStartDate,
-            doer.assignShift,
-            false,
-          );
-
-          if (calculatedDue < shiftEnd) {
-            dueDate = calculatedDue;
-          } else {
-            const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-            let nextDay = new Date(taskStartDate);
-            nextDay.setDate(nextDay.getDate() + 1);
-
-            const nextWorkingDay = await nextWorkingShiftDate(
-              nextDay,
-              doer.assignShift._id,
-              {},
-              taskDeptContext,
-            );
-
-            const nextShiftStart = snapToShiftTime(
-              nextWorkingDay,
-              doer.assignShift,
-              true,
-            );
-
-            dueDate = new Date(nextShiftStart.getTime() + overflowMs);
-          }
-        } else {
-          dueDate = calculatedDue;
-        }
-      } else {
-        const addedDaysDate = await addWorkingDaysHoliday(
-          taskStartDate,
-          xValue,
-          doer.assignShift._id,
-          tmplTask.isDependent,
-          {},
-          taskDeptContext,
-        );
-
-        if (addedDaysDate) {
-          dueDate = addedDaysDate;
-        }
-
-        if (doer?.assignShift) {
-          dueDate = snapToShiftTime(dueDate, doer.assignShift, false);
-        }
-      }
+      // Full Calendar Duration Addition + Holiday Bypass + Shift Snap
+      const dueDate = await calculateCalendarDurationWithShiftSnap(
+        taskStartDate,
+        totalHours,
+        doer.assignShift._id,
+        taskDeptContext,
+      );
 
       dates = {
         startDate: taskStartDate,
@@ -570,44 +939,23 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         taskDeptContext,
       );
 
-      // 🟢 FIX: Handle hours overflow for planned-to-planned tasks
+      // Handle Hours & Days Snap for Planned-to-Planned Dependent Tasks
       if (
         tmplTask.isDependent &&
         tmplTask.startTimeSetting === "planned-to-planned" &&
-        freq.includes("hour") &&
-        dates.startDate &&
-        dates.dueDate
+        dates.startDate
       ) {
-        const xValue = Number(tmplTask.xValue || 0);
-        const shiftEnd = snapToShiftTime(
-          dates.startDate,
-          doer.assignShift,
-          false,
+        const totalHours = parseFrequencyToHours(
+          tmplTask.frequency,
+          tmplTask.xValue,
         );
-        const rawDueTime = dates.startDate.getTime() + xValue * 60 * 60 * 1000;
 
-        // If total hours exceed shift end time
-        if (rawDueTime > shiftEnd.getTime()) {
-          const overflowMs = rawDueTime - shiftEnd.getTime();
-
-          let nextDay = new Date(dates.startDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-
-          const nextWorkingDay = await nextWorkingShiftDate(
-            nextDay,
-            doer.assignShift._id,
-            {},
-            taskDeptContext,
-          );
-
-          const nextShiftStart = snapToShiftTime(
-            nextWorkingDay,
-            doer.assignShift,
-            true,
-          );
-
-          dates.dueDate = new Date(nextShiftStart.getTime() + overflowMs);
-        }
+        dates.dueDate = await calculateCalendarDurationWithShiftSnap(
+          dates.startDate,
+          totalHours,
+          doer.assignShift._id,
+          taskDeptContext,
+        );
       }
     }
 
@@ -706,7 +1054,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     },
   });
 });
-
 //**GET SUBMISSION RESPONSE AND RECORD */
 export const getFormSubmissions = async (req, res) => {
   try {
