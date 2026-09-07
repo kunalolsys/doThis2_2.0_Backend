@@ -165,9 +165,6 @@ export async function calculateFmsTaskDates(
 
   return { startDate, dueDate };
 }
-/**
- * Frequency string ko dynamically hours/days multiplier me parse karta hai.
- */
 export function parseFrequencyToHours(frequencyStr, xValue) {
   const freq = (frequencyStr || "").toLowerCase();
   const rawX = Number(xValue || 0);
@@ -183,43 +180,88 @@ export function parseFrequencyToHours(frequencyStr, xValue) {
 }
 
 /**
- * Dynamic Calendar & Working Day Aware Date Calculator
+ * Working Shift Hours & Days Aware Date Calculator
  */
 export async function calculateCalendarDurationWithShiftSnap(
   startDate,
   freqObj, // { isDay: boolean, value: number }
   workShiftId,
-  userOrDeptId = null,
+  userOrDeptId = null
 ) {
   if (!freqObj || freqObj.value === 0) return startDate;
 
   const workShift = await WorkShift.findById(workShiftId).lean();
   if (!workShift) throw new Error("WorkShift not found");
 
-  let targetDate;
+  let targetDate = new Date(startDate);
 
-  // 🟢 1. AGAR DAYS FREQUENCY HAI (e.g. 2 Days)
+  // 🟢 CASE 1: DAYS FREQUENCY (e.g. 2 Days)
   if (freqObj.isDay) {
-    // Sahi Working Days (Tuesday, Wednesday skip karke) Target Day nikalna
     const targetWorkingDay = await addWorkingDaysHoliday(
       startDate,
       freqObj.value,
       workShiftId,
       false,
       {},
-      userOrDeptId,
+      userOrDeptId
     );
 
-    // Target Working Day par Time ko original start time ke saath match karna
     targetDate = new Date(targetWorkingDay);
     targetDate.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
-  }
-  // 🟢 2. AGAR HOURS FREQUENCY HAI (e.g. 5 Hours)
+  } 
+  // 🟢 CASE 2: HOURS FREQUENCY WITH SHIFT OVERFLOW (e.g. 6 Hours)
   else {
-    targetDate = new Date(startDate.getTime() + freqObj.value * 60 * 60 * 1000);
+    let remainingMs = freqObj.value * 60 * 60 * 1000;
+    let currStart = new Date(startDate);
+
+    while (remainingMs > 0) {
+      // Current day shift start and end
+      const shiftStart = snapToShiftTime(currStart, workShift, true);
+      const shiftEnd = snapToShiftTime(currStart, workShift, false);
+
+      // If current start is before shift start, bring it to shift start
+      if (currStart < shiftStart) {
+        currStart = shiftStart;
+      }
+
+      // If current start is at or after shift end, move to next working day
+      if (currStart >= shiftEnd) {
+        let nextDay = addDays(startOfDay(currStart), 1);
+        currStart = await nextWorkingShiftDate(
+          nextDay,
+          workShiftId,
+          {},
+          userOrDeptId
+        );
+        continue;
+      }
+
+      // Available time left in today's shift
+      const availableMsInShift = shiftEnd.getTime() - currStart.getTime();
+
+      if (remainingMs <= availableMsInShift) {
+        // Remaining hours fit inside current shift
+        currStart = new Date(currStart.getTime() + remainingMs);
+        remainingMs = 0;
+      } else {
+        // Consume available hours of today's shift
+        remainingMs -= availableMsInShift;
+
+        // Move to start of next working day's shift
+        let nextDay = addDays(startOfDay(currStart), 1);
+        currStart = await nextWorkingShiftDate(
+          nextDay,
+          workShiftId,
+          {},
+          userOrDeptId
+        );
+      }
+    }
+
+    targetDate = currStart;
   }
 
-  // 🟢 3. CHECK NON-WORKING DAYS / HOLIDAYS
+  // 🟢 SAFETY CHECK: Non-working days & Shift clamping
   while (
     (await isHoliday(targetDate, userOrDeptId)) ||
     !(await isWorkingDay(targetDate, workShift, userOrDeptId))
@@ -229,19 +271,15 @@ export async function calculateCalendarDurationWithShiftSnap(
       nextDay,
       workShiftId,
       {},
-      userOrDeptId,
+      userOrDeptId
     );
   }
 
-  // 🟢 4. SHIFT TIMINGS SNAP CHECK (9 AM - 6 PM Clamp)
   const shiftStart = snapToShiftTime(targetDate, workShift, true);
   const shiftEnd = snapToShiftTime(targetDate, workShift, false);
 
-  if (targetDate < shiftStart) {
-    targetDate = shiftStart;
-  } else if (targetDate > shiftEnd) {
-    targetDate = shiftEnd;
-  }
+  if (targetDate < shiftStart) targetDate = shiftStart;
+  if (targetDate > shiftEnd) targetDate = shiftEnd;
 
   return targetDate;
 }
