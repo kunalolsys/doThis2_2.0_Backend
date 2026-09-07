@@ -36,12 +36,12 @@ export const createTemplate = handleAsync(async (req, res, next) => {
   const managerUser = await User.findById(manager)
     .populate("role")
     .populate("assignShift");
-  if (!managerUser || managerUser.role.name !== "Manager") {
+  if (!managerUser || managerUser.role.name !== "manager") {
     return next(new AppError("Manager must have Manager role", 400));
   }
   if (srManager) {
     const srUser = await User.findById(srManager).populate("role");
-    if (!srUser || srUser.role.name !== "Sr. Manager") {
+    if (!srUser || srUser.role.name !== "sr._manager") {
       return next(new AppError("Sr Manager must have Sr Manager role", 400));
     }
   }
@@ -126,7 +126,7 @@ export const importFmsTemplates = handleAsync(async (req, res, next) => {
       }
 
       // 🔥 Validate role
-      if (managerUser.role?.name !== "Manager") {
+      if (managerUser.role?.name !== "manager") {
         errors.push({ templateName, error: "Manager must have Manager role" });
         continue;
       }
@@ -145,7 +145,7 @@ export const importFmsTemplates = handleAsync(async (req, res, next) => {
           continue;
         }
 
-        if (srUser.role?.name !== "Sr. Manager") {
+        if (srUser.role?.name !== "sr._manager") {
           errors.push({
             templateName,
             error: "Sr Manager must have Sr Manager role",
@@ -239,9 +239,9 @@ export const getTemplates = handleAsync(async (req, res) => {
   if (userRole === "admin" || userRole === "pc") {
     // ✅ ADMIN / PC sees ALL templates across the organization.
     // No filter.user constraint needed.
-  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+  } else if (userRole === "sr. manager" || userRole === "srmanager" || userRole === "sr._manager") {
     // Sr. Manager sees templates created by themselves or Managers reporting to them / in manager role
-    const managerRole = await Role.findOne({ name: "Manager" })
+    const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
       .lean();
 
@@ -350,9 +350,9 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
   // =========================
   if (userRole === "admin" || userRole === "pc") {
     // ✅ ADMIN / PC sees ALL available (unlinked) templates across all users
-  } else if (userRole === "sr. manager" || userRole === "srmanager") {
+  } else if (userRole === "sr. manager" || userRole === "srmanager" || userRole === "sr._manager") {
     // Sr. Manager sees unlinked templates created by themselves or Managers
-    const managerRole = await Role.findOne({ name: "Manager" })
+    const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
       .lean();
 
@@ -470,13 +470,13 @@ export const updateTemplate = handleAsync(async (req, res, next) => {
     const managerUser = await User.findById(updateData.manager).populate(
       "role",
     );
-    if (!managerUser || managerUser.role.name !== "Manager") {
+    if (!managerUser || managerUser.role.name !== "manager") {
       return next(new AppError("Manager must have Manager role", 400));
     }
   }
   if (updateData.srManager) {
     const srUser = await User.findById(updateData.srManager).populate("role");
-    if (!srUser || srUser.role.name !== "Sr. Manager") {
+    if (!srUser || srUser.role.name !== "sr._manager") {
       return next(new AppError("Sr Manager must have Sr Manager role", 400));
     }
   }
