@@ -711,7 +711,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     return next(new AppError("Invalid employee code", 400));
   }
 
-  // VERIFIED EMPLOYEE ID
   const userId = employee._id;
 
   // =====================================================
@@ -722,23 +721,14 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     isActive: true,
   }).populate("linkedTemplate");
 
-  if (!form) {
-    return next(new AppError("Form not found", 404));
-  }
-
-  if (!form.isActive) {
-    return next(new AppError("Form is inactive", 400));
-  }
-
-  if (!form.linkedTemplate) {
-    return next(new AppError("No template linked with form", 400));
-  }
+  if (!form) return next(new AppError("Form not found", 404));
+  if (!form.isActive) return next(new AppError("Form is inactive", 400));
+  if (!form.linkedTemplate) return next(new AppError("No template linked with form", 400));
 
   // =====================================================
   // 2. VALIDATE SUBMISSION DATA
   // =====================================================
   const enrichedSubmissionData = {};
-
   for (const field of form.fields) {
     enrichedSubmissionData[field.fieldId] = {
       value: submissionData[field.fieldId],
@@ -749,7 +739,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   }
 
   // =====================================================
-  // 3. SAVE FORM SUBMISSION
+  // 3. SAVE FORM SUBMISSION & COUNTER
   // =====================================================
   const submission = await FormSubmission.create({
     formId: form._id,
@@ -758,21 +748,14 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     status: "Submitted",
   });
 
-  // =====================================================
-  // 4. GENERATE INSTANCE COUNTER
-  // =====================================================
   const counter = await Counter.findOneAndUpdate(
     { _id: "fms_instance" },
     { $inc: { seq: 1 } },
-    { upsert: true, new: true },
+    { upsert: true, new: true }
   );
 
-  const sequence = String(counter.seq).padStart(5, "0");
-
-  // =====================================================
-  // 5. CREATE FMS INSTANCE
-  // =====================================================
-  const formSubmissionDate = new Date(); // Exact Form Hit/Submission Date & Time
+  // Exact Form Hit Time (No Shift Push for Form Start)
+  const formSubmissionDate = new Date();
   const template = form.linkedTemplate;
 
   const instanceEnd =
@@ -797,7 +780,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   });
 
   // =====================================================
-  // 6. FETCH TEMPLATE TASKS
+  // 4. FETCH TEMPLATE TASKS
   // =====================================================
   const templateTasks = await FmsTask.find({
     fmsTemplateId: template._id,
@@ -808,48 +791,34 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   }
 
   // =====================================================
-  // 7. CREATE ALL INSTANCE TASKS AT ONCE (INCLUDING RECURRING)
+  // 5. CREATE ALL INSTANCE TASKS AT ONCE
   // =====================================================
   const instanceTasks = [];
 
   for (let i = 0; i < templateTasks.length; i++) {
     const tmplTask = templateTasks[i];
 
-    // GET USER SHIFT & DEPARTMENT CONTEXT
-    const doer = await User.findById(tmplTask.assignedTo).populate(
-      "assignShift",
-    );
-
-    if (!doer || !doer.assignShift) {
-      continue;
-    }
+    const doer = await User.findById(tmplTask.assignedTo).populate("assignShift");
+    if (!doer || !doer.assignShift) continue;
 
     const taskDeptContext =
       tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
 
-    let dates = {
-      startDate: null,
-      dueDate: null,
-    };
+    let dates = { startDate: null, dueDate: null };
 
     const rawFreq = (tmplTask.frequency || "").trim();
     const freq = rawFreq.toLowerCase();
 
-    // 🟢 CASE A: RECURRING TASKS (Daily, Weekly, Monthly, Anytime)
+    // 🟢 CASE A: RECURRING TASKS
     if (RECURRING_FREQUENCIES.includes(rawFreq) || freq === "anytime") {
       let shiftStart = await nextWorkingShiftDate(
         formSubmissionDate,
         doer.assignShift._id,
         {},
-        taskDeptContext,
+        taskDeptContext
       );
 
-      // If submitted post-shift, move start date to next working shift
-      const shiftEnd = snapToShiftTime(
-        formSubmissionDate,
-        doer.assignShift,
-        false,
-      );
+      const shiftEnd = snapToShiftTime(formSubmissionDate, doer.assignShift, false);
       if (formSubmissionDate >= shiftEnd) {
         let nextDay = new Date(formSubmissionDate);
         nextDay.setDate(nextDay.getDate() + 1);
@@ -858,7 +827,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           nextDay,
           doer.assignShift._id,
           {},
-          taskDeptContext,
+          taskDeptContext
         );
       }
 
@@ -867,54 +836,26 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
       };
     }
-    // 🟢 CASE B: TASK LINKED WITH FORM OR EVENT-BASED FREQUENCIES (Form Event + X Days / Hours)
+    // 🟢 CASE B: TASK LINKED WITH FORM OR EVENT FREQUENCIES
     else if (
       tmplTask.linkedWithForm ||
       freq.includes("form event") ||
       freq.includes("event") ||
       freq.startsWith("start")
     ) {
-      let taskStartDate = new Date(formSubmissionDate);
+      // Start Date = Form Hit Date Time Exactly
+      const taskStartDate = new Date(formSubmissionDate);
 
-      // Post-Shift Check (e.g., Submitted after 6:00 PM) -> Move Start Date to Next Working Shift Start
-      if (doer?.assignShift) {
-        const shiftEnd = snapToShiftTime(
-          formSubmissionDate,
-          doer.assignShift,
-          false,
-        );
-
-        if (formSubmissionDate >= shiftEnd) {
-          let nextDay = new Date(formSubmissionDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-
-          const nextWorkingShift = await nextWorkingShiftDate(
-            nextDay,
-            doer.assignShift._id,
-            {},
-            taskDeptContext,
-          );
-
-          taskStartDate = snapToShiftTime(
-            nextWorkingShift,
-            doer.assignShift,
-            true,
-          );
-        }
-      }
-
-      // Dynamic Frequency Parsing (+/- Days or Hours)
-      const totalHours = parseFrequencyToHours(
+      const freqParsed = parseFrequencyToHours(
         tmplTask.frequency,
-        tmplTask.xValue,
+        tmplTask.xValue
       );
 
-      // Full Calendar Duration Addition + Holiday Bypass + Shift Snap
       const dueDate = await calculateCalendarDurationWithShiftSnap(
         taskStartDate,
-        totalHours,
+        freqParsed,
         doer.assignShift._id,
-        taskDeptContext,
+        taskDeptContext
       );
 
       dates = {
@@ -922,7 +863,66 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate,
       };
     }
-    // 🟢 CASE C: STANDARD / CALCULATED DEPENDENT DATES
+    // 🟢 CASE C: DEPENDENT TASKS (PLANNED-TO-PLANNED & ACTUAL-TO-PLANNED)
+    else if (tmplTask.isDependent && tmplTask.dependentOn) {
+      if (tmplTask.startTimeSetting === "planned-to-planned") {
+        // Direct parent search from generated runtime array
+        const parentTask = instanceTasks.find(
+          (t) => t.originalTaskId === tmplTask.dependentOn
+        );
+
+        // Child Start Date = Parent Planned Due Date
+        let taskStartDate = parentTask
+          ? new Date(parentTask.plannedDueDate)
+          : new Date(formSubmissionDate);
+
+        // Check if Parent Due Date lands exactly at or after Shift End (6 PM)
+        const shiftEnd = snapToShiftTime(
+          taskStartDate,
+          doer.assignShift,
+          false
+        );
+
+        if (taskStartDate >= shiftEnd) {
+          let nextDay = new Date(taskStartDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+
+          const nextWorkingShift = await nextWorkingShiftDate(
+            nextDay,
+            doer.assignShift._id,
+            {},
+            taskDeptContext
+          );
+
+          taskStartDate = snapToShiftTime(
+            nextWorkingShift,
+            doer.assignShift,
+            true
+          );
+        }
+
+        const freqParsed = parseFrequencyToHours(
+          tmplTask.frequency,
+          tmplTask.xValue
+        );
+
+        const dueDate = await calculateCalendarDurationWithShiftSnap(
+          taskStartDate,
+          freqParsed,
+          doer.assignShift._id,
+          taskDeptContext
+        );
+
+        dates = {
+          startDate: taskStartDate,
+          dueDate,
+        };
+      } else {
+        // Actual-To-Planned (A-T-P)
+        dates = { startDate: null, dueDate: null };
+      }
+    }
+    // 🟢 CASE D: FALLBACK DATES
     else {
       const previousTasks = instanceTasks.map((task) => ({
         taskId: task.originalTaskId,
@@ -936,39 +936,16 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         instanceEnd,
         doer.assignShift?._id,
         previousTasks,
-        taskDeptContext,
+        taskDeptContext
       );
-
-      // Handle Hours & Days Snap for Planned-to-Planned Dependent Tasks
-      if (
-        tmplTask.isDependent &&
-        tmplTask.startTimeSetting === "planned-to-planned" &&
-        dates.startDate
-      ) {
-        const totalHours = parseFrequencyToHours(
-          tmplTask.frequency,
-          tmplTask.xValue,
-        );
-
-        dates.dueDate = await calculateCalendarDurationWithShiftSnap(
-          dates.startDate,
-          totalHours,
-          doer.assignShift._id,
-          taskDeptContext,
-        );
-      }
     }
 
-    // UNIQUE RUNTIME TASK ID
     const runtimeTaskId = `${instance.instanceId}-${tmplTask.taskId}`;
-
-    // STRICT BOOLEAN FOR DECISION STEP
     const isDecisionStep =
       tmplTask.decisionStep === true ||
       tmplTask.decisionStep === "yes" ||
       tmplTask.decisionStep === "true";
 
-    // CREATE INSTANCE TASK DATA
     const instanceTaskData = {
       fmsInstanceId: instance._id,
       fmsTaskId: tmplTask._id,
@@ -1023,21 +1000,13 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     instanceTasks.push(instanceTask);
   }
 
-  // =====================================================
-  // 8. LINK SUBMISSION WITH INSTANCE
-  // =====================================================
   submission.triggeredInstance = instance._id;
   submission.status = "Triggered";
-
   await submission.save();
 
-  // =====================================================
-  // 9. FINAL RESPONSE
-  // =====================================================
   return res.status(201).json({
     success: true,
-    message:
-      "Form submitted and FMS triggered successfully with all tasks generated.",
+    message: "Form submitted and FMS triggered successfully with all tasks generated.",
     data: {
       formId: form._id,
       submissionId: submission._id,
