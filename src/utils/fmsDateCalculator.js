@@ -1,8 +1,13 @@
 import {
   nextWorkingShiftDate,
   addWorkingDaysHoliday,
+  snapToShiftTime,
+  isWorkingDay,
+  isHoliday,
 } from "./dateCalculator.js";
 import FmsTask from "../models/FmsTask.js";
+import WorkShift from "../models/WorkShift.js";
+import { addDays, startOfDay } from "date-fns";
 
 /**
  * ALL 5 CASES - Department-Aware & WorkShift-Compliant Date Calculator
@@ -160,5 +165,87 @@ export async function calculateFmsTaskDates(
 
   return { startDate, dueDate };
 }
+/**
+ * Frequency string ko dynamically hours/days multiplier me parse karta hai.
+ */
+export function parseFrequencyToHours(frequencyStr, xValue) {
+  const freq = (frequencyStr || "").toLowerCase();
+  const rawX = Number(xValue || 0);
 
-export default { calculateFmsTaskDates };
+  const isNegative = freq.includes("-");
+  const multiplier = isNegative ? -1 : 1;
+
+  if (freq.includes("day") || freq.includes("d")) {
+    return { isDay: true, value: rawX * multiplier };
+  } else {
+    return { isDay: false, value: rawX * multiplier };
+  }
+}
+
+/**
+ * Dynamic Calendar & Working Day Aware Date Calculator
+ */
+export async function calculateCalendarDurationWithShiftSnap(
+  startDate,
+  freqObj, // { isDay: boolean, value: number }
+  workShiftId,
+  userOrDeptId = null,
+) {
+  if (!freqObj || freqObj.value === 0) return startDate;
+
+  const workShift = await WorkShift.findById(workShiftId).lean();
+  if (!workShift) throw new Error("WorkShift not found");
+
+  let targetDate;
+
+  // 🟢 1. AGAR DAYS FREQUENCY HAI (e.g. 2 Days)
+  if (freqObj.isDay) {
+    // Sahi Working Days (Tuesday, Wednesday skip karke) Target Day nikalna
+    const targetWorkingDay = await addWorkingDaysHoliday(
+      startDate,
+      freqObj.value,
+      workShiftId,
+      false,
+      {},
+      userOrDeptId,
+    );
+
+    // Target Working Day par Time ko original start time ke saath match karna
+    targetDate = new Date(targetWorkingDay);
+    targetDate.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
+  }
+  // 🟢 2. AGAR HOURS FREQUENCY HAI (e.g. 5 Hours)
+  else {
+    targetDate = new Date(startDate.getTime() + freqObj.value * 60 * 60 * 1000);
+  }
+
+  // 🟢 3. CHECK NON-WORKING DAYS / HOLIDAYS
+  while (
+    (await isHoliday(targetDate, userOrDeptId)) ||
+    !(await isWorkingDay(targetDate, workShift, userOrDeptId))
+  ) {
+    let nextDay = addDays(startOfDay(targetDate), 1);
+    targetDate = await nextWorkingShiftDate(
+      nextDay,
+      workShiftId,
+      {},
+      userOrDeptId,
+    );
+  }
+
+  // 🟢 4. SHIFT TIMINGS SNAP CHECK (9 AM - 6 PM Clamp)
+  const shiftStart = snapToShiftTime(targetDate, workShift, true);
+  const shiftEnd = snapToShiftTime(targetDate, workShift, false);
+
+  if (targetDate < shiftStart) {
+    targetDate = shiftStart;
+  } else if (targetDate > shiftEnd) {
+    targetDate = shiftEnd;
+  }
+
+  return targetDate;
+}
+export default {
+  calculateFmsTaskDates,
+  calculateCalendarDurationWithShiftSnap,
+};
