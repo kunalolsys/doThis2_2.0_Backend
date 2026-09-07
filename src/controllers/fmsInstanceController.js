@@ -1101,8 +1101,12 @@ export const getFmsInstances = handleAsync(async (req, res) => {
 
   if (userRole === "admin" || userRole === "pc") {
     // Admin / PC sees all
-  } else if (userRole === "sr. manager" || userRole === "srmanager") {
-    const managerRole = await Role.findOne({ name: "Manager" })
+  } else if (
+    userRole === "sr. manager" ||
+    userRole === "srmanager" ||
+    userRole === "sr._manager"
+  ) {
+    const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
       .lean();
 
