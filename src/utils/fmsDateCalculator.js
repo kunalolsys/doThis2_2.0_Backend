@@ -180,7 +180,7 @@ export function parseFrequencyToHours(frequencyStr, xValue) {
 }
 
 /**
- * Working Shift Hours & Days Aware Date Calculator
+ * FIXED: Accurate Working Days & Working Shift Hours Overflow Calculator
  */
 export async function calculateCalendarDurationWithShiftSnap(
   startDate,
@@ -188,46 +188,48 @@ export async function calculateCalendarDurationWithShiftSnap(
   workShiftId,
   userOrDeptId = null
 ) {
-  if (!freqObj || freqObj.value === 0) return startDate;
+  if (!freqObj || freqObj.value === 0) return new Date(startDate);
 
   const workShift = await WorkShift.findById(workShiftId).lean();
   if (!workShift) throw new Error("WorkShift not found");
 
-  let targetDate = new Date(startDate);
+  let currDate = new Date(startDate);
 
-  // 🟢 CASE 1: DAYS FREQUENCY (e.g. 2 Days)
+  // 🟢 CASE A: DAYS FREQUENCY (e.g., +1 Day, +2 Days)
   if (freqObj.isDay) {
-    const targetWorkingDay = await addWorkingDaysHoliday(
-      startDate,
-      freqObj.value,
-      workShiftId,
-      false,
-      {},
-      userOrDeptId
-    );
+    let daysToAdd = Math.abs(freqObj.value);
 
-    targetDate = new Date(targetWorkingDay);
-    targetDate.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
+    // Exact Working Days Jump (Tue, Wed, Sat, Sun skip honge)
+    while (daysToAdd > 0) {
+      currDate = addDays(currDate, 1);
+
+      const holiday = await isHoliday(currDate, userOrDeptId);
+      const working = await isWorkingDay(currDate, workShift, userOrDeptId);
+
+      if (!holiday && working) {
+        daysToAdd--;
+      }
+    }
+
+    // Time ko EXACT Start Date ke Time par retain rakhein
+    currDate.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
   } 
-  // 🟢 CASE 2: HOURS FREQUENCY WITH SHIFT OVERFLOW (e.g. 6 Hours)
+  // 🟢 CASE B: HOURS FREQUENCY (e.g., +6 Hours)
   else {
     let remainingMs = freqObj.value * 60 * 60 * 1000;
-    let currStart = new Date(startDate);
 
     while (remainingMs > 0) {
-      // Current day shift start and end
-      const shiftStart = snapToShiftTime(currStart, workShift, true);
-      const shiftEnd = snapToShiftTime(currStart, workShift, false);
+      const shiftStart = snapToShiftTime(currDate, workShift, true);
+      const shiftEnd = snapToShiftTime(currDate, workShift, false);
 
-      // If current start is before shift start, bring it to shift start
-      if (currStart < shiftStart) {
-        currStart = shiftStart;
+      if (currDate < shiftStart) {
+        currDate = shiftStart;
       }
 
-      // If current start is at or after shift end, move to next working day
-      if (currStart >= shiftEnd) {
-        let nextDay = addDays(startOfDay(currStart), 1);
-        currStart = await nextWorkingShiftDate(
+      // Agar start time already shift end par ya aage hai -> Next Working Shift Start par shift karo
+      if (currDate >= shiftEnd) {
+        let nextDay = addDays(startOfDay(currDate), 1);
+        currDate = await nextWorkingShiftDate(
           nextDay,
           workShiftId,
           {},
@@ -236,20 +238,15 @@ export async function calculateCalendarDurationWithShiftSnap(
         continue;
       }
 
-      // Available time left in today's shift
-      const availableMsInShift = shiftEnd.getTime() - currStart.getTime();
+      const availableMs = shiftEnd.getTime() - currDate.getTime();
 
-      if (remainingMs <= availableMsInShift) {
-        // Remaining hours fit inside current shift
-        currStart = new Date(currStart.getTime() + remainingMs);
+      if (remainingMs <= availableMs) {
+        currDate = new Date(currDate.getTime() + remainingMs);
         remainingMs = 0;
       } else {
-        // Consume available hours of today's shift
-        remainingMs -= availableMsInShift;
-
-        // Move to start of next working day's shift
-        let nextDay = addDays(startOfDay(currStart), 1);
-        currStart = await nextWorkingShiftDate(
+        remainingMs -= availableMs;
+        let nextDay = addDays(startOfDay(currDate), 1);
+        currDate = await nextWorkingShiftDate(
           nextDay,
           workShiftId,
           {},
@@ -257,17 +254,15 @@ export async function calculateCalendarDurationWithShiftSnap(
         );
       }
     }
-
-    targetDate = currStart;
   }
 
-  // 🟢 SAFETY CHECK: Non-working days & Shift clamping
+  // Final Shift Snap & Holiday Verification
   while (
-    (await isHoliday(targetDate, userOrDeptId)) ||
-    !(await isWorkingDay(targetDate, workShift, userOrDeptId))
+    (await isHoliday(currDate, userOrDeptId)) ||
+    !(await isWorkingDay(currDate, workShift, userOrDeptId))
   ) {
-    let nextDay = addDays(startOfDay(targetDate), 1);
-    targetDate = await nextWorkingShiftDate(
+    let nextDay = addDays(startOfDay(currDate), 1);
+    currDate = await nextWorkingShiftDate(
       nextDay,
       workShiftId,
       {},
@@ -275,13 +270,13 @@ export async function calculateCalendarDurationWithShiftSnap(
     );
   }
 
-  const shiftStart = snapToShiftTime(targetDate, workShift, true);
-  const shiftEnd = snapToShiftTime(targetDate, workShift, false);
+  const shiftStart = snapToShiftTime(currDate, workShift, true);
+  const shiftEnd = snapToShiftTime(currDate, workShift, false);
 
-  if (targetDate < shiftStart) targetDate = shiftStart;
-  if (targetDate > shiftEnd) targetDate = shiftEnd;
+  if (currDate < shiftStart) currDate = shiftStart;
+  if (currDate > shiftEnd) currDate = shiftEnd;
 
-  return targetDate;
+  return currDate;
 }
 export default {
   calculateFmsTaskDates,
