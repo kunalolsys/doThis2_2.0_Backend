@@ -837,28 +837,31 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
       };
     }
-    // 🟢 CASE B: FORM EVENT & START FREQUENCIES (WORKING DAY & SHIFT VALIDATED)
+    // 🟢 CASE B: FORM EVENT & START FREQUENCIES (MATCHING PLANNED-TO-PLANNED LOGIC)
     else if (
       tmplTask.linkedWithForm ||
       freq.includes("form event") ||
       freq.includes("event") ||
       freq.startsWith("start")
     ) {
-      // 1. Check if submission day is Non-Working Day or Post-Shift
-      let taskStartDate = formSubmissionDate;
+      let taskStartDate = new Date(formSubmissionDate);
 
-      const isTodayWorking = await isWorkingDay(
-        formSubmissionDate,
+      // Same Working Day / Holiday / Shift-End validation as Planned-To-Planned
+      const isWorking = await isWorkingDay(
+        taskStartDate,
         doer.assignShift,
         taskDeptContext
       );
-      const isTodayHoli = await isHoliday(formSubmissionDate, taskDeptContext);
-      const shiftEnd = snapToShiftTime(formSubmissionDate, doer.assignShift, false);
+      const isHoli = await isHoliday(taskStartDate, taskDeptContext);
+      const shiftEnd = snapToShiftTime(
+        taskStartDate,
+        doer.assignShift,
+        false
+      );
 
-      // Agar Non-Working Day hai, Holiday hai ya Shift Over ho chuki hai
-      if (!isTodayWorking || isTodayHoli || formSubmissionDate >= shiftEnd) {
-        let nextDay = new Date(formSubmissionDate);
-        if (formSubmissionDate >= shiftEnd) {
+      if (!isWorking || isHoli || taskStartDate >= shiftEnd) {
+        let nextDay = new Date(taskStartDate);
+        if (taskStartDate >= shiftEnd) {
           nextDay.setDate(nextDay.getDate() + 1);
         }
 
@@ -876,7 +879,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         );
       }
 
-      // 2. Due Date Calculation from Validated Working Start Date
       const freqParsed = parseFrequencyToHours(
         tmplTask.frequency,
         tmplTask.xValue
@@ -894,7 +896,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate,
       };
     }
-    // 🟢 CASE C: DEPENDENT TASKS (PLANNED-TO-PLANNED)
+    // 🟢 CASE C: DEPENDENT TASKS (PLANNED-TO-PLANNED) - UNTOUCHED
     else if (tmplTask.isDependent && tmplTask.dependentOn) {
       if (tmplTask.startTimeSetting === "planned-to-planned") {
         const parentTask = instanceTasks.find(
@@ -905,7 +907,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           ? new Date(parentTask.plannedDueDate)
           : new Date(formSubmissionDate);
 
-        // Ensure Parent Due Date lands on a valid Working Shift for Child Start Date
         const isParentWorkingDay = await isWorkingDay(
           taskStartDate,
           doer.assignShift,
@@ -958,7 +959,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dates = { startDate: null, dueDate: null };
       }
     }
-    // 🟢 CASE D: FALLBACK DATES
+    // 🟢 CASE D: FALLBACK DATES - UNTOUCHED
     else {
       const previousTasks = instanceTasks.map((task) => ({
         taskId: task.originalTaskId,

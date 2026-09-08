@@ -1,24 +1,148 @@
+import { addDays, startOfDay } from "date-fns";
+import WorkShift from "../models/WorkShift.js";
+import FmsTask from "../models/FmsTask.js";
 import {
   nextWorkingShiftDate,
-  addWorkingDaysHoliday,
   snapToShiftTime,
   isWorkingDay,
   isHoliday,
 } from "./dateCalculator.js";
-import FmsTask from "../models/FmsTask.js";
-import WorkShift from "../models/WorkShift.js";
-import { addDays, startOfDay } from "date-fns";
 
 /**
- * ALL 5 CASES - Department-Aware & WorkShift-Compliant Date Calculator
+ * Frequency string ko dynamically parse karta hai.
+ * Returns: { isDay: boolean, value: number }
  */
+export function parseFrequencyToHours(frequencyStr, xValue) {
+  const freq = (frequencyStr || "").toLowerCase();
+  const rawX = Number(xValue || 0);
+
+  const isNegative = freq.includes("-");
+  const multiplier = isNegative ? -1 : 1;
+
+  if (freq.includes("day") || freq.includes("d")) {
+    return { isDay: true, value: rawX * multiplier };
+  } else {
+    return { isDay: false, value: rawX * multiplier };
+  }
+}
+
+/**
+ * EXACT TIME PRESERVING & CALENDAR DAYS JUMP CALCULATOR
+ */
+export async function calculateCalendarDurationWithShiftSnap(
+  startDate,
+  freqObj,
+  workShiftId,
+  userOrDeptId = null
+) {
+  if (!startDate) startDate = new Date();
+  if (!freqObj || freqObj.value === 0) return new Date(startDate);
+
+  const workShift = await WorkShift.findById(workShiftId).lean();
+  if (!workShift) return new Date(startDate);
+
+  let targetDate = new Date(startDate);
+
+  // Preserve original exact start time (e.g., 11:49 AM)
+  const origHours = startDate.getHours();
+  const origMinutes = startDate.getMinutes();
+  const origSeconds = startDate.getSeconds();
+
+  // 🟢 1. CALENDAR DAYS JUMP (STRICT 24-HOUR / CALENDAR DAYS JUMP)
+  if (freqObj.isDay) {
+    // Direct calendar days add karein (बीच ke off-days skip nahi honge)
+    targetDate = addDays(targetDate, Math.abs(freqObj.value));
+
+    // Restore exact original time (11:49 AM)
+    targetDate.setHours(origHours, origMinutes, origSeconds, 0);
+  } 
+  // 🟢 2. SHIFT HOURS OVERFLOW (FOR HOUR FREQUENCIES ONLY)
+  else {
+    let remainingMs = freqObj.value * 60 * 60 * 1000;
+    let currStart = new Date(startDate);
+
+    let safetyCounter = 0;
+    while (remainingMs > 0 && safetyCounter < 50) {
+      safetyCounter++;
+      const shiftStart = snapToShiftTime(currStart, workShift, true);
+      const shiftEnd = snapToShiftTime(currStart, workShift, false);
+
+      if (currStart < shiftStart) {
+        currStart = shiftStart;
+      }
+
+      if (currStart >= shiftEnd) {
+        let nextDay = addDays(startOfDay(currStart), 1);
+        currStart = await nextWorkingShiftDate(
+          nextDay,
+          workShiftId,
+          {},
+          userOrDeptId
+        );
+        continue;
+      }
+
+      const availableMs = shiftEnd.getTime() - currStart.getTime();
+
+      if (remainingMs <= availableMs) {
+        currStart = new Date(currStart.getTime() + remainingMs);
+        remainingMs = 0;
+      } else {
+        remainingMs -= availableMs;
+        let nextDay = addDays(startOfDay(currStart), 1);
+        currStart = await nextWorkingShiftDate(
+          nextDay,
+          workShiftId,
+          {},
+          userOrDeptId
+        );
+      }
+    }
+    targetDate = currStart;
+  }
+
+  // 🟢 3. TARGET LANDING DAY HOLIDAY / NON-WORKING DAY ROLLOVER
+  // Sirf tabhi next working day par jayega agar LANDING date holiday/non-working ho
+  let holidayCheckCounter = 0;
+  while (
+    holidayCheckCounter < 30 &&
+    ((await isHoliday(targetDate, userOrDeptId)) ||
+      !(await isWorkingDay(targetDate, workShift, userOrDeptId)))
+  ) {
+    holidayCheckCounter++;
+    let nextDay = addDays(startOfDay(targetDate), 1);
+    targetDate = await nextWorkingShiftDate(
+      nextDay,
+      workShiftId,
+      {},
+      userOrDeptId
+    );
+
+    // Day frequency me exact original time retain rakhein
+    if (freqObj.isDay) {
+      targetDate.setHours(origHours, origMinutes, origSeconds, 0);
+    }
+  }
+
+  // 🟢 4. SHIFT BOUNDARY CLAMP (DISABLED FOR DAY FREQUENCY TO PRESERVE TIME)
+  if (!freqObj.isDay) {
+    const shiftStart = snapToShiftTime(targetDate, workShift, true);
+    const shiftEnd = snapToShiftTime(targetDate, workShift, false);
+
+    if (targetDate < shiftStart) targetDate = shiftStart;
+    if (targetDate > shiftEnd) targetDate = shiftEnd;
+  }
+
+  return targetDate;
+}
+
 export async function calculateFmsTaskDates(
   taskData,
   fmsStart,
   fmsEnd,
   workShiftId,
   previousTasks = [],
-  userOrDeptId = null,
+  userOrDeptId = null
 ) {
   const {
     frequency,
@@ -37,9 +161,11 @@ export async function calculateFmsTaskDates(
     fmsStart,
     workShiftId,
     {},
-    targetUserContext,
+    targetUserContext
   );
   let dueDate = null;
+
+  const freqParsed = parseFrequencyToHours(frequency, xValue);
 
   if (
     freq === "anytime" ||
@@ -53,208 +179,69 @@ export async function calculateFmsTaskDates(
       previousTasks.find((t) => t.taskId === dependentOn) ||
       (await FmsTask.findOne({ taskId: dependentOn }).lean());
 
-    if (!parentTask) {
-      throw new Error(
-        `DEP ERROR: Dependent parent task "${dependentOn}" not found`,
+    if (parentTask) {
+      const parentRef =
+        parentTask.plannedDueDate || parentTask.plannedStartDate || fmsStart;
+      startDate = await nextWorkingShiftDate(
+        parentRef,
+        workShiftId,
+        {},
+        targetUserContext
       );
-    }
 
-    const parentRef =
-      parentTask.plannedDueDate || parentTask.plannedStartDate || fmsStart;
-    const shiftBase = await nextWorkingShiftDate(
-      parentRef,
-      workShiftId,
-      {},
-      targetUserContext,
-    );
-
-    if (startTimeSetting === "planned-to-planned") {
-      const isNegative = freq.includes("-");
-      const multiplier = isNegative ? -1 : 1;
-
-      if (freq.includes("hour")) {
-        dueDate = new Date(
-          shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
+      if (startTimeSetting === "planned-to-planned") {
+        dueDate = await calculateCalendarDurationWithShiftSnap(
+          startDate,
+          freqParsed,
+          workShiftId,
+          targetUserContext
         );
       } else {
-        dueDate = await addWorkingDaysHoliday(
-          parentRef,
-          xValue * multiplier,
-          workShiftId,
-          false,
-          {},
-          targetUserContext,
-        );
+        startDate = null;
+        dueDate = null;
       }
-    } else {
-      startDate = null;
-      dueDate = null;
     }
   } else if (freq.startsWith("start")) {
-    const shiftBase = await nextWorkingShiftDate(
+    startDate = await nextWorkingShiftDate(
       fmsStart,
       workShiftId,
       {},
-      targetUserContext,
+      targetUserContext
     );
 
-    const isNegative = freq.includes("-");
-    const multiplier = isNegative ? -1 : 1;
-
-    if (freq.includes("hour")) {
-      dueDate = new Date(
-        shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
-      );
-    } else {
-      dueDate = await addWorkingDaysHoliday(
-        fmsStart,
-        xValue * multiplier,
-        workShiftId,
-        false,
-        {},
-        targetUserContext,
-      );
-    }
+    dueDate = await calculateCalendarDurationWithShiftSnap(
+      startDate,
+      freqParsed,
+      workShiftId,
+      targetUserContext
+    );
   } else if (freq.startsWith("event") && fmsEnd) {
-    const shiftBase = await nextWorkingShiftDate(
-      fmsEnd,
+    startDate = await nextWorkingShiftDate(
+      fmsStart,
       workShiftId,
       {},
-      targetUserContext,
+      targetUserContext
     );
 
-    const isNegative = freq.includes("-");
-    const multiplier = isNegative ? -1 : 1;
-
-    if (freq.includes("hour")) {
-      dueDate = new Date(
-        shiftBase.getTime() + Math.abs(xValue) * 3600000 * multiplier,
-      );
-    } else {
-      dueDate = await addWorkingDaysHoliday(
-        fmsEnd,
-        xValue * multiplier,
-        workShiftId,
-        false,
-        {},
-        targetUserContext,
-      );
-    }
+    dueDate = await calculateCalendarDurationWithShiftSnap(
+      fmsEnd,
+      freqParsed,
+      workShiftId,
+      targetUserContext
+    );
   }
 
   if (taskEndDays > 0 && startDate) {
-    dueDate = await addWorkingDaysHoliday(
+    const endDaysParsed = { isDay: true, value: Number(taskEndDays) };
+    dueDate = await calculateCalendarDurationWithShiftSnap(
       startDate,
-      taskEndDays,
+      endDaysParsed,
       workShiftId,
-      false,
-      {},
-      targetUserContext,
+      targetUserContext
     );
   }
 
   return { startDate, dueDate };
-}
-
-export function parseFrequencyToHours(frequencyStr, xValue) {
-  const freq = (frequencyStr || "").toLowerCase();
-  const rawX = Number(xValue || 0);
-
-  const isNegative = freq.includes("-");
-  const multiplier = isNegative ? -1 : 1;
-
-  if (freq.includes("day") || freq.includes("d")) {
-    return { isDay: true, value: rawX * multiplier };
-  } else {
-    return { isDay: false, value: rawX * multiplier };
-  }
-}
-
-/**
- * FIXED: 24-Hour Calendar Duration + Holiday/Shift-Snap Aware Calculator
- */
-export async function calculateCalendarDurationWithShiftSnap(
-  startDate,
-  freqObj,
-  workShiftId,
-  userOrDeptId = null,
-) {
-  if (!freqObj || freqObj.value === 0) return new Date(startDate);
-
-  const workShift = await WorkShift.findById(workShiftId).lean();
-  if (!workShift) throw new Error("WorkShift not found");
-
-  let targetDate = new Date(startDate);
-
-  // 1. CALENDAR DURATION ADDITION
-  if (freqObj.isDay) {
-    targetDate = new Date(
-      startDate.getTime() + freqObj.value * 24 * 60 * 60 * 1000,
-    );
-  } else {
-    let remainingMs = freqObj.value * 60 * 60 * 1000;
-    let currStart = new Date(startDate);
-
-    while (remainingMs > 0) {
-      const shiftStart = snapToShiftTime(currStart, workShift, true);
-      const shiftEnd = snapToShiftTime(currStart, workShift, false);
-
-      if (currStart < shiftStart) {
-        currStart = shiftStart;
-      }
-
-      if (currStart >= shiftEnd) {
-        let nextDay = addDays(startOfDay(currStart), 1);
-        currStart = await nextWorkingShiftDate(
-          nextDay,
-          workShiftId,
-          {},
-          userOrDeptId,
-        );
-        continue;
-      }
-
-      const availableMs = shiftEnd.getTime() - currStart.getTime();
-
-      if (remainingMs <= availableMs) {
-        currStart = new Date(currStart.getTime() + remainingMs);
-        remainingMs = 0;
-      } else {
-        remainingMs -= availableMs;
-        let nextDay = addDays(startOfDay(currStart), 1);
-        currStart = await nextWorkingShiftDate(
-          nextDay,
-          workShiftId,
-          {},
-          userOrDeptId,
-        );
-      }
-    }
-    targetDate = currStart;
-  }
-
-  // 2. TARGET DATE HOLIDAY / NON-WORKING DAY CHECK
-  while (
-    (await isHoliday(targetDate, userOrDeptId)) ||
-    !(await isWorkingDay(targetDate, workShift, userOrDeptId))
-  ) {
-    let nextDay = addDays(startOfDay(targetDate), 1);
-    targetDate = await nextWorkingShiftDate(
-      nextDay,
-      workShiftId,
-      {},
-      userOrDeptId,
-    );
-  }
-
-  // 3. SHIFT TIMINGS SNAP
-  const shiftStart = snapToShiftTime(targetDate, workShift, true);
-  const shiftEnd = snapToShiftTime(targetDate, workShift, false);
-
-  if (targetDate < shiftStart) targetDate = shiftStart;
-  if (targetDate > shiftEnd) targetDate = shiftEnd;
-
-  return targetDate;
 }
 
 export default {
