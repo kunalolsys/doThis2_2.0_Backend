@@ -16,6 +16,8 @@ import { generateRecurringFmsTasks } from "../cron/assignRecurringFmsTask.js";
 import Role from "../models/Role.js";
 import {
   addWorkingDaysHoliday,
+  isHoliday,
+  isWorkingDay,
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
@@ -754,7 +756,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     { upsert: true, new: true }
   );
 
-  // Exact Form Hit Time (No Shift Push for Form Start)
   const formSubmissionDate = new Date();
   const template = form.linkedTemplate;
 
@@ -836,16 +837,46 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
       };
     }
-    // 🟢 CASE B: TASK LINKED WITH FORM OR EVENT FREQUENCIES
+    // 🟢 CASE B: FORM EVENT & START FREQUENCIES (WORKING DAY & SHIFT VALIDATED)
     else if (
       tmplTask.linkedWithForm ||
       freq.includes("form event") ||
       freq.includes("event") ||
       freq.startsWith("start")
     ) {
-      // Start Date = Form Hit Date Time Exactly
-      const taskStartDate = new Date(formSubmissionDate);
+      // 1. Check if submission day is Non-Working Day or Post-Shift
+      let taskStartDate = formSubmissionDate;
 
+      const isTodayWorking = await isWorkingDay(
+        formSubmissionDate,
+        doer.assignShift,
+        taskDeptContext
+      );
+      const isTodayHoli = await isHoliday(formSubmissionDate, taskDeptContext);
+      const shiftEnd = snapToShiftTime(formSubmissionDate, doer.assignShift, false);
+
+      // Agar Non-Working Day hai, Holiday hai ya Shift Over ho chuki hai
+      if (!isTodayWorking || isTodayHoli || formSubmissionDate >= shiftEnd) {
+        let nextDay = new Date(formSubmissionDate);
+        if (formSubmissionDate >= shiftEnd) {
+          nextDay.setDate(nextDay.getDate() + 1);
+        }
+
+        const nextWorkingShift = await nextWorkingShiftDate(
+          nextDay,
+          doer.assignShift._id,
+          {},
+          taskDeptContext
+        );
+
+        taskStartDate = snapToShiftTime(
+          nextWorkingShift,
+          doer.assignShift,
+          true
+        );
+      }
+
+      // 2. Due Date Calculation from Validated Working Start Date
       const freqParsed = parseFrequencyToHours(
         tmplTask.frequency,
         tmplTask.xValue
@@ -863,29 +894,35 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         dueDate,
       };
     }
-    // 🟢 CASE C: DEPENDENT TASKS (PLANNED-TO-PLANNED & ACTUAL-TO-PLANNED)
+    // 🟢 CASE C: DEPENDENT TASKS (PLANNED-TO-PLANNED)
     else if (tmplTask.isDependent && tmplTask.dependentOn) {
       if (tmplTask.startTimeSetting === "planned-to-planned") {
-        // Direct parent search from generated runtime array
         const parentTask = instanceTasks.find(
           (t) => t.originalTaskId === tmplTask.dependentOn
         );
 
-        // Child Start Date = Parent Planned Due Date
         let taskStartDate = parentTask
           ? new Date(parentTask.plannedDueDate)
           : new Date(formSubmissionDate);
 
-        // Check if Parent Due Date lands exactly at or after Shift End (6 PM)
+        // Ensure Parent Due Date lands on a valid Working Shift for Child Start Date
+        const isParentWorkingDay = await isWorkingDay(
+          taskStartDate,
+          doer.assignShift,
+          taskDeptContext
+        );
+        const isParentHoli = await isHoliday(taskStartDate, taskDeptContext);
         const shiftEnd = snapToShiftTime(
           taskStartDate,
           doer.assignShift,
           false
         );
 
-        if (taskStartDate >= shiftEnd) {
+        if (!isParentWorkingDay || isParentHoli || taskStartDate >= shiftEnd) {
           let nextDay = new Date(taskStartDate);
-          nextDay.setDate(nextDay.getDate() + 1);
+          if (taskStartDate >= shiftEnd) {
+            nextDay.setDate(nextDay.getDate() + 1);
+          }
 
           const nextWorkingShift = await nextWorkingShiftDate(
             nextDay,
@@ -918,7 +955,6 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           dueDate,
         };
       } else {
-        // Actual-To-Planned (A-T-P)
         dates = { startDate: null, dueDate: null };
       }
     }
