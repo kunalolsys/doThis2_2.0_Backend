@@ -4,7 +4,10 @@ import Task, { DelegationTask, RecurringTask } from "../models/Task.js";
 import User from "../models/User.js";
 import {
   addWorkingDaysHoliday,
+  isHoliday,
+  isWorkingDay,
   nextWorkingShiftDate,
+  snapToShiftTime,
 } from "../utils/dateCalculator.js";
 import Conversations from "../models/queries/Conversation.js";
 import { getIO } from "../socket.js";
@@ -14,6 +17,7 @@ import sendEmail from "../services/emailService.js";
 import { bucketCompletedTemplate } from "../services/templates/bucketCompletedTemplate.js";
 import { taskBucketAssignedTemplate } from "../services/templates/taskBucketAssignedTemp.js";
 import { sendNotification } from "../services/telegram/services/taskTelegramService.js";
+import { calculateCalendarDurationWithShiftSnap,parseFrequencyToHours } from "../utils/fmsDateCalculator.js";
 
 // =======================================================
 // CREATE BUCKET TASK
@@ -706,7 +710,7 @@ export const distributeTaskBucket = async (req, res) => {
     // VALID USERS (ONLY REPORTING CHECK)
     // =====================================================
     const validUsers = users.filter(
-      (u) => String(u.reportingManager) === String(userId),
+      (u) => String(u.reportingManager) === String(userId)
     );
 
     if (!validUsers.length) {
@@ -717,7 +721,7 @@ export const distributeTaskBucket = async (req, res) => {
     }
 
     // =====================================================
-    // 🔥 DUPLICATE CHECK (IMPORTANT FIX FOR BOTH TASK TYPES)
+    // DUPLICATE CHECK
     // =====================================================
     const [existingDelegation, existingRecurring] = await Promise.all([
       DelegationTask.find({
@@ -740,7 +744,7 @@ export const distributeTaskBucket = async (req, res) => {
     // FILTER ONLY NEW USERS
     // =====================================================
     const usersToAssign = validUsers.filter(
-      (u) => !assignedSet.has(String(u._id)),
+      (u) => !assignedSet.has(String(u._id))
     );
 
     if (!usersToAssign.length) {
@@ -752,13 +756,12 @@ export const distributeTaskBucket = async (req, res) => {
     }
 
     // =====================================================
-    // CREATE TASKS
+    // CREATE TASKS USING FMS TIMING ENGINE
     // =====================================================
     const createdTasks = [];
+
     for (const user of usersToAssign) {
-      const assignedUser = await User.findById(user._id).populate(
-        "assignShift",
-      );
+      const assignedUser = await User.findById(user._id).populate("assignShift");
 
       if (!assignedUser?.assignShift) {
         return res.status(400).json({
@@ -767,7 +770,7 @@ export const distributeTaskBucket = async (req, res) => {
         });
       }
 
-      // 🟢 Resolve department: prioritize selected department, fallback to user department array
+      // Resolve department
       const deptId =
         departmentMap[String(user._id)] ||
         assignedUser?.department?.[0]?._id ||
@@ -784,36 +787,78 @@ export const distributeTaskBucket = async (req, res) => {
 
       const workShift = assignedUser.assignShift;
 
-      // ============================
-      // 1. START DATE (WORKSHIFT & DEPT SAFE)
-      // ============================
-      let effectiveStartDate = bucket.startDate
-        ? await nextWorkingShiftDate(
-            bucket.startDate,
-            workShift._id,
-            {},
-            deptId,
-          )
-        : await nextWorkingShiftDate(new Date(), workShift._id, {}, deptId);
+      // ============================================================
+      // 🟢 1. START DATE CALCULATIONS (FMS ENGINE)
+      // ============================================================
+      let baseStartDate = bucket.startDate
+        ? new Date(bucket.startDate)
+        : new Date();
 
-      // ============================
-      // 2. DUE DATE (TASK END DAYS LOGIC)
-      // ============================
+      if (
+        baseStartDate.getHours() === 0 &&
+        baseStartDate.getMinutes() === 0
+      ) {
+        baseStartDate = snapToShiftTime(baseStartDate, workShift, true);
+      }
+
+      const isWorking = await isWorkingDay(baseStartDate, workShift, deptId);
+      const isHoli = await isHoliday(baseStartDate, deptId);
+      const shiftEnd = snapToShiftTime(baseStartDate, workShift, false);
+
+      if (!isWorking || isHoli || baseStartDate >= shiftEnd) {
+        let nextDay = new Date(baseStartDate);
+        if (baseStartDate >= shiftEnd) {
+          nextDay.setDate(nextDay.getDate() + 1);
+        }
+
+        const nextWorkingShift = await nextWorkingShiftDate(
+          nextDay,
+          workShift._id,
+          {},
+          deptId
+        );
+
+        baseStartDate = snapToShiftTime(nextWorkingShift, workShift, true);
+      }
+
+      const effectiveStartDate = baseStartDate;
+
+      // ============================================================
+      // 🟢 2. DUE DATE CALCULATIONS (FMS ENGINE)
+      // ============================================================
       let effectiveDueDate = null;
 
       if (bucket.taskEndDays && bucket.taskEndDays > 0) {
-        effectiveDueDate = await addWorkingDaysHoliday(
+        const endDaysParsed = { isDay: true, value: Number(bucket.taskEndDays) };
+        effectiveDueDate = await calculateCalendarDurationWithShiftSnap(
           effectiveStartDate,
-          bucket.taskEndDays,
+          endDaysParsed,
           workShift._id,
-          false,
-          {},
-          deptId,
+          deptId
         );
+
+        if (bucket.taskEndTime) {
+          const [hours, minutes] = String(bucket.taskEndTime).split(":").map(Number);
+          if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+            effectiveDueDate.setHours(hours, minutes, 0, 0);
+          }
+        }
+      }
+
+      // Calculate taskEndDays sync
+      let calculatedTaskEndDays = bucket.taskEndDays;
+      if (effectiveStartDate && effectiveDueDate) {
+        const startDay = new Date(effectiveStartDate);
+        const dueDay = new Date(effectiveDueDate);
+        startDay.setHours(0, 0, 0, 0);
+        dueDay.setHours(0, 0, 0, 0);
+
+        const diffMs = dueDay.getTime() - startDay.getTime();
+        calculatedTaskEndDays = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
       }
 
       // ============================
-      // BASE PAYLOAD (FIXED WITH SELECTED DEPT)
+      // BASE PAYLOAD
       // ============================
       const basePayload = {
         bucketId: bucket._id,
@@ -831,15 +876,19 @@ export const distributeTaskBucket = async (req, res) => {
 
         startDate: effectiveStartDate,
         dueDate: effectiveDueDate,
+        plannedStartDate: effectiveStartDate,
+        plannedDueDate: effectiveDueDate,
 
-        taskEndDays: bucket.taskEndDays,
+        taskEndDays: calculatedTaskEndDays,
+        taskEndTime: bucket.taskEndTime || null,
 
-        checklist: bucket.checklist,
+        checklist: bucket.checklist || [],
 
-        isDependent: bucket.isDependent,
+        isDependent: bucket.isDependent || false,
         dependencyConfig: bucket.dependencyConfig,
 
         status: "Pending",
+        isVisible: false,
       };
 
       let task;
@@ -862,22 +911,18 @@ export const distributeTaskBucket = async (req, res) => {
       // =====================================================
       // CREATE CONVERSATION
       // =====================================================
-
       const conversation = await Conversations.create({
         taskId: task._id,
         taskType: task.taskType,
         participants: [assignedUser?._id, userId].filter(Boolean),
       });
 
-      // attach conversation
       task.conversationId = conversation._id;
-
       await task.save();
 
       // =====================================================
       // REALTIME NOTIFICATION
       // =====================================================
-
       const io = getIO();
 
       if (io) {
@@ -893,26 +938,20 @@ export const distributeTaskBucket = async (req, res) => {
       // =====================================================
       // DATABASE NOTIFICATION
       // =====================================================
-
       await Notifications.create({
         user: assignedUser._id,
         fromUser: userId,
-
         type: "TASK_ASSIGNED",
-
         title: "New Task Assigned",
-
         description: `You received a new task "${task.title}"`,
-
         relatedId: task._id,
         taskId: task._id,
         conversationId: conversation._id,
       });
 
       // =====================================================
-      // EMAIL & TELEGRAM (NON-BLOCKING SAFE)
+      // EMAIL & TELEGRAM (NON-BLOCKING)
       // =====================================================
-
       if (assignedUser?.email) {
         const frontendUrl = `${
           process.env.BASE_URL
@@ -952,22 +991,19 @@ export const distributeTaskBucket = async (req, res) => {
     }
 
     // =====================================================
-    // UPDATE GENERATED TASKS
+    // UPDATE GENERATED TASKS IN BUCKET
     // =====================================================
-
     bucket.generatedTasks.push(...createdTasks);
 
     // =====================================================
     // CHECK DISTRIBUTION STATUS
     // =====================================================
-
     const reportingUsers = await User.find({
       reportingManager: userId,
     }).select("_id");
 
     const reportingUserIds = reportingUsers.map((u) => String(u._id));
 
-    // users who received this bucket task (across delegation and recurring)
     const [delegationDistributed, recurringDistributed] = await Promise.all([
       DelegationTask.find({
         bucketId: bucket._id,
@@ -990,7 +1026,6 @@ export const distributeTaskBucket = async (req, res) => {
     // =====================================================
     // FINAL STATUS
     // =====================================================
-
     if (distributedCount === 0) {
       bucket.distributionStatus = "Pending";
     } else if (distributedCount < totalUsers) {

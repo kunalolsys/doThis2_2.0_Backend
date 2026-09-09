@@ -13,9 +13,11 @@ import User from "../models/User.js";
 import Counter from "../models/Counter.js";
 import { handleAsync } from "../utils/handleAsync.js";
 import AppError from "../utils/AppError.js";
-import fmsDateCalculator from "../utils/fmsDateCalculator.js";
+import fmsDateCalculator, { calculateCalendarDurationWithShiftSnap, parseFrequencyToHours } from "../utils/fmsDateCalculator.js";
 import {
   addWorkingDaysHoliday,
+  isHoliday,
+  isWorkingDay,
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
@@ -1010,7 +1012,7 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
 
       const template = form.linkedTemplate;
 
-      // 7. 🟢 ALL TASKS CREATED AT ONCE WITH SHIFT-AWARE HOURS OVERFLOW
+      // 7. 🟢 ALL TASKS CREATED USING FMS ENGINE
       if (triggerFms && template) {
         const templateTasks = await FmsTask.find({
           fmsTemplateId: template._id,
@@ -1117,84 +1119,53 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
                 ) {
                   let taskStartDate = new Date(formSubmissionDate);
 
-                  const shiftEnd = snapToShiftTime(
-                    formSubmissionDate,
+                  const isWorking = await isWorkingDay(
+                    taskStartDate,
                     doer.assignShift,
-                    false,
+                    taskDeptContext
                   );
-                  if (formSubmissionDate >= shiftEnd) {
-                    let nextDay = new Date(formSubmissionDate);
-                    nextDay.setDate(nextDay.getDate() + 1);
+                  const isHoli = await isHoliday(taskStartDate, taskDeptContext);
+                  const shiftEnd = snapToShiftTime(
+                    taskStartDate,
+                    doer.assignShift,
+                    false
+                  );
+
+                  if (!isWorking || isHoli || taskStartDate >= shiftEnd) {
+                    let nextDay = new Date(taskStartDate);
+                    if (taskStartDate >= shiftEnd) {
+                      nextDay.setDate(nextDay.getDate() + 1);
+                    }
 
                     const nextWorkingShift = await nextWorkingShiftDate(
                       nextDay,
                       doer.assignShift._id,
                       {},
-                      taskDeptContext,
+                      taskDeptContext
                     );
 
                     taskStartDate = snapToShiftTime(
                       nextWorkingShift,
                       doer.assignShift,
-                      true,
+                      true
                     );
                   }
 
-                  let dueDate = new Date(taskStartDate);
-                  const xValue = Number(tmplTask.xValue || 0);
+                  const freqParsed = parseFrequencyToHours(
+                    tmplTask.frequency,
+                    tmplTask.xValue
+                  );
 
-                  if (freq.includes("hour")) {
-                    let calculatedDue = new Date(
-                      taskStartDate.getTime() + xValue * 60 * 60 * 1000,
-                    );
-                    const shiftEndDue = snapToShiftTime(
-                      taskStartDate,
-                      doer.assignShift,
-                      false,
-                    );
-
-                    if (calculatedDue <= shiftEndDue) {
-                      dueDate = calculatedDue;
-                    } else {
-                      const overflowMs =
-                        calculatedDue.getTime() - shiftEndDue.getTime();
-                      let nextDay = new Date(taskStartDate);
-                      nextDay.setDate(nextDay.getDate() + 1);
-
-                      const nextWorkingDay = await nextWorkingShiftDate(
-                        nextDay,
-                        doer.assignShift._id,
-                        {},
-                        taskDeptContext,
-                      );
-
-                      const nextShiftStart = snapToShiftTime(
-                        nextWorkingDay,
-                        doer.assignShift,
-                        true,
-                      );
-                      dueDate = new Date(nextShiftStart.getTime() + overflowMs);
-                    }
-                  } else {
-                    const addedDaysDate = await addWorkingDaysHoliday(
-                      taskStartDate,
-                      xValue,
-                      doer.assignShift._id,
-                      tmplTask.isDependent,
-                      {},
-                      taskDeptContext,
-                    );
-
-                    dueDate = snapToShiftTime(
-                      addedDaysDate || taskStartDate,
-                      doer.assignShift,
-                      false,
-                    );
-                  }
+                  const dueDate = await calculateCalendarDurationWithShiftSnap(
+                    taskStartDate,
+                    freqParsed,
+                    doer.assignShift._id,
+                    taskDeptContext
+                  );
 
                   dates = { startDate: taskStartDate, dueDate };
                 }
-                // 🟢 DEPENDENT TASKS FIX FOR SHIFT OVERFLOW HOURS
+                // 🟢 DEPENDENT TASKS USING FMS SHIFT ENGINE
                 else if (tmplTask.isDependent) {
                   if (tmplTask.startTimeSetting === "actual-to-planned") {
                     dates = { startDate: null, dueDate: null };
@@ -1203,67 +1174,63 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
                       (t) => t.originalTaskId === tmplTask.dependentOn,
                     );
 
-                    const baseStart =
-                      parentTask?.plannedStartDate || formSubmissionDate;
-                    const baseDue = parentTask?.plannedDueDate || baseStart;
-                    const xValue = Number(tmplTask.xValue || 0);
+                    let taskStartDate = parentTask?.plannedDueDate
+                      ? new Date(parentTask.plannedDueDate)
+                      : parentTask?.plannedStartDate
+                      ? new Date(parentTask.plannedStartDate)
+                      : new Date(formSubmissionDate);
 
-                    if (freq.includes("hour")) {
-                      dates.startDate = new Date(baseStart);
+                    const isWorking = await isWorkingDay(
+                      taskStartDate,
+                      doer.assignShift,
+                      taskDeptContext
+                    );
+                    const isHoli = await isHoliday(taskStartDate, taskDeptContext);
+                    const shiftEnd = snapToShiftTime(
+                      taskStartDate,
+                      doer.assignShift,
+                      false
+                    );
 
-                      const shiftEnd = snapToShiftTime(
-                        baseDue,
-                        doer.assignShift,
-                        false,
-                      );
-                      const rawDueTime =
-                        baseDue.getTime() + xValue * 60 * 60 * 1000;
-
-                      // If hours exceed current shift end, carry overflow to next working shift start
-                      if (rawDueTime > shiftEnd.getTime()) {
-                        const overflowMs = rawDueTime - shiftEnd.getTime();
-
-                        let nextDay = new Date(baseDue);
+                    if (!isWorking || isHoli || taskStartDate >= shiftEnd) {
+                      let nextDay = new Date(taskStartDate);
+                      if (taskStartDate >= shiftEnd) {
                         nextDay.setDate(nextDay.getDate() + 1);
-
-                        const nextWorkingDay = await nextWorkingShiftDate(
-                          nextDay,
-                          doer.assignShift._id,
-                          {},
-                          taskDeptContext,
-                        );
-
-                        const nextShiftStart = snapToShiftTime(
-                          nextWorkingDay,
-                          doer.assignShift,
-                          true,
-                        );
-
-                        dates.dueDate = new Date(
-                          nextShiftStart.getTime() + overflowMs,
-                        );
-                      } else {
-                        dates.dueDate = new Date(rawDueTime);
                       }
-                    } else {
-                      dates.startDate = new Date(baseStart);
-                      const addedDue = await addWorkingDaysHoliday(
-                        baseDue,
-                        xValue,
+
+                      const nextWorkingShift = await nextWorkingShiftDate(
+                        nextDay,
                         doer.assignShift._id,
-                        true,
                         {},
-                        taskDeptContext,
+                        taskDeptContext
                       );
-                      dates.dueDate = snapToShiftTime(
-                        addedDue || baseDue,
+
+                      taskStartDate = snapToShiftTime(
+                        nextWorkingShift,
                         doer.assignShift,
-                        false,
+                        true
                       );
                     }
+
+                    const freqParsed = parseFrequencyToHours(
+                      tmplTask.frequency,
+                      tmplTask.xValue
+                    );
+
+                    const dueDateCalculated = await calculateCalendarDurationWithShiftSnap(
+                      taskStartDate,
+                      freqParsed,
+                      doer.assignShift._id,
+                      taskDeptContext
+                    );
+
+                    dates = {
+                      startDate: taskStartDate,
+                      dueDate: dueDateCalculated,
+                    };
                   }
                 }
-                // Fallback Standard
+                // Fallback Standard Calculator
                 else {
                   const previousTasks = instanceTasks.map((t) => ({
                     taskId: t.originalTaskId,
@@ -1281,7 +1248,6 @@ export const bulkImportFormSubmissions = handleAsync(async (req, res, next) => {
                   );
                 }
 
-                // Proper dynamic taskId (e.g. FMS00001-T1)
                 const runtimeTaskId = `${instance.instanceId}-${tmplTask.taskId}`;
 
                 const isDecisionStep =

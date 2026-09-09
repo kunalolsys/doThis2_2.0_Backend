@@ -16,6 +16,7 @@ import { authenticateJWT } from "../middleware/authMiddleware.js";
 import userRoutes from "./user.js";
 import workingWeekRoutes from "./workingWeek.js";
 import moduleSettingRoutes from "./moduleSetting.js";
+import { migrateRolePermissions } from "../migrations/migrateRoles.js";
 
 const router = express.Router();
 
@@ -24,7 +25,7 @@ router.post("/roles", roleController.createRole);
 router.put("/roles/:id", roleController.updateRole);
 router.delete("/roles/:id", roleController.deleteRole);
 router.get("/roles/my-permissions", authenticateJWT, roleController.getMyPermissions);
-
+router.post("/migrate-permissions", migrateRolePermissions);
 router.post(
   "/departments/list",
   authenticateJWT,

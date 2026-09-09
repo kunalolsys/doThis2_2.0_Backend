@@ -57,7 +57,8 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
     subordinateIds.push(managerId);
     filter._id = { $in: subordinateIds };
   }
-  // 🔥 ✅ SEARCH FILTER (IMPORTANT)
+
+  // ✅ SEARCH FILTER
   if (search) {
     filter.$or = [
       { name: { $regex: search, $options: "i" } },
@@ -65,9 +66,16 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
       { employeeCode: { $regex: search, $options: "i" } },
     ];
   }
-  // ✅ Role filter
+
+  // 🟢 ROLE FILTER FIX: Prevent Overwriting
+  const superRole = await Role.findOne({ name: "Super" }).select("_id");
+
   if (role) {
-    filter.role = role; // pass role _id
+    // Agar explicit role passed ho, to vahi role filter me jayega
+    filter.role = role;
+  } else if (superRole) {
+    // Agar explicit role pass nahi hai, to Super role skip hoga
+    filter.role = { $ne: superRole._id };
   }
 
   // ✅ Department filter
@@ -82,39 +90,24 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
     filter.assignShift = assignShift;
   }
 
-  // ✅ Pagination calc
+  // ✅ Fetch users directly using MongoDB Pagination (Performance Optimized)
   const skip = (page - 1) * limit;
 
-  // ✅ Total count (for frontend pagination)
-  // const total = await User.countDocuments(filter);
+  const total = await User.countDocuments(filter);
 
-  // ✅ Fetch users
-  const superRole = await Role.findOne({
-    name: "Super",
-  }).select("_id");
-
-  if (superRole) {
-    filter.role = { $ne: superRole._id };
-  }
   const users = await User.find(filter, "-password")
     .populate("department", "name")
     .populate("reportingManager", "name")
     .populate("role", "name displayName")
     .populate("assignShift")
     .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(Number(limit))
     .lean();
-
-  // ✅ remove Super users
-  const filteredUsers = users.filter((user) => user.role?.name !== "Super");
-
-  // ✅ pagination after filtering
-  const total = filteredUsers.length;
-
-  const paginatedUsers = filteredUsers.slice(skip, skip + Number(limit));
 
   return res.status(200).json({
     success: true,
-    data: paginatedUsers,
+    data: users,
     pagination: {
       total,
       page: Number(page),
@@ -122,7 +115,7 @@ export const getAllUsers = handleAsync(async (req, res, next) => {
       totalPages: Math.ceil(total / Number(limit)),
     },
   });
-});
+});;
 export const getAllUsersForDrop = handleAsync(async (req, res, next) => {
   const filter = { isDeleted: { $ne: true }, isActive: true };
   // ✅ Fetch users
