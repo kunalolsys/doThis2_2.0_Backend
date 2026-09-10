@@ -5,7 +5,7 @@ let io;
 export const initSocket = (server) => {
   io = new Server(server, {
     cors: {
-      origin: "https://tms.himaira.com",
+      origin: "https://suvidhav2.dothis2.com",
       methods: ["GET", "POST"],
       credentials: true,
     },

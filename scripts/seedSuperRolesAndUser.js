@@ -194,7 +194,7 @@ async function ensureUser({
     role: roleId,
     reportingManager: null,
     assignShift,
-    password: hashedPassword,
+    password,
     isActive: true,
     isEmailNotificationEnabled: false,
     mainEmailType: "email",
