@@ -63,6 +63,42 @@ export const exportWorkShifts = handleAsync(async (req, res) => {
 });
 
 // Create WorkShift (Cleaned up - No WorkingWeek query needed)
+// export const createWorkShift = handleAsync(async (req, res, next) => {
+//   const { name, startTime, endTime } = req.body;
+
+//   if (!name || typeof name !== "string" || !name.trim()) {
+//     return next(new AppError("Work shift name is required", 400));
+//   }
+//   if (!startTime) {
+//     return next(new AppError("Start time is required", 400));
+//   }
+//   if (!endTime) {
+//     return next(new AppError("End time is required", 400));
+//   }
+
+//   // Check if work shift already exists with same timings
+//   const existingWorkShift = await WorkShift.findOne({
+//     startTime,
+//     endTime,
+//     isDeleted: false,
+//   });
+
+//   if (existingWorkShift) {
+//     return next(new AppError("Work shift already exists", 400));
+//   }
+
+//   const workShift = await WorkShift.create({
+//     name: name.trim(),
+//     startTime,
+//     endTime,
+//   });
+
+//   res.status(201).json({
+//     status: "success",
+//     message: "Work shift created successfully",
+//     workShift,
+//   });
+// });
 export const createWorkShift = handleAsync(async (req, res, next) => {
   const { name, startTime, endTime } = req.body;
 
@@ -76,19 +112,23 @@ export const createWorkShift = handleAsync(async (req, res, next) => {
     return next(new AppError("End time is required", 400));
   }
 
-  // Check if work shift already exists with same timings
+  const trimmedName = name.trim();
+
+  // 🟢 FIX: Ab same timings ki different shifts ban sakti hain.
+  // Sirf tab error aayega jab SAME NAME (case-insensitive) ki active shift pehle se maujood ho.
   const existingWorkShift = await WorkShift.findOne({
-    startTime,
-    endTime,
+    name: { $regex: `^${trimmedName}$`, $options: "i" },
     isDeleted: false,
   });
 
   if (existingWorkShift) {
-    return next(new AppError("Work shift already exists", 400));
+    return next(
+      new AppError(`Work shift with name "${trimmedName}" already exists`, 400)
+    );
   }
 
   const workShift = await WorkShift.create({
-    name: name.trim(),
+    name: trimmedName,
     startTime,
     endTime,
   });
@@ -99,7 +139,6 @@ export const createWorkShift = handleAsync(async (req, res, next) => {
     workShift,
   });
 });
-
 // Get WorkShift by ID
 export const getWorkShiftById = handleAsync(async (req, res, next) => {
   const { id } = req.params;
