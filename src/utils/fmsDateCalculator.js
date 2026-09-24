@@ -29,11 +29,14 @@ export function parseFrequencyToHours(frequencyStr, xValue) {
 /**
  * EXACT TIME PRESERVING & CALENDAR DAYS JUMP CALCULATOR
  */
+/**
+ * Working Days / Hours aware Duration Calculator
+ */
 export async function calculateCalendarDurationWithShiftSnap(
   startDate,
   freqObj,
   workShiftId,
-  userOrDeptId = null
+  userOrDeptId = null,
 ) {
   if (!startDate) startDate = new Date();
   if (!freqObj || freqObj.value === 0) return new Date(startDate);
@@ -43,19 +46,30 @@ export async function calculateCalendarDurationWithShiftSnap(
 
   let targetDate = new Date(startDate);
 
-  // Preserve original exact start time (e.g., 11:49 AM)
   const origHours = startDate.getHours();
   const origMinutes = startDate.getMinutes();
   const origSeconds = startDate.getSeconds();
 
-  // 🟢 1. CALENDAR DAYS JUMP (STRICT 24-HOUR / CALENDAR DAYS JUMP)
+  // 🟢 1. WORKING DAYS JUMP (Skipping Holidays and Non-Working Days)
   if (freqObj.isDay) {
-    // Direct calendar days add karein (बीच ke off-days skip nahi honge)
-    targetDate = addDays(targetDate, Math.abs(freqObj.value));
+    let remainingDays = Math.abs(freqObj.value);
 
-    // Restore exact original time (11:49 AM)
+    // Loop through days and ONLY count actual working days
+    while (remainingDays > 0) {
+      targetDate = addDays(targetDate, 1);
+
+      const holiday = await isHoliday(targetDate, userOrDeptId);
+      const working = await isWorkingDay(targetDate, workShift, userOrDeptId);
+
+      // Agar holiday nahi hai aur working day hai tabhi Day count decrement hoga
+      if (!holiday && working) {
+        remainingDays--;
+      }
+    }
+
+    // Exact time preserve karo
     targetDate.setHours(origHours, origMinutes, origSeconds, 0);
-  } 
+  }
   // 🟢 2. SHIFT HOURS OVERFLOW (FOR HOUR FREQUENCIES ONLY)
   else {
     let remainingMs = freqObj.value * 60 * 60 * 1000;
@@ -77,7 +91,7 @@ export async function calculateCalendarDurationWithShiftSnap(
           nextDay,
           workShiftId,
           {},
-          userOrDeptId
+          userOrDeptId,
         );
         continue;
       }
@@ -94,7 +108,7 @@ export async function calculateCalendarDurationWithShiftSnap(
           nextDay,
           workShiftId,
           {},
-          userOrDeptId
+          userOrDeptId,
         );
       }
     }
@@ -102,7 +116,6 @@ export async function calculateCalendarDurationWithShiftSnap(
   }
 
   // 🟢 3. TARGET LANDING DAY HOLIDAY / NON-WORKING DAY ROLLOVER
-  // Sirf tabhi next working day par jayega agar LANDING date holiday/non-working ho
   let holidayCheckCounter = 0;
   while (
     holidayCheckCounter < 30 &&
@@ -115,22 +128,12 @@ export async function calculateCalendarDurationWithShiftSnap(
       nextDay,
       workShiftId,
       {},
-      userOrDeptId
+      userOrDeptId,
     );
 
-    // Day frequency me exact original time retain rakhein
     if (freqObj.isDay) {
       targetDate.setHours(origHours, origMinutes, origSeconds, 0);
     }
-  }
-
-  // 🟢 4. SHIFT BOUNDARY CLAMP (DISABLED FOR DAY FREQUENCY TO PRESERVE TIME)
-  if (!freqObj.isDay) {
-    const shiftStart = snapToShiftTime(targetDate, workShift, true);
-    const shiftEnd = snapToShiftTime(targetDate, workShift, false);
-
-    if (targetDate < shiftStart) targetDate = shiftStart;
-    if (targetDate > shiftEnd) targetDate = shiftEnd;
   }
 
   return targetDate;
@@ -142,7 +145,7 @@ export async function calculateFmsTaskDates(
   fmsEnd,
   workShiftId,
   previousTasks = [],
-  userOrDeptId = null
+  userOrDeptId = null,
 ) {
   const {
     frequency,
@@ -161,7 +164,7 @@ export async function calculateFmsTaskDates(
     fmsStart,
     workShiftId,
     {},
-    targetUserContext
+    targetUserContext,
   );
   let dueDate = null;
 
@@ -186,7 +189,7 @@ export async function calculateFmsTaskDates(
         parentRef,
         workShiftId,
         {},
-        targetUserContext
+        targetUserContext,
       );
 
       if (startTimeSetting === "planned-to-planned") {
@@ -194,7 +197,7 @@ export async function calculateFmsTaskDates(
           startDate,
           freqParsed,
           workShiftId,
-          targetUserContext
+          targetUserContext,
         );
       } else {
         startDate = null;
@@ -206,28 +209,28 @@ export async function calculateFmsTaskDates(
       fmsStart,
       workShiftId,
       {},
-      targetUserContext
+      targetUserContext,
     );
 
     dueDate = await calculateCalendarDurationWithShiftSnap(
       startDate,
       freqParsed,
       workShiftId,
-      targetUserContext
+      targetUserContext,
     );
   } else if (freq.startsWith("event") && fmsEnd) {
     startDate = await nextWorkingShiftDate(
       fmsStart,
       workShiftId,
       {},
-      targetUserContext
+      targetUserContext,
     );
 
     dueDate = await calculateCalendarDurationWithShiftSnap(
       fmsEnd,
       freqParsed,
       workShiftId,
-      targetUserContext
+      targetUserContext,
     );
   }
 
@@ -237,7 +240,7 @@ export async function calculateFmsTaskDates(
       startDate,
       endDaysParsed,
       workShiftId,
-      targetUserContext
+      targetUserContext,
     );
   }
 

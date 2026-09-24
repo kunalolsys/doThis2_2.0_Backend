@@ -198,6 +198,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         status: t.status,
         timeStatus,
         startTimeSetting: t.startTimeSetting || "N/A",
+        frequency: t.frequency || "One-time",
         startDate: t.plannedStartDate,
         dueDate: t.plannedDueDate,
         completedAt: t.actualCompleteDate,
@@ -229,6 +230,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         status: t.status,
         timeStatus,
         startTimeSetting: "N/A",
+        frequency: t.frequency || "One-time",
         startDate: t.startDate,
         dueDate: t.dueDate,
         completedAt: t.completedAt,
@@ -240,7 +242,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }),
   ];
 
-  // 5. CALCULATE STATS
+  // 5. CALCULATE STATS & PERCENTAGE RATES
   const totalTasks = normalizedTasks.length;
   const completed = normalizedTasks.filter(
     (t) => t.status === "Completed",
@@ -261,7 +263,23 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     (t) => t.startTimeSetting === "planned-to-planned",
   ).length;
 
-  // 6. USER STATS AGGREGATION
+  // Percentage Calculations for Overall System
+  const totalForCalc = totalTasks || 1;
+  const completedForCalc = completed || 1;
+
+  const completionRate =
+    Math.round((completed / totalForCalc) * 100 * 100) / 100;
+  const onTimeRate = Math.round((onTime / completedForCalc) * 100 * 100) / 100;
+  const lateRate = Math.round((late / completedForCalc) * 100 * 100) / 100;
+  const overdueRate = Math.round((overdue / totalForCalc) * 100 * 100) / 100;
+  const notDoneRate = Math.round((notDone / totalForCalc) * 100 * 100) / 100;
+
+  const actualToPlannedRate =
+    Math.round((actualToPlannedCount / totalForCalc) * 100 * 100) / 100;
+  const plannedToPlannedRate =
+    Math.round((plannedToPlannedCount / totalForCalc) * 100 * 100) / 100;
+
+  // 6. USER STATS AGGREGATION & PERCENTAGE RATES
   const userStatsMap = new Map();
 
   normalizedTasks.forEach((t) => {
@@ -291,7 +309,19 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     if (t.status !== "Completed") stat.notDone += 1;
   });
 
-  const userSummary = Array.from(userStatsMap.values());
+  const userSummary = Array.from(userStatsMap.values()).map((usr) => {
+    const usrTotal = usr.total || 1;
+    const usrCompleted = usr.completed || 1;
+
+    return {
+      ...usr,
+      completionRate: Math.round((usr.completed / usrTotal) * 100 * 100) / 100,
+      onTimeRate: Math.round((usr.onTime / usrCompleted) * 100 * 100) / 100,
+      lateRate: Math.round((usr.late / usrCompleted) * 100 * 100) / 100,
+      overdueRate: Math.round((usr.overdue / usrTotal) * 100 * 100) / 100,
+      notDoneRate: Math.round((usr.notDone / usrTotal) * 100 * 100) / 100,
+    };
+  });
 
   // Paginate list
   const skip = (Number(page) - 1) * Number(limit);
@@ -308,6 +338,15 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       notDone,
       actualToPlannedCount,
       plannedToPlannedCount,
+      rates: {
+        completionRate,
+        onTimeRate,
+        lateRate,
+        overdueRate,
+        notDoneRate,
+        actualToPlannedRate,
+        plannedToPlannedRate,
+      },
     },
     userSummary,
     allTasksForExport: normalizedTasks,
