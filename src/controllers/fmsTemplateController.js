@@ -12,6 +12,7 @@ import XLSX from "xlsx";
 import { Parser } from "json2csv";
 import Role from "../models/Role.js";
 import OpenForm from "../models/OpenForm.js";
+import mongoose from 'mongoose'
 export const createTemplate = handleAsync(async (req, res, next) => {
   const {
     templateName,
@@ -239,7 +240,11 @@ export const getTemplates = handleAsync(async (req, res) => {
   if (userRole === "admin" || userRole === "pc") {
     // ✅ ADMIN / PC sees ALL templates across the organization.
     // No filter.user constraint needed.
-  } else if (userRole === "sr. manager" || userRole === "srmanager" || userRole === "sr._manager") {
+  } else if (
+    userRole === "sr. manager" ||
+    userRole === "srmanager" ||
+    userRole === "sr._manager"
+  ) {
     // Sr. Manager sees templates created by themselves or Managers reporting to them / in manager role
     const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
@@ -319,7 +324,7 @@ export const getTemplates = handleAsync(async (req, res) => {
   });
 });
 export const getTemplatesForDropdown = handleAsync(async (req, res) => {
-  const { role: bodyRole } = req.body || {};
+  const { role: bodyRole, forFiltering, includeLinked } = req.body || {};
   const userId = req.cookies?.userId || req.user?._id;
 
   // Safely extract user role from req.body, req.user, or req.cookies
@@ -327,31 +332,42 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
   const rawRole = typeof roleInput === "object" ? roleInput?.name : roleInput;
   const userRole = String(rawRole || "").toLowerCase();
 
-  // 🟢 1. FETCH ALL TEMPLATE IDs ALREADY LINKED WITH ANY ACTIVE OPEN FORM
-  const linkedFormTemplates = await OpenForm.find({
-    isDeleted: { $ne: true },
-    linkedTemplate: { $ne: null },
-  })
-    .select("linkedTemplate")
-    .lean();
-
-  const linkedTemplateIds = linkedFormTemplates
-    .map((form) => form.linkedTemplate)
-    .filter(Boolean);
-
-  // 🟢 2. BASE FILTER: EXCLUDE DELETED AND ALREADY LINKED TEMPLATES
+  // 🟢 1. BASE FILTER: EXCLUDE DELETED TEMPLATES
   const filter = {
     isDeleted: { $ne: true },
-    _id: { $nin: linkedTemplateIds }, // Exclude templates that are already linked
   };
+
+  // 🟢 2. UNLINKED FILTERING (ONLY WHEN CREATING A NEW FORM, NOT WHEN FILTERING RESPONSES)
+  // If forFiltering or includeLinked is true, show ALL templates (including linked ones)
+  const isFilterRequest = forFiltering === true || includeLinked === true;
+
+  if (!isFilterRequest) {
+    const linkedFormTemplates = await OpenForm.find({
+      isDeleted: { $ne: true },
+      linkedTemplate: { $ne: null },
+    })
+      .select("linkedTemplate")
+      .lean();
+
+    const linkedTemplateIds = linkedFormTemplates
+      .map((form) => form.linkedTemplate)
+      .filter(Boolean);
+
+    // Exclude templates already linked when creating a new form
+    filter._id = { $nin: linkedTemplateIds };
+  }
 
   // =========================
   // 👥 ROLE BASED FILTERING
   // =========================
   if (userRole === "admin" || userRole === "pc") {
-    // ✅ ADMIN / PC sees ALL available (unlinked) templates across all users
-  } else if (userRole === "sr. manager" || userRole === "srmanager" || userRole === "sr._manager") {
-    // Sr. Manager sees unlinked templates created by themselves or Managers
+    // ✅ ADMIN / PC sees ALL templates across all users
+  } else if (
+    userRole === "sr. manager" ||
+    userRole === "srmanager" ||
+    userRole === "sr._manager"
+  ) {
+    // Sr. Manager sees templates created by themselves or Managers
     const managerRole = await Role.findOne({ name: "manager" })
       .select("_id")
       .lean();
@@ -369,7 +385,7 @@ export const getTemplatesForDropdown = handleAsync(async (req, res) => {
       filter.user = userId;
     }
   } else {
-    // 👤 Regular Users / Doers only see their own unlinked templates
+    // 👤 Regular Users / Doers only see their own templates
     filter.user = userId;
   }
 

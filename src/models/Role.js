@@ -51,6 +51,7 @@ export const SYSTEM_MODULES = [
     submodules: [
       { key: "mis_reports", label: "MIS Reports" },
       { key: "fms_reports", label: "FMS Reports" },
+      { key: "combine_reports", label: "Combine Reports" },
     ],
   },
   // 7. My Bucket

@@ -21,6 +21,7 @@ import {
   nextWorkingShiftDate,
   snapToShiftTime,
 } from "../utils/dateCalculator.js";
+import mongoose from 'mongoose'
 
 const generateSlug = (text) => {
   return text
@@ -74,9 +75,18 @@ export const createOpenForm = handleAsync(async (req, res, next) => {
   });
 });
 
-//**GET ALL FORMS */
+//**GET ALL FORMS (SUPPORTING TEMPLATE DEPENDENT FILTERING) */
 export const getAllOpenForms = handleAsync(async (req, res) => {
-  const { search, isActive, role: bodyRole } = req.body;
+  const {
+    search,
+    isActive,
+    role: bodyRole,
+    templateId,
+    linkedTemplate,
+  } = {
+    ...req.query,
+    ...req.body,
+  };
 
   // Extract userId and role safely
   const userId = req.cookies?.userId || req.user?._id;
@@ -92,7 +102,6 @@ export const getAllOpenForms = handleAsync(async (req, res) => {
   // =========================
   if (userRole === "admin" || userRole === "pc") {
     // ✅ ADMIN / PC sees ALL open forms across all users.
-    // No query.createdBy filter needed.
   } else if (
     userRole === "sr. manager" ||
     userRole === "srmanager" ||
@@ -135,6 +144,23 @@ export const getAllOpenForms = handleAsync(async (req, res) => {
   // Filter active/inactive
   if (isActive !== undefined) {
     query.isActive = isActive === true || isActive === "true";
+  }
+
+  // =========================
+  // 🎯 TEMPLATE DEPENDENT FILTERING
+  // =========================
+  const targetTemplate = templateId || linkedTemplate;
+
+  if (
+    targetTemplate &&
+    targetTemplate !== "all" &&
+    mongoose.Types.ObjectId.isValid(targetTemplate)
+  ) {
+    if (Array.isArray(targetTemplate)) {
+      query.linkedTemplate = { $in: targetTemplate };
+    } else {
+      query.linkedTemplate = new mongoose.Types.ObjectId(targetTemplate);
+    }
   }
 
   // =========================
@@ -300,410 +326,6 @@ export const verifyOpenFormUser = handleAsync(async (req, res) => {
   });
 });
 
-//**SUBMIT OPEN FORM & TRIGGER INSTANCE */
-// export const submitOpenForm = handleAsync(async (req, res, next) => {
-//   const { slug } = req.params;
-//   const { employeeCode, submissionData } = req.body;
-//   const employee = await User.findOne({ employeeCode });
-
-//   if (!employee) {
-//     return next(new AppError("Invalid employee code", 400));
-//   }
-
-//   // VERIFIED EMPLOYEE ID
-//   const userId = employee._id;
-
-//   // =====================================================
-//   // 1. GET FORM
-//   // =====================================================
-//   const form = await OpenForm.findOne({
-//     slug,
-//     isActive: true,
-//   }).populate("linkedTemplate");
-
-//   if (!form) {
-//     return next(new AppError("Form not found", 404));
-//   }
-
-//   if (!form.isActive) {
-//     return next(new AppError("Form is inactive", 400));
-//   }
-
-//   if (!form.linkedTemplate) {
-//     return next(new AppError("No template linked with form", 400));
-//   }
-
-//   // =====================================================
-//   // 2. VALIDATE SUBMISSION DATA
-//   // =====================================================
-//   const enrichedSubmissionData = {};
-
-//   for (const field of form.fields) {
-//     enrichedSubmissionData[field.fieldId] = {
-//       value: submissionData[field.fieldId],
-//       isTableColumn: field.isTableColumn || false,
-//       label: field.label,
-//       fieldType: field.fieldType,
-//     };
-//   }
-
-//   // =====================================================
-//   // 3. SAVE FORM SUBMISSION
-//   // =====================================================
-//   const submission = await FormSubmission.create({
-//     formId: form._id,
-//     submittedBy: userId,
-//     submissionData: enrichedSubmissionData,
-//     status: "Submitted",
-//   });
-
-//   // =====================================================
-//   // 4. GENERATE INSTANCE COUNTER
-//   // =====================================================
-//   const counter = await Counter.findOneAndUpdate(
-//     { _id: "fms_instance" },
-//     { $inc: { seq: 1 } },
-//     { upsert: true, new: true }
-//   );
-
-//   const sequence = String(counter.seq).padStart(5, "0");
-
-//   // =====================================================
-//   // 5. CREATE FMS INSTANCE
-//   // =====================================================
-//   const formSubmissionDate = new Date(); // Exact Form Hit/Submission Date & Time
-//   const template = form.linkedTemplate;
-
-//   const instanceEnd =
-//     template.fmsDuration === "Fixed Period" ? template.endDate : null;
-
-//   const instanceStatus = calculateInstanceStatus(formSubmissionDate);
-
-//   const instance = await FmsInstance.create({
-//     fmsTemplateId: template._id,
-//     instanceName: `${template.templateName}`,
-//     formId: form._id,
-//     submissionId: submission._id,
-//     triggerType: "FORM_SUBMISSION",
-//     startDate: formSubmissionDate,
-//     endDate: instanceEnd,
-//     manager: template.manager,
-//     srManager: template.srManager || null,
-//     createdBy: userId,
-//     status: instanceStatus,
-//     fmsDuration: template.fmsDuration,
-//     runtimeContext: enrichedSubmissionData,
-//   });
-
-//   // =====================================================
-//   // 6. FETCH TEMPLATE TASKS
-//   // =====================================================
-//   const templateTasks = await FmsTask.find({
-//     fmsTemplateId: template._id,
-//   }).sort("taskId");
-
-//   if (!templateTasks.length) {
-//     return next(new AppError("No tasks found in linked template", 400));
-//   }
-
-//   // =====================================================
-//   // 7. CREATE ALL INSTANCE TASKS AT ONCE (INCLUDING RECURRING)
-//   // =====================================================
-//   const instanceTasks = [];
-
-//   for (let i = 0; i < templateTasks.length; i++) {
-//     const tmplTask = templateTasks[i];
-
-//     // GET USER SHIFT & DEPARTMENT CONTEXT
-//     const doer = await User.findById(tmplTask.assignedTo).populate(
-//       "assignShift"
-//     );
-
-//     if (!doer || !doer.assignShift) {
-//       continue;
-//     }
-
-//     const taskDeptContext =
-//       tmplTask.departmentOfAssignToUser || doer?.department || doer?._id;
-
-//     let dates = {
-//       startDate: null,
-//       dueDate: null,
-//     };
-
-//     const rawFreq = (tmplTask.frequency || "").trim();
-//     const freq = rawFreq.toLowerCase();
-
-//     // 🟢 CASE A: RECURRING TASKS (Daily, Weekly, Monthly, Anytime)
-//     if (RECURRING_FREQUENCIES.includes(rawFreq) || freq === "anytime") {
-//       let shiftStart = await nextWorkingShiftDate(
-//         formSubmissionDate,
-//         doer.assignShift._id,
-//         {},
-//         taskDeptContext
-//       );
-
-//       // If submitted post-shift, move start date to next working shift
-//       const shiftEnd = snapToShiftTime(
-//         formSubmissionDate,
-//         doer.assignShift,
-//         false
-//       );
-//       if (formSubmissionDate >= shiftEnd) {
-//         let nextDay = new Date(formSubmissionDate);
-//         nextDay.setDate(nextDay.getDate() + 1);
-
-//         shiftStart = await nextWorkingShiftDate(
-//           nextDay,
-//           doer.assignShift._id,
-//           {},
-//           taskDeptContext
-//         );
-//       }
-
-//       dates = {
-//         startDate: snapToShiftTime(shiftStart, doer.assignShift, true),
-//         dueDate: snapToShiftTime(shiftStart, doer.assignShift, false),
-//       };
-//     }
-//     // 🟢 CASE B: TASK LINKED WITH FORM OR "FORM EVENT+X" FREQUENCY
-//     else if (tmplTask.linkedWithForm || freq.startsWith("form event")) {
-//       let taskStartDate = new Date(formSubmissionDate);
-
-//       // Check Shift Window
-//       if (doer?.assignShift) {
-//         const shiftEnd = snapToShiftTime(
-//           formSubmissionDate,
-//           doer.assignShift,
-//           false
-//         );
-
-//         // Post-Shift Submission -> Move Start Date to Next Working Day Shift Start
-//         if (formSubmissionDate >= shiftEnd) {
-//           let nextDay = new Date(formSubmissionDate);
-//           nextDay.setDate(nextDay.getDate() + 1);
-
-//           const nextWorkingShift = await nextWorkingShiftDate(
-//             nextDay,
-//             doer.assignShift._id,
-//             {},
-//             taskDeptContext
-//           );
-
-//           taskStartDate = snapToShiftTime(
-//             nextWorkingShift,
-//             doer.assignShift,
-//             true
-//           );
-//         }
-//       }
-
-//       let dueDate = new Date(taskStartDate);
-//       const xValue = Number(tmplTask.xValue || 0);
-
-//       if (freq.includes("hour")) {
-//         let calculatedDue = new Date(
-//           taskStartDate.getTime() + xValue * 60 * 60 * 1000
-//         );
-
-//         if (doer?.assignShift) {
-//           const shiftEnd = snapToShiftTime(
-//             taskStartDate,
-//             doer.assignShift,
-//             false
-//           );
-
-//           if (calculatedDue <= shiftEnd) {
-//             dueDate = calculatedDue;
-//           } else {
-//             const overflowMs = calculatedDue.getTime() - shiftEnd.getTime();
-
-//             // 🟢 FIXED: Next working day safely search with holiday check
-//             let nextDay = new Date(taskStartDate);
-//             nextDay.setDate(nextDay.getDate() + 1);
-
-//             const nextWorkingShift = await nextWorkingShiftDate(
-//               nextDay,
-//               doer.assignShift._id,
-//               {},
-//               taskDeptContext
-//             );
-
-//             dueDate = new Date(nextWorkingShift.getTime() + overflowMs);
-//           }
-//         } else {
-//           dueDate = calculatedDue;
-//         }
-//       } else {
-//         // 🟢 DAYS CONDITION: Uses working-days & holiday-aware calculation
-//         const addedDaysDate = await addWorkingDaysHoliday(
-//           taskStartDate,
-//           xValue,
-//           doer.assignShift._id,
-//           tmplTask.isDependent,
-//           {},
-//           taskDeptContext
-//         );
-
-//         if (addedDaysDate) {
-//           dueDate = addedDaysDate;
-//         } else if (doer?.assignShift) {
-//           dueDate = snapToShiftTime(dueDate, doer.assignShift, false);
-//         }
-//       }
-
-//       dates = {
-//         startDate: taskStartDate,
-//         dueDate,
-//       };
-//     }
-//     // 🟢 CASE C: STANDARD / CALCULATED DEPENDENT DATES
-//     else {
-//       const previousTasks = instanceTasks.map((task) => ({
-//         taskId: task.originalTaskId,
-//         plannedDueDate: task.plannedDueDate,
-//         plannedStartDate: task.plannedStartDate,
-//       }));
-
-//       dates = await fmsDateCalculator.calculateFmsTaskDates(
-//         tmplTask.toObject(),
-//         formSubmissionDate,
-//         instanceEnd,
-//         doer.assignShift?._id,
-//         previousTasks,
-//         taskDeptContext
-//       );
-
-//       // 🟢 FIX: Handle hours overflow for planned-to-planned tasks
-//       if (
-//         tmplTask.isDependent &&
-//         tmplTask.startTimeSetting === "planned-to-planned" &&
-//         freq.includes("hour") &&
-//         dates.startDate &&
-//         dates.dueDate
-//       ) {
-//         const xValue = Number(tmplTask.xValue || 0);
-//         const shiftEnd = snapToShiftTime(
-//           dates.startDate,
-//           doer.assignShift,
-//           false
-//         );
-//         const rawDueTime = dates.startDate.getTime() + xValue * 60 * 60 * 1000;
-
-//         // If total hours exceed shift end time
-//         if (rawDueTime > shiftEnd.getTime()) {
-//           const overflowMs = rawDueTime - shiftEnd.getTime();
-
-//           let nextDay = new Date(dates.startDate);
-//           nextDay.setDate(nextDay.getDate() + 1);
-
-//           const nextWorkingShift = await nextWorkingShiftDate(
-//             nextDay,
-//             doer.assignShift._id,
-//             {},
-//             taskDeptContext
-//           );
-
-//           dates.dueDate = new Date(nextWorkingShift.getTime() + overflowMs);
-//         }
-//       }
-//     }
-
-//     // UNIQUE RUNTIME TASK ID
-//     const runtimeTaskId = `${instance.instanceId}-${tmplTask.taskId}`;
-
-//     // STRICT BOOLEAN FOR DECISION STEP
-//     const isDecisionStep =
-//       tmplTask.decisionStep === true ||
-//       tmplTask.decisionStep === "yes" ||
-//       tmplTask.decisionStep === "true";
-
-//     // CREATE INSTANCE TASK DATA
-//     const instanceTaskData = {
-//       fmsInstanceId: instance._id,
-//       fmsTaskId: tmplTask._id,
-//       formId: form._id,
-//       submissionId: submission._id,
-//       submissionData: enrichedSubmissionData,
-
-//       taskId: runtimeTaskId,
-//       originalTaskId: tmplTask.taskId,
-
-//       description: tmplTask.description,
-//       departmentOfAssignToUser: tmplTask.departmentOfAssignToUser,
-//       assignedTo: tmplTask.assignedTo,
-//       assignedBy: tmplTask.assignedBy,
-
-//       frequency: tmplTask.frequency,
-//       linkedWithForm: Boolean(tmplTask.linkedWithForm),
-//       xValue: tmplTask.xValue,
-
-//       isDependent: tmplTask.isDependent,
-//       dependentOn: tmplTask.dependentOn
-//         ? `${instance.instanceId}-${tmplTask.dependentOn}`
-//         : null,
-
-//       startTimeSetting: tmplTask.startTimeSetting,
-//       taskEndDays: tmplTask.taskEndDays || 0,
-
-//       plannedStartDate: dates.startDate,
-//       plannedDueDate: dates.dueDate,
-
-//       status: calculateTaskStatus(dates.startDate, dates.dueDate),
-//       isVisible: false,
-//       waitingForParent: tmplTask.startTimeSetting === "actual-to-planned",
-
-//       decisionStep: isDecisionStep,
-//       decisionYesAction: isDecisionStep
-//         ? tmplTask.decisionYesAction || null
-//         : null,
-//       triggerFmsTemplate:
-//         isDecisionStep && tmplTask.decisionYesAction === "trigger_fms"
-//           ? tmplTask.triggerFmsTemplate || null
-//           : null,
-
-//       checklist: tmplTask.checklist || [],
-//       createdForm: tmplTask.createdForm || [],
-
-//       createdBy: userId,
-//       updatedBy: userId,
-//     };
-
-//     const instanceTask = await FmsInstanceTask.create(instanceTaskData);
-//     instanceTasks.push(instanceTask);
-//   }
-
-//   // =====================================================
-//   // 8. LINK SUBMISSION WITH INSTANCE
-//   // =====================================================
-//   submission.triggeredInstance = instance._id;
-//   submission.status = "Triggered";
-
-//   await submission.save();
-
-//   // =====================================================
-//   // 9. FINAL RESPONSE
-//   // =====================================================
-//   return res.status(201).json({
-//     success: true,
-//     message:
-//       "Form submitted and FMS triggered successfully with all tasks generated.",
-//     data: {
-//       formId: form._id,
-//       submissionId: submission._id,
-//       templateId: template._id,
-//       instanceId: instance._id,
-//       totalTasks: instanceTasks.length,
-//       tasks: instanceTasks.map((task) => ({
-//         taskId: task.taskId,
-//         originalTaskId: task.originalTaskId,
-//         status: task.status,
-//         plannedStartDate: task.plannedStartDate,
-//         plannedDueDate: task.plannedDueDate,
-//       })),
-//     },
-//   });
-// });
 export const submitOpenForm = handleAsync(async (req, res, next) => {
   const { slug } = req.params;
   const { employeeCode, submissionData } = req.body;
@@ -725,7 +347,8 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
 
   if (!form) return next(new AppError("Form not found", 404));
   if (!form.isActive) return next(new AppError("Form is inactive", 400));
-  if (!form.linkedTemplate) return next(new AppError("No template linked with form", 400));
+  if (!form.linkedTemplate)
+    return next(new AppError("No template linked with form", 400));
 
   // =====================================================
   // 2. VALIDATE SUBMISSION DATA
@@ -753,7 +376,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   const counter = await Counter.findOneAndUpdate(
     { _id: "fms_instance" },
     { $inc: { seq: 1 } },
-    { upsert: true, new: true }
+    { upsert: true, new: true },
   );
 
   const formSubmissionDate = new Date();
@@ -799,7 +422,9 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
   for (let i = 0; i < templateTasks.length; i++) {
     const tmplTask = templateTasks[i];
 
-    const doer = await User.findById(tmplTask.assignedTo).populate("assignShift");
+    const doer = await User.findById(tmplTask.assignedTo).populate(
+      "assignShift",
+    );
     if (!doer || !doer.assignShift) continue;
 
     const taskDeptContext =
@@ -816,10 +441,14 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         formSubmissionDate,
         doer.assignShift._id,
         {},
-        taskDeptContext
+        taskDeptContext,
       );
 
-      const shiftEnd = snapToShiftTime(formSubmissionDate, doer.assignShift, false);
+      const shiftEnd = snapToShiftTime(
+        formSubmissionDate,
+        doer.assignShift,
+        false,
+      );
       if (formSubmissionDate >= shiftEnd) {
         let nextDay = new Date(formSubmissionDate);
         nextDay.setDate(nextDay.getDate() + 1);
@@ -828,7 +457,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           nextDay,
           doer.assignShift._id,
           {},
-          taskDeptContext
+          taskDeptContext,
         );
       }
 
@@ -850,14 +479,10 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
       const isWorking = await isWorkingDay(
         taskStartDate,
         doer.assignShift,
-        taskDeptContext
+        taskDeptContext,
       );
       const isHoli = await isHoliday(taskStartDate, taskDeptContext);
-      const shiftEnd = snapToShiftTime(
-        taskStartDate,
-        doer.assignShift,
-        false
-      );
+      const shiftEnd = snapToShiftTime(taskStartDate, doer.assignShift, false);
 
       if (!isWorking || isHoli || taskStartDate >= shiftEnd) {
         let nextDay = new Date(taskStartDate);
@@ -869,26 +494,26 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
           nextDay,
           doer.assignShift._id,
           {},
-          taskDeptContext
+          taskDeptContext,
         );
 
         taskStartDate = snapToShiftTime(
           nextWorkingShift,
           doer.assignShift,
-          true
+          true,
         );
       }
 
       const freqParsed = parseFrequencyToHours(
         tmplTask.frequency,
-        tmplTask.xValue
+        tmplTask.xValue,
       );
 
       const dueDate = await calculateCalendarDurationWithShiftSnap(
         taskStartDate,
         freqParsed,
         doer.assignShift._id,
-        taskDeptContext
+        taskDeptContext,
       );
 
       dates = {
@@ -900,7 +525,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     else if (tmplTask.isDependent && tmplTask.dependentOn) {
       if (tmplTask.startTimeSetting === "planned-to-planned") {
         const parentTask = instanceTasks.find(
-          (t) => t.originalTaskId === tmplTask.dependentOn
+          (t) => t.originalTaskId === tmplTask.dependentOn,
         );
 
         let taskStartDate = parentTask
@@ -910,13 +535,13 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         const isParentWorkingDay = await isWorkingDay(
           taskStartDate,
           doer.assignShift,
-          taskDeptContext
+          taskDeptContext,
         );
         const isParentHoli = await isHoliday(taskStartDate, taskDeptContext);
         const shiftEnd = snapToShiftTime(
           taskStartDate,
           doer.assignShift,
-          false
+          false,
         );
 
         if (!isParentWorkingDay || isParentHoli || taskStartDate >= shiftEnd) {
@@ -929,26 +554,26 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
             nextDay,
             doer.assignShift._id,
             {},
-            taskDeptContext
+            taskDeptContext,
           );
 
           taskStartDate = snapToShiftTime(
             nextWorkingShift,
             doer.assignShift,
-            true
+            true,
           );
         }
 
         const freqParsed = parseFrequencyToHours(
           tmplTask.frequency,
-          tmplTask.xValue
+          tmplTask.xValue,
         );
 
         const dueDate = await calculateCalendarDurationWithShiftSnap(
           taskStartDate,
           freqParsed,
           doer.assignShift._id,
-          taskDeptContext
+          taskDeptContext,
         );
 
         dates = {
@@ -973,7 +598,7 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
         instanceEnd,
         doer.assignShift?._id,
         previousTasks,
-        taskDeptContext
+        taskDeptContext,
       );
     }
 
@@ -1043,7 +668,8 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
 
   return res.status(201).json({
     success: true,
-    message: "Form submitted and FMS triggered successfully with all tasks generated.",
+    message:
+      "Form submitted and FMS triggered successfully with all tasks generated.",
     data: {
       formId: form._id,
       submissionId: submission._id,
@@ -1060,27 +686,140 @@ export const submitOpenForm = handleAsync(async (req, res, next) => {
     },
   });
 });
-//**GET SUBMISSION RESPONSE AND RECORD */
+//**GET SUBMISSION RESPONSE AND RECORD (TEMPLATE & FORM CASCADED) */
 export const getFormSubmissions = async (req, res) => {
   try {
-    const { formId } = req.params;
+    const { formId: paramFormId } = req.params;
+    const {
+      formId: queryFormId,
+      templateId,
+      linkedTemplate,
+      search,
+      status,
+      startDate,
+      endDate,
+    } = {
+      ...req.query,
+      ...req.body,
+    };
 
-    const submissions = await FormSubmission.find({
-      formId,
-    })
-      .populate("submittedBy", "name employeeCode")
+    // Ignore placeholder strings like "submissions" or "all"
+    const activeFormId =
+      paramFormId && paramFormId !== "submissions" && paramFormId !== "all"
+        ? paramFormId
+        : queryFormId && queryFormId !== "all"
+          ? queryFormId
+          : null;
+
+    const activeTemplateId =
+      templateId && templateId !== "all"
+        ? templateId
+        : linkedTemplate && linkedTemplate !== "all"
+          ? linkedTemplate
+          : null;
+
+    const query = {};
+
+    // ==========================================
+    // 🎯 1. TEMPLATE BASED CASCADE FILTERING
+    // ==========================================
+    if (activeTemplateId && mongoose.Types.ObjectId.isValid(activeTemplateId)) {
+      // Find all active forms linked to this FMS Template
+      const templateForms = await OpenForm.find({
+        linkedTemplate: new mongoose.Types.ObjectId(activeTemplateId),
+        isDeleted: { $ne: true },
+      })
+        .select("_id")
+        .lean();
+
+      const formIds = templateForms.map((f) => f._id);
+
+      if (activeFormId && mongoose.Types.ObjectId.isValid(activeFormId)) {
+        // If specific form selected, check if it belongs to template forms
+        const isLinked = formIds.some(
+          (id) => id.toString() === String(activeFormId),
+        );
+        query.formId = isLinked
+          ? new mongoose.Types.ObjectId(activeFormId)
+          : null;
+      } else {
+        // Fetch submissions for all forms under this template
+        query.formId = { $in: formIds };
+      }
+    } else if (activeFormId && mongoose.Types.ObjectId.isValid(activeFormId)) {
+      query.formId = new mongoose.Types.ObjectId(activeFormId);
+    }
+
+    // ==========================================
+    // 🎯 2. STATUS FILTERING ("Submitted", "Triggered", "Failed")
+    // ==========================================
+    if (status && status !== "all") {
+      query.status = status;
+    }
+
+    // ==========================================
+    // 🎯 3. DATE RANGE FILTERING
+    // ==========================================
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    // ==========================================
+    // 🎯 4. SEARCH FILTERING (Submitter Name / Code)
+    // ==========================================
+    if (search && String(search).trim() !== "") {
+      const searchRegex = new RegExp(String(search).trim(), "i");
+
+      const matchingUsers = await User.find({
+        $or: [{ name: searchRegex }, { employeeCode: searchRegex }],
+      })
+        .select("_id")
+        .lean();
+
+      const userIds = matchingUsers.map((u) => u._id);
+
+      query.$or = [{ submittedBy: { $in: userIds } }];
+    }
+
+    // ==========================================
+    // 🚀 DB EXECUTION
+    // ==========================================
+    const submissions = await FormSubmission.find(query)
+      .populate({
+        path: "formId",
+        select: "formName slug linkedTemplate fields",
+        populate: {
+          path: "linkedTemplate",
+          select: "templateName fmsId fmsDuration",
+        },
+      })
+      .populate("submittedBy", "name employeeCode email")
       .populate("triggeredInstance", "instanceId status")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    res.status(200).json({
+    // Map parentFormName for smooth table rendering
+    const formattedSubmissions = submissions.map((sub) => ({
+      ...sub,
+      parentFormName: sub.formId?.formName || "Unnamed Form",
+      parentFormId: sub.formId?._id || sub.formId,
+      linkedTemplateId:
+        sub.formId?.linkedTemplate?._id || sub.formId?.linkedTemplate || null,
+    }));
+
+    return res.status(200).json({
       success: true,
-      count: submissions.length,
-      data: submissions,
+      count: formattedSubmissions.length,
+      data: formattedSubmissions,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Error in getFormSubmissions:", error);
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch form submissions",
+      data: [],
     });
   }
 };
