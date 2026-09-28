@@ -14,7 +14,7 @@ const safeObjectId = (id) => {
     : null;
 };
 
-// 🗓️ Helper for precise Date Boundaries
+// 🗓️ Helper for precise Date Boundaries (MUTATION SAFE)
 const calculateDateRange = (period, startDate, endDate) => {
   const now = new Date();
   let start = new Date();
@@ -24,9 +24,10 @@ const calculateDateRange = (period, startDate, endDate) => {
     start.setHours(0, 0, 0, 0);
     end.setHours(23, 59, 59, 999);
   } else if (period === "this_week") {
-    const day = now.getDay();
-    const diffToMonday = now.getDate() - day + (day === 0 ? -6 : 1);
-    start = new Date(now.setDate(diffToMonday));
+    const tempNow = new Date(); // Fix: Avoid mutating global 'now'
+    const day = tempNow.getDay();
+    const diffToMonday = tempNow.getDate() - day + (day === 0 ? -6 : 1);
+    start = new Date(tempNow.setDate(diffToMonday));
     start.setHours(0, 0, 0, 0);
     end = new Date();
     end.setHours(23, 59, 59, 999);
@@ -58,11 +59,12 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     templateId,
     taskSource = "all", // "all", "fms", "regular"
     timingLogic = "all", // "all", "actual-to-planned", "planned-to-planned"
-    taskStatus = "all", // "all", "completed", "pending", "overdue"
+    taskStatus = "all", // "all", "completed", "pending", "overdue", "upcoming"
     limit = 10,
     page = 1,
   } = req.body;
-
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.max(1, parseInt(limit, 10) || 10);
   // 1. INPUT SANITIZATION & BOUNDARIES
   const departmentObjectId = safeObjectId(departmentId);
   const templateObjectId = safeObjectId(templateId);
@@ -126,7 +128,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       : { $in: [new mongoose.Types.ObjectId()] };
   }
 
-  // Task Status Filter
+  // Task Status Filter (MongoDB Layer)
   if (taskStatus && taskStatus !== "all") {
     const s = String(taskStatus).toLowerCase();
 
@@ -134,10 +136,11 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       fmsMatch.status = "Completed";
       regularMatch.status = "Completed";
     } else if (s === "pending") {
-      fmsMatch.status = {
-        $in: ["Pending", "Ongoing", "InProcess", "Upcoming"],
-      };
-      regularMatch.status = { $in: ["Pending", "Upcoming", "Ongoing"] };
+      fmsMatch.status = { $in: ["Pending", "Ongoing", "InProcess"] };
+      regularMatch.status = { $in: ["Pending", "Ongoing"] };
+    } else if (s === "upcoming") {
+      fmsMatch.status = "Upcoming";
+      regularMatch.status = "Upcoming";
     } else if (s === "overdue") {
       fmsMatch.$or = [
         { status: "Overdue" },
@@ -173,21 +176,31 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }
   }
 
-  // 4. UNIFIED NORMALIZATION
+  // 4. UNIFIED NORMALIZATION WITH STRICT TIME STATUS BUCKETS
   const normalizedTasks = [
     ...fmsTasks.map((t) => {
       const isCompleted = t.status === "Completed";
+      const isUpcoming = t.status === "Upcoming";
       const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;
       const completedAt = t.actualCompleteDate
         ? new Date(t.actualCompleteDate)
         : null;
 
-      let timeStatus = "Pending";
+      // 🎯 Strict Mutually Exclusive Categorization
+      let executionStatus = "Pending";
+
       if (isCompleted) {
-        if (completedAt && due && completedAt <= due) timeStatus = "On Time";
-        else timeStatus = "Late";
+        if (completedAt && due && completedAt <= due) {
+          executionStatus = "On Time";
+        } else {
+          executionStatus = "Late";
+        }
+      } else if (isUpcoming) {
+        executionStatus = "Upcoming";
       } else if (due && due < now) {
-        timeStatus = "Overdue";
+        executionStatus = "Overdue";
+      } else {
+        executionStatus = "Pending";
       }
 
       return {
@@ -196,7 +209,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         title: t.description || t.taskId,
         taskType: "FMS",
         status: t.status,
-        timeStatus,
+        executionStatus, // Dedicated execution status
         startTimeSetting: t.startTimeSetting || "N/A",
         frequency: t.frequency || "One-time",
         startDate: t.plannedStartDate,
@@ -211,15 +224,24 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
 
     ...regularTasks.map((t) => {
       const isCompleted = t.status === "Completed";
+      const isUpcoming = t.status === "Upcoming";
       const due = t.dueDate ? new Date(t.dueDate) : null;
       const completedAt = t.completedAt ? new Date(t.completedAt) : null;
 
-      let timeStatus = "Pending";
+      let executionStatus = "Pending";
+
       if (isCompleted) {
-        if (completedAt && due && completedAt <= due) timeStatus = "On Time";
-        else timeStatus = "Late";
+        if (completedAt && due && completedAt <= due) {
+          executionStatus = "On Time";
+        } else {
+          executionStatus = "Late";
+        }
+      } else if (isUpcoming) {
+        executionStatus = "Upcoming";
       } else if (due && due < now) {
-        timeStatus = "Overdue";
+        executionStatus = "Overdue";
+      } else {
+        executionStatus = "Pending";
       }
 
       return {
@@ -228,7 +250,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         title: t.title || t.description || "Task",
         taskType: "Regular",
         status: t.status,
-        timeStatus,
+        executionStatus,
         startTimeSetting: "N/A",
         frequency: t.frequency || "One-time",
         startDate: t.startDate,
@@ -242,19 +264,27 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }),
   ];
 
-  // 5. CALCULATE STATS & PERCENTAGE RATES
+  // 5. CLEAR MUTUALLY EXCLUSIVE STATS (No Duplication Mismatch)
   const totalTasks = normalizedTasks.length;
-  const completed = normalizedTasks.filter(
-    (t) => t.status === "Completed",
-  ).length;
+
   const onTime = normalizedTasks.filter(
-    (t) => t.timeStatus === "On Time",
+    (t) => t.executionStatus === "On Time",
   ).length;
-  const late = normalizedTasks.filter((t) => t.timeStatus === "Late").length;
+  const late = normalizedTasks.filter(
+    (t) => t.executionStatus === "Late",
+  ).length;
+  const completed = onTime + late; // Completed is exactly OnTime + Late
+
   const overdue = normalizedTasks.filter(
-    (t) => t.timeStatus === "Overdue",
+    (t) => t.executionStatus === "Overdue",
   ).length;
-  const notDone = totalTasks - completed;
+  const pending = normalizedTasks.filter(
+    (t) => t.executionStatus === "Pending",
+  ).length;
+  const upcoming = normalizedTasks.filter(
+    (t) => t.executionStatus === "Upcoming",
+  ).length;
+  const notCompleted = totalTasks - completed; // Exactly Overdue + Pending + Upcoming
 
   const actualToPlannedCount = normalizedTasks.filter(
     (t) => t.startTimeSetting === "actual-to-planned",
@@ -263,23 +293,23 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     (t) => t.startTimeSetting === "planned-to-planned",
   ).length;
 
-  // Percentage Calculations for Overall System
-  const totalForCalc = totalTasks || 1;
-  const completedForCalc = completed || 1;
+  // Percentage Calculations
+  const safeDiv = (num, denom) =>
+    denom > 0 ? Math.round((num / denom) * 100 * 100) / 100 : 0;
 
-  const completionRate =
-    Math.round((completed / totalForCalc) * 100 * 100) / 100;
-  const onTimeRate = Math.round((onTime / completedForCalc) * 100 * 100) / 100;
-  const lateRate = Math.round((late / completedForCalc) * 100 * 100) / 100;
-  const overdueRate = Math.round((overdue / totalForCalc) * 100 * 100) / 100;
-  const notDoneRate = Math.round((notDone / totalForCalc) * 100 * 100) / 100;
+  const rates = {
+    completionRate: safeDiv(completed, totalTasks),
+    onTimeRate: safeDiv(onTime, completed), // Completed me se kitne On-time hue
+    lateRate: safeDiv(late, completed), // Completed me se kitne Late hue
+    overdueRate: safeDiv(overdue, totalTasks),
+    pendingRate: safeDiv(pending, totalTasks),
+    upcomingRate: safeDiv(upcoming, totalTasks),
+    notCompletedRate: safeDiv(notCompleted, totalTasks),
+    actualToPlannedRate: safeDiv(actualToPlannedCount, totalTasks),
+    plannedToPlannedRate: safeDiv(plannedToPlannedCount, totalTasks),
+  };
 
-  const actualToPlannedRate =
-    Math.round((actualToPlannedCount / totalForCalc) * 100 * 100) / 100;
-  const plannedToPlannedRate =
-    Math.round((plannedToPlannedCount / totalForCalc) * 100 * 100) / 100;
-
-  // 6. USER STATS AGGREGATION & PERCENTAGE RATES
+  // 6. USER STATS AGGREGATION
   const userStatsMap = new Map();
 
   normalizedTasks.forEach((t) => {
@@ -296,36 +326,47 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         onTime: 0,
         late: 0,
         overdue: 0,
-        notDone: 0,
+        pending: 0,
+        upcoming: 0,
+        notCompleted: 0,
       });
     }
 
     const stat = userStatsMap.get(userId);
     stat.total += 1;
-    if (t.status === "Completed") stat.completed += 1;
-    if (t.timeStatus === "On Time") stat.onTime += 1;
-    if (t.timeStatus === "Late") stat.late += 1;
-    if (t.timeStatus === "Overdue") stat.overdue += 1;
-    if (t.status !== "Completed") stat.notDone += 1;
+
+    if (t.executionStatus === "On Time") {
+      stat.onTime += 1;
+      stat.completed += 1;
+    } else if (t.executionStatus === "Late") {
+      stat.late += 1;
+      stat.completed += 1;
+    } else if (t.executionStatus === "Overdue") {
+      stat.overdue += 1;
+      stat.notCompleted += 1;
+    } else if (t.executionStatus === "Upcoming") {
+      stat.upcoming += 1;
+      stat.notCompleted += 1;
+    } else {
+      stat.pending += 1;
+      stat.notCompleted += 1;
+    }
   });
 
-  const userSummary = Array.from(userStatsMap.values()).map((usr) => {
-    const usrTotal = usr.total || 1;
-    const usrCompleted = usr.completed || 1;
+  const userSummary = Array.from(userStatsMap.values()).map((usr) => ({
+    ...usr,
+    completionRate: safeDiv(usr.completed, usr.total),
+    onTimeRate: safeDiv(usr.onTime, usr.completed),
+    lateRate: safeDiv(usr.late, usr.completed),
+    overdueRate: safeDiv(usr.overdue, usr.total),
+    pendingRate: safeDiv(usr.pending, usr.total),
+    upcomingRate: safeDiv(usr.upcoming, usr.total),
+    notCompletedRate: safeDiv(usr.notCompleted, usr.total),
+  }));
 
-    return {
-      ...usr,
-      completionRate: Math.round((usr.completed / usrTotal) * 100 * 100) / 100,
-      onTimeRate: Math.round((usr.onTime / usrCompleted) * 100 * 100) / 100,
-      lateRate: Math.round((usr.late / usrCompleted) * 100 * 100) / 100,
-      overdueRate: Math.round((usr.overdue / usrTotal) * 100 * 100) / 100,
-      notDoneRate: Math.round((usr.notDone / usrTotal) * 100 * 100) / 100,
-    };
-  });
-
-  // Paginate list
-  const skip = (Number(page) - 1) * Number(limit);
-  const paginatedTasks = normalizedTasks.slice(skip, skip + Number(limit));
+  // Pagination Logic
+  const skip = (pageNum - 1) * limitNum;
+  const paginatedTasks = normalizedTasks.slice(skip, skip + limitNum);
 
   res.status(200).json({
     success: true,
@@ -335,18 +376,12 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       onTime,
       late,
       overdue,
-      notDone,
+      pending,
+      upcoming,
+      notCompleted,
       actualToPlannedCount,
       plannedToPlannedCount,
-      rates: {
-        completionRate,
-        onTimeRate,
-        lateRate,
-        overdueRate,
-        notDoneRate,
-        actualToPlannedRate,
-        plannedToPlannedRate,
-      },
+      rates,
     },
     userSummary,
     allTasksForExport: normalizedTasks,
