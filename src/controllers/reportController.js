@@ -262,7 +262,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         createdAt: t.createdAt,
       };
     }),
-  ];
+  ].filter((t) => t.dueDate != null); // 🚫 Filter: Missing/null dueDate wale tasks count me nahi aayenge
 
   // 5. CLEAR MUTUALLY EXCLUSIVE STATS (No Duplication Mismatch)
   const totalTasks = normalizedTasks.length;
