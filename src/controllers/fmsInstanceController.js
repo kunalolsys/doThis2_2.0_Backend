@@ -692,7 +692,6 @@ export const updateFmsInstanceTask = handleAsync(async (req, res) => {
   });
 });
 
-//**COMPLETE TASK */
 export const completeInstanceTask = handleAsync(async (req, res, next) => {
   const { id: instanceId, taskId: taskIdParam } = req.params;
 
@@ -713,108 +712,119 @@ export const completeInstanceTask = handleAsync(async (req, res, next) => {
 
   // 3. Complete Parent Task
   const completionDate = new Date();
+  const userId = req.cookies?.userId || req.user?._id || null;
+
   task.actualCompleteDate = completionDate;
   task.completedAt = completionDate;
   task.status = "Completed";
-  task.updatedBy = req.cookies?.userId || req.user?._id || null;
-  task.completedBy = req.cookies?.userId || req.user?._id || null;
+  task.updatedBy = userId;
+  task.completedBy = userId;
+
   await task.save();
 
-  await updateInstanceProgress();
-
-  // 4. Fetch Child Tasks Waiting For Actual Completion Of This Parent
-  const children = await FmsInstanceTask.find({
-    fmsInstanceId: instanceId,
-    startTimeSetting: "actual-to-planned",
-    dependentOn: task.taskId,
-  });
-
-  const assignedParentUser = await User.findById(task.assignedTo).populate(
-    "assignShift"
-  );
-
-  if (!assignedParentUser) {
-    return next(new AppError(`User with ID ${task.assignedTo} not found`, 404));
-  }
-
-  // 5. Process Each Waiting Child Task
-  for (const child of children) {
-    try {
-      const workShiftUser = await User.findById(child.assignedTo).populate(
-        "assignShift"
-      );
-      const shift = workShiftUser?.assignShift;
-
-      if (!shift) continue;
-
-      const taskDeptContext =
-        child.departmentOfAssignToUser ||
-        workShiftUser?.department ||
-        workShiftUser?._id;
-
-      let startDate = new Date(task.actualCompleteDate);
-
-      // 🟢 STEP A: Check Working Day & Shift Boundaries for Child Start Date
-      const isTodayWorking = await isWorkingDay(
-        startDate,
-        shift,
-        taskDeptContext
-      );
-      const isTodayHoli = await isHoliday(startDate, taskDeptContext);
-      const shiftEnd = snapToShiftTime(startDate, shift, false);
-
-      // Completion time agar non-working day, holiday ya shift end ke baad ka hai
-      if (!isTodayWorking || isTodayHoli || startDate >= shiftEnd) {
-        let nextDay = new Date(startDate);
-        if (startDate >= shiftEnd) {
-          nextDay.setDate(nextDay.getDate() + 1);
-        }
-
-        const nextWorkingShift = await nextWorkingShiftDate(
-          nextDay,
-          shift._id,
-          {},
-          taskDeptContext
-        );
-
-        startDate = snapToShiftTime(nextWorkingShift, shift, true);
-      }
-
-      // 🟢 STEP B: Parse Frequency ({ isDay: boolean, value: number })
-      const freqParsed = parseFrequencyToHours(
-        child.frequency,
-        child.xValue
-      );
-
-      // 🟢 STEP C: Exact Time Preserving Due Date Calculation
-      // Direct calculateCalendarDurationWithShiftSnap pass karein taaki exact time override na ho
-      const dueDate = await calculateCalendarDurationWithShiftSnap(
-        startDate,
-        freqParsed,
-        shift._id,
-        taskDeptContext
-      );
-
-      // 🟢 STEP D: Unlock Child Task & Assign Planned Dates
-      child.plannedStartDate = startDate;
-      child.plannedDueDate = dueDate;
-      child.actualStartDate = startDate; // Marks actual start time
-      child.waitingForParent = false;
-      child.status = calculateTaskStatus(startDate, dueDate);
-
-      await child.save();
-
-      console.log(
-        `✅ UNLOCKED CHILD FMS TASK ${child.taskId}: Start=${startDate.toISOString()} | Due=${dueDate.toISOString()}`
-      );
-    } catch (err) {
-      console.error(`❌ FAILED TO UPDATE CHILD FMS TASK ${child.taskId}:`, err);
-    }
-  }
-
+  // ⚡ FAST RESPONSE: User ko immediate Response bhej do!
   res.json({
     success: true,
-    message: `Task ${task.taskId} completed. Triggered ${children.length} child task(s).`,
+    message: `Task ${task.taskId} completed successfully. Processing dependent tasks...`,
+  });
+
+  // 🚀 BACKGROUND TASK: Ab Heavy calculations background me hongi (User wait nahi karega)
+  setImmediate(async () => {
+    try {
+      await updateInstanceProgress();
+
+      const [children, assignedParentUser] = await Promise.all([
+        FmsInstanceTask.find({
+          fmsInstanceId: instanceId,
+          startTimeSetting: "actual-to-planned",
+          dependentOn: task.taskId,
+        }),
+        User.findById(task.assignedTo).populate("assignShift").lean(),
+      ]);
+
+      if (!children.length || !assignedParentUser) return;
+
+      const childUserIds = [...new Set(children.map((c) => c.assignedTo).filter(Boolean))];
+      const childUsers = await User.find({ _id: { $in: childUserIds } })
+        .populate("assignShift")
+        .lean();
+
+      const userMap = new Map(childUsers.map((u) => [u._id.toString(), u]));
+      const bulkOperations = [];
+
+      for (const child of children) {
+        try {
+          const workShiftUser = userMap.get(child.assignedTo?.toString());
+          const shift = workShiftUser?.assignShift;
+
+          if (!shift) continue;
+
+          const taskDeptContext =
+            child.departmentOfAssignToUser ||
+            workShiftUser?.department ||
+            workShiftUser?._id;
+
+          let startDate = new Date(task.actualCompleteDate);
+
+          const [isTodayWorking, isTodayHoli] = await Promise.all([
+            isWorkingDay(startDate, shift, taskDeptContext),
+            isHoliday(startDate, taskDeptContext),
+          ]);
+
+          const shiftEnd = snapToShiftTime(startDate, shift, false);
+
+          if (!isTodayWorking || isTodayHoli || startDate >= shiftEnd) {
+            let nextDay = new Date(startDate);
+            if (startDate >= shiftEnd) {
+              nextDay.setDate(nextDay.getDate() + 1);
+            }
+
+            const nextWorkingShift = await nextWorkingShiftDate(
+              nextDay,
+              shift._id,
+              {},
+              taskDeptContext
+            );
+
+            startDate = snapToShiftTime(nextWorkingShift, shift, true);
+          }
+
+          const freqParsed = parseFrequencyToHours(child.frequency, child.xValue);
+
+          const dueDate = await calculateCalendarDurationWithShiftSnap(
+            startDate,
+            freqParsed,
+            shift._id,
+            taskDeptContext
+          );
+
+          const newStatus = calculateTaskStatus(startDate, dueDate);
+
+          bulkOperations.push({
+            updateOne: {
+              filter: { _id: child._id },
+              update: {
+                $set: {
+                  plannedStartDate: startDate,
+                  plannedDueDate: dueDate,
+                  actualStartDate: startDate,
+                  waitingForParent: false,
+                  status: newStatus,
+                },
+              },
+            },
+          });
+        } catch (err) {
+          console.error(`❌ Background processing failed for ${child.taskId}:`, err);
+        }
+      }
+
+      if (bulkOperations.length > 0) {
+        await FmsInstanceTask.bulkWrite(bulkOperations);
+      }
+    } catch (bgError) {
+      console.error("❌ Error in background child task processing:", bgError);
+    }
   });
 });
 //**UPDATE FORMDATA FOR TASK */

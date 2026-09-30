@@ -56,9 +56,9 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     departmentId,
     memberIds,
     templateId,
-    taskSource = "all",
+    taskSource = "all", // "all", "fms", "regular"
     timingLogic = "all",
-    taskStatus = "all",
+    taskStatus = "all", // "all", "completed", "pending", "overdue", "upcoming", "terminated"
     limit = 10,
     page = 1,
   } = req.body;
@@ -128,7 +128,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       : { $in: [new mongoose.Types.ObjectId()] };
   }
 
-  // Task Status Filter
+  // 🎯 STRICT Task Status Filter (Terminated / Cancelled Overdue me bilkul nahi ayenge)
   if (taskStatus && taskStatus !== "all") {
     const s = String(taskStatus).toLowerCase();
 
@@ -142,14 +142,28 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       fmsMatch.status = "Upcoming";
       regularMatch.status = "Upcoming";
     } else if (s === "overdue") {
+      // FIX: Sirf active/pending tasks jo date cross kar chuke hain wahi overdue hon, Terminated/Cancelled nahi!
       fmsMatch.$or = [
         { status: "Overdue" },
-        { plannedDueDate: { $lt: now }, status: { $ne: "Completed" } },
+        {
+          plannedDueDate: { $lt: now },
+          status: { $in: ["Pending", "Ongoing", "InProcess"] },
+        },
       ];
       regularMatch.$or = [
         { status: "Overdue" },
-        { dueDate: { $lt: now }, status: { $ne: "Completed" } },
+        {
+          dueDate: { $lt: now },
+          status: { $in: ["Pending", "Ongoing"] },
+        },
       ];
+    } else if (s === "terminated" || s === "cancelled") {
+      fmsMatch.status = { $in: ["Terminated", "Cancelled"] };
+      regularMatch.status = { $in: ["Terminated", "Cancelled"] };
+    } else {
+      // Exact match fallback for any custom status
+      fmsMatch.status = taskStatus;
+      regularMatch.status = taskStatus;
     }
   }
 
@@ -176,19 +190,25 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }
   }
 
-  // 4. UNIFIED NORMALIZATION
+  // 4. UNIFIED NORMALIZATION WITH STRICT MUTUALLY EXCLUSIVE EXECUTION STATUS
   const normalizedTasks = [
     ...fmsTasks.map((t) => {
-      const isCompleted = t.status === "Completed";
-      const isUpcoming = t.status === "Upcoming";
+      const rawStatus = t.status || "Pending";
+      const isCompleted = rawStatus === "Completed";
+      const isUpcoming = rawStatus === "Upcoming";
+      const isTerminated =
+        rawStatus === "Terminated" || rawStatus === "Cancelled";
+
       const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;
       const completedAt = t.actualCompleteDate
         ? new Date(t.actualCompleteDate)
         : null;
 
-      let executionStatus = "Pending";
+      let executionStatus = rawStatus;
 
-      if (isCompleted) {
+      if (isTerminated) {
+        executionStatus = rawStatus; // Terminated/Cancelled tasks exact status rakhenge
+      } else if (isCompleted) {
         if (completedAt && due && completedAt <= due) {
           executionStatus = "On Time";
         } else {
@@ -207,7 +227,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         taskId: t.taskId,
         title: t.description || t.taskId,
         taskType: "FMS",
-        status: t.status,
+        status: rawStatus,
         executionStatus,
         startTimeSetting: t.startTimeSetting || "N/A",
         frequency: t.frequency || "One-time",
@@ -222,14 +242,20 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }),
 
     ...regularTasks.map((t) => {
-      const isCompleted = t.status === "Completed";
-      const isUpcoming = t.status === "Upcoming";
+      const rawStatus = t.status || "Pending";
+      const isCompleted = rawStatus === "Completed";
+      const isUpcoming = rawStatus === "Upcoming";
+      const isTerminated =
+        rawStatus === "Terminated" || rawStatus === "Cancelled";
+
       const due = t.dueDate ? new Date(t.dueDate) : null;
       const completedAt = t.completedAt ? new Date(t.completedAt) : null;
 
-      let executionStatus = "Pending";
+      let executionStatus = rawStatus;
 
-      if (isCompleted) {
+      if (isTerminated) {
+        executionStatus = rawStatus;
+      } else if (isCompleted) {
         if (completedAt && due && completedAt <= due) {
           executionStatus = "On Time";
         } else {
@@ -248,7 +274,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         taskId: t.TaskId || t._id,
         title: t.title || t.description || "Task",
         taskType: "Regular",
-        status: t.status,
+        status: rawStatus,
         executionStatus,
         startTimeSetting: "N/A",
         frequency: t.frequency || "One-time",
@@ -263,7 +289,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }),
   ].filter((t) => t.dueDate != null);
 
-  // 5. CLEAR MUTUALLY EXCLUSIVE STATS
+  // 5. STATS CALCULATION
   const totalTasks = normalizedTasks.length;
 
   const onTime = normalizedTasks.filter(
@@ -283,6 +309,11 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
   const upcoming = normalizedTasks.filter(
     (t) => t.executionStatus === "Upcoming",
   ).length;
+  const terminated = normalizedTasks.filter(
+    (t) =>
+      t.executionStatus === "Terminated" || t.executionStatus === "Cancelled",
+  ).length;
+
   const notCompleted = totalTasks - completed;
 
   const actualToPlannedCount = normalizedTasks.filter(
@@ -292,23 +323,21 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     (t) => t.startTimeSetting === "planned-to-planned",
   ).length;
 
-  // Percentage Helper
+  // Percentage Helpers
   const safeDiv = (num, denom) =>
     denom > 0 ? Math.round((num / denom) * 100 * 100) / 100 : 0;
 
-  // 🔄 Helper to reverse percentage (Inverted % Calculation)
   const safeDivReversed = (num, denom) =>
     denom > 0 ? Math.round((100 - (num / denom) * 100) * 100) / 100 : 0;
 
-  // 🔄 Inverted Percentage Rates (Reverse Counting)
   const rates = {
-    completionRate: safeDivReversed(completed, totalTasks), // Completion Rate Reversed
-    onTimeRate: safeDivReversed(onTime, completed), // On Time Rate Reversed
+    completionRate: safeDivReversed(completed, totalTasks),
+    onTimeRate: safeDivReversed(onTime, completed),
     lateRate: safeDiv(late, completed),
     overdueRate: safeDiv(overdue, totalTasks),
     pendingRate: safeDiv(pending, totalTasks),
     upcomingRate: safeDiv(upcoming, totalTasks),
-    notCompletedRate: safeDivReversed(notCompleted, totalTasks), // Not Completed Rate Reversed
+    notCompletedRate: safeDivReversed(notCompleted, totalTasks),
     actualToPlannedRate: safeDiv(actualToPlannedCount, totalTasks),
     plannedToPlannedRate: safeDiv(plannedToPlannedCount, totalTasks),
   };
@@ -332,6 +361,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         overdue: 0,
         pending: 0,
         upcoming: 0,
+        terminated: 0,
         notCompleted: 0,
       });
     }
@@ -351,6 +381,12 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     } else if (t.executionStatus === "Upcoming") {
       stat.upcoming += 1;
       stat.notCompleted += 1;
+    } else if (
+      t.executionStatus === "Terminated" ||
+      t.executionStatus === "Cancelled"
+    ) {
+      stat.terminated += 1;
+      stat.notCompleted += 1;
     } else {
       stat.pending += 1;
       stat.notCompleted += 1;
@@ -359,13 +395,13 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
 
   const userSummary = Array.from(userStatsMap.values()).map((usr) => ({
     ...usr,
-    completionRate: safeDivReversed(usr.completed, usr.total), // Reversed in User Summary
-    onTimeRate: safeDivReversed(usr.onTime, usr.completed), // Reversed in User Summary
+    completionRate: safeDivReversed(usr.completed, usr.total),
+    onTimeRate: safeDivReversed(usr.onTime, usr.completed),
     lateRate: safeDiv(usr.late, usr.completed),
     overdueRate: safeDiv(usr.overdue, usr.total),
     pendingRate: safeDiv(usr.pending, usr.total),
     upcomingRate: safeDiv(usr.upcoming, usr.total),
-    notCompletedRate: safeDivReversed(usr.notCompleted, usr.total), // Reversed in User Summary
+    notCompletedRate: safeDivReversed(usr.notCompleted, usr.total),
   }));
 
   // Pagination Logic
@@ -382,6 +418,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       overdue,
       pending,
       upcoming,
+      terminated,
       notCompleted,
       actualToPlannedCount,
       plannedToPlannedCount,
