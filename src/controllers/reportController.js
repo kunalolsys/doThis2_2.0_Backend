@@ -14,7 +14,7 @@ const safeObjectId = (id) => {
     : null;
 };
 
-// 🗓️ Helper for precise Date Boundaries (MUTATION SAFE)
+// 🗓 Helper for precise Date Boundaries (MUTATION SAFE)
 const calculateDateRange = (period, startDate, endDate) => {
   const now = new Date();
   let start = new Date();
@@ -82,6 +82,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
 
   // 2. MATCH QUERIES
   const fmsMatch = {
+    isVisible: { $ne: false }, // Filter out invisible FMS tasks
     $or: [
       { plannedDueDate: { $gte: start, $lte: end } },
       { plannedStartDate: { $gte: start, $lte: end } },
@@ -128,7 +129,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       : { $in: [new mongoose.Types.ObjectId()] };
   }
 
-  // 🎯 STRICT Task Status Filter (Terminated / Cancelled Overdue me bilkul nahi ayenge)
+  // 🎯 STRICT Task Status Filter
   if (taskStatus && taskStatus !== "all") {
     const s = String(taskStatus).toLowerCase();
 
@@ -142,7 +143,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       fmsMatch.status = "Upcoming";
       regularMatch.status = "Upcoming";
     } else if (s === "overdue") {
-      // FIX: Sirf active/pending tasks jo date cross kar chuke hain wahi overdue hon, Terminated/Cancelled nahi!
       fmsMatch.$or = [
         { status: "Overdue" },
         {
@@ -161,7 +161,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       fmsMatch.status = { $in: ["Terminated", "Cancelled"] };
       regularMatch.status = { $in: ["Terminated", "Cancelled"] };
     } else {
-      // Exact match fallback for any custom status
       fmsMatch.status = taskStatus;
       regularMatch.status = taskStatus;
     }
@@ -207,7 +206,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       let executionStatus = rawStatus;
 
       if (isTerminated) {
-        executionStatus = rawStatus; // Terminated/Cancelled tasks exact status rakhenge
+        executionStatus = rawStatus;
       } else if (isCompleted) {
         if (completedAt && due && completedAt <= due) {
           executionStatus = "On Time";
@@ -323,23 +322,24 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     (t) => t.startTimeSetting === "planned-to-planned",
   ).length;
 
-  // Percentage Helpers
-  const safeDiv = (num, denom) =>
-    denom > 0 ? Math.round((num / denom) * 100 * 100) / 100 : 0;
-
-  const safeDivReversed = (num, denom) =>
-    denom > 0 ? Math.round((100 - (num / denom) * 100) * 100) / 100 : 0;
+  // 🟢 INVERTED RATE HELPER: -(100 - (count / total * 100))
+  const calcInvertedRate = (count, total) => {
+    if (total === 0) return 0;
+    const actualPercentage = (count / total) * 100;
+    const val = -(100 - actualPercentage);
+    return Number(val.toFixed(2));
+  };
 
   const rates = {
-    completionRate: safeDivReversed(completed, totalTasks),
-    onTimeRate: safeDivReversed(onTime, completed),
-    lateRate: safeDiv(late, completed),
-    overdueRate: safeDiv(overdue, totalTasks),
-    pendingRate: safeDiv(pending, totalTasks),
-    upcomingRate: safeDiv(upcoming, totalTasks),
-    notCompletedRate: safeDivReversed(notCompleted, totalTasks),
-    actualToPlannedRate: safeDiv(actualToPlannedCount, totalTasks),
-    plannedToPlannedRate: safeDiv(plannedToPlannedCount, totalTasks),
+    completionRate: calcInvertedRate(completed, totalTasks),
+    onTimeRate: calcInvertedRate(onTime, totalTasks),
+    lateRate: calcInvertedRate(late, totalTasks),
+    overdueRate: calcInvertedRate(overdue, totalTasks),
+    pendingRate: calcInvertedRate(pending, totalTasks),
+    upcomingRate: calcInvertedRate(upcoming, totalTasks),
+    notCompletedRate: calcInvertedRate(notCompleted, totalTasks),
+    actualToPlannedRate: calcInvertedRate(actualToPlannedCount, totalTasks),
+    plannedToPlannedRate: calcInvertedRate(plannedToPlannedCount, totalTasks),
   };
 
   // 6. USER STATS AGGREGATION
@@ -395,13 +395,13 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
 
   const userSummary = Array.from(userStatsMap.values()).map((usr) => ({
     ...usr,
-    completionRate: safeDivReversed(usr.completed, usr.total),
-    onTimeRate: safeDivReversed(usr.onTime, usr.completed),
-    lateRate: safeDiv(usr.late, usr.completed),
-    overdueRate: safeDiv(usr.overdue, usr.total),
-    pendingRate: safeDiv(usr.pending, usr.total),
-    upcomingRate: safeDiv(usr.upcoming, usr.total),
-    notCompletedRate: safeDivReversed(usr.notCompleted, usr.total),
+    completionRate: calcInvertedRate(usr.completed, usr.total),
+    onTimeRate: calcInvertedRate(usr.onTime, usr.total),
+    lateRate: calcInvertedRate(usr.late, usr.total),
+    overdueRate: calcInvertedRate(usr.overdue, usr.total),
+    pendingRate: calcInvertedRate(usr.pending, usr.total),
+    upcomingRate: calcInvertedRate(usr.upcoming, usr.total),
+    notCompletedRate: calcInvertedRate(usr.notCompleted, usr.total),
   }));
 
   // Pagination Logic
