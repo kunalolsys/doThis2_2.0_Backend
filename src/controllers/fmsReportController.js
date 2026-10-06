@@ -511,6 +511,7 @@ export const getFmsReport = handleAsync(async (req, res, next) => {
   }
 
   const detailMatch = {
+    isVisible: { $ne: false }, // 👈 Filter added: Sirf isVisible = false vaale tasks show honge
     ...baseMatch,
     ...instanceFilter,
   };

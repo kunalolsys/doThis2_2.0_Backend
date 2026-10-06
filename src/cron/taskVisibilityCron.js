@@ -70,6 +70,13 @@ const makeTasksVisible = async () => {
 
         for (const task of tasksToCheck) {
           // =====================================================
+          // 🛑 RULE: Agar Due Date nahi hai toh task ko HIDDEN (False) hi rakho
+          // =====================================================
+          if (!task.dueDate) {
+            continue;
+          }
+
+          // =====================================================
           // ✅ NORMALIZED DATES (IST BOUNDARY)
           // =====================================================
           const today = moment(now).tz("Asia/Kolkata").startOf("day").toDate();

@@ -332,7 +332,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
 
   const rates = {
     completionRate: calcInvertedRate(completed, totalTasks),
-    onTimeRate: calcInvertedRate(onTime, totalTasks),
+    onTimeRate: calcInvertedRate(onTime, completed),
     lateRate: calcInvertedRate(late, totalTasks),
     overdueRate: calcInvertedRate(overdue, totalTasks),
     pendingRate: calcInvertedRate(pending, totalTasks),
@@ -396,7 +396,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
   const userSummary = Array.from(userStatsMap.values()).map((usr) => ({
     ...usr,
     completionRate: calcInvertedRate(usr.completed, usr.total),
-    onTimeRate: calcInvertedRate(usr.onTime, usr.total),
+    onTimeRate: calcInvertedRate(usr.onTime, usr.completed),
     lateRate: calcInvertedRate(usr.late, usr.total),
     overdueRate: calcInvertedRate(usr.overdue, usr.total),
     pendingRate: calcInvertedRate(usr.pending, usr.total),

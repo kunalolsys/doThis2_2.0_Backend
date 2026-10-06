@@ -40,10 +40,13 @@ const makeFmsTasksVisible = async () => {
       // Only if shift started today
       if (now >= shiftStartToday) {
         // FMS Instance Tasks only
+        // 🔥 Added check: plannedDueDate & plannedStartDate must exist and not be null
         const fmsTasksToCheck = await FmsInstanceTask.find({
           assignedTo: user._id,
           isVisible: { $ne: true },
           status: { $in: ["Upcoming", "Pending", "Delayed", "Overdue"] },
+          plannedStartDate: { $exists: true, $ne: null },
+          plannedDueDate: { $exists: true, $ne: null },
           $or: [
             {
               plannedStartDate: {
@@ -68,6 +71,11 @@ const makeFmsTasksVisible = async () => {
               : user.department || user._id;
 
         for (const task of fmsTasksToCheck) {
+          // Extra safety check: Ensure both dates exist and are valid
+          if (!task.plannedStartDate || !task.plannedDueDate) {
+            continue;
+          }
+
           const taskDate = startOfDay(new Date(task.plannedStartDate));
 
           // 🔥 Pass department ID context for department holidays & schedule checks
