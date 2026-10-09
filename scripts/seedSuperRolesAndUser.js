@@ -104,28 +104,33 @@ async function ensureOpenDepartment() {
   return department;
 }
 
-// FIXED: Clear out legacy format permissions and set new schema payload directly
+// FIXED: Role agar pehle se DB me exist karta hai to uski permissions KO TOUCH NAHI KAREGA
 async function ensureRole({ name, displayName, permissions }) {
   const formattedName = name.trim().toLowerCase().replace(/\s+/g, "_");
 
   let role = await Role.findOne({ name: formattedName });
 
+  // 1. Agar role DB me bilkul NAYA hai, tabhi create karein permissions ke saath
   if (!role) {
+    console.log(`Creating new system role: ${formattedName}`);
     return await Role.create({
       name: formattedName,
       displayName: displayName || name,
-      permissions,
+      permissions, // Sirf pehli baar create hone par default permissions jayengi
       isSystemRole: true,
       canDelete: false,
     });
   }
 
-  // Set fresh permissions matching new Submodule schema to override old legacy schema
-  role.permissions = permissions;
+  // 2. Agar role PEHLE SE EXIST karta hai, to sirf metadata update karein (PERMISSIONS TOUCH NAHI HOGI)
+  role.displayName = displayName || role.displayName;
   role.canDelete = false;
   role.isSystemRole = true;
 
+  // ❌ role.permissions = permissions; <-- Yeh line hata di gayi hai taaki manual edits overwrite na hon
+
   await role.save();
+  console.log(`Role already exists (${formattedName}). Preserved existing database permissions.`);
   return role;
 }
 
