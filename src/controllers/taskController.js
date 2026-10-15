@@ -2967,7 +2967,7 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
 
   const fmsQuery = {
     isTerminated: { $ne: true },
-    // isVisible: { $ne: false },
+    isVisible: { $ne: false },
     status: { $nin: ["Terminated"] },
   };
   const fmsAndConditions = [];
