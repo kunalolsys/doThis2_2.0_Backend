@@ -16,6 +16,10 @@ const safeObjectId = (id) => {
 
 // 🗓 Helper for precise Date Boundaries
 const calculateDateRange = (period, startDate, endDate) => {
+  if (period === "all") {
+    return { start: null, end: null };
+  }
+
   const now = new Date();
   let start = new Date();
   let end = new Date();
@@ -40,9 +44,7 @@ const calculateDateRange = (period, startDate, endDate) => {
     end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
   } else {
-    start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    end = new Date();
-    end.setHours(23, 59, 59, 999);
+    return { start: null, end: null };
   }
 
   return { start, end };
@@ -58,10 +60,11 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     templateId,
     taskSource = "all", // "all", "fms", "regular"
     timingLogic = "all",
-    taskStatus = "all", // "all", "completed", "pending", "overdue", "upcoming", "terminated"
+    taskStatus = "all",
     limit = 10,
     page = 1,
   } = req.body;
+
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.max(1, parseInt(limit, 10) || 10);
 
@@ -79,25 +82,32 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       .filter(Boolean);
   }
 
-  // 2. MATCH QUERIES (REMOVED createdAt OVER-FETCHING)
+  // 2. MATCH QUERIES (Filtering out terminated/invisible records)
   const fmsMatch = {
     isVisible: { $ne: false },
-    $or: [
-      { plannedDueDate: { $gte: start, $lte: end } },
-      { plannedStartDate: { $gte: start, $lte: end } },
-      { actualCompleteDate: { $gte: start, $lte: end } },
-    ],
+    isTerminated: { $ne: true },
+    status: { $nin: ["Terminated", "Cancelled"] },
   };
 
   const regularMatch = {
     isDeleted: { $ne: true },
     taskType: { $ne: "RecurringTask" },
-    $or: [
+    status: { $nin: ["Terminated", "Cancelled"] },
+  };
+
+  if (start && end) {
+    fmsMatch.$or = [
+      { plannedDueDate: { $gte: start, $lte: end } },
+      { plannedStartDate: { $gte: start, $lte: end } },
+      { actualCompleteDate: { $gte: start, $lte: end } },
+    ];
+
+    regularMatch.$or = [
       { dueDate: { $ne: null, $gte: start, $lte: end } },
       { endDate: { $ne: null, $gte: start, $lte: end } },
       { startDate: { $ne: null, $gte: start, $lte: end } },
-    ],
-  };
+    ];
+  }
 
   if (userIdArray.length > 0) {
     fmsMatch.assignedTo = { $in: userIdArray };
@@ -126,7 +136,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       : { $in: [new mongoose.Types.ObjectId()] };
   }
 
-  // 🎯 STRICT Task Status Filter (STRICT DB STATUS MATCH)
+  // Task Status Filter
   if (taskStatus && taskStatus !== "all") {
     const s = String(taskStatus).toLowerCase();
 
@@ -134,7 +144,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       fmsMatch.status = "Completed";
       regularMatch.status = "Completed";
     } else if (s === "pending") {
-      // ✅ Strict Pending filter
       fmsMatch.status = "Pending";
       regularMatch.status = "Pending";
     } else if (s === "upcoming") {
@@ -143,9 +152,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     } else if (s === "overdue") {
       fmsMatch.status = "Overdue";
       regularMatch.status = "Overdue";
-    } else if (s === "terminated" || s === "cancelled") {
-      fmsMatch.status = { $in: ["Terminated", "Cancelled"] };
-      regularMatch.status = { $in: ["Terminated", "Cancelled"] };
     } else {
       fmsMatch.status = taskStatus;
       regularMatch.status = taskStatus;
@@ -175,28 +181,33 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     }
   }
 
-  // 4. UNIFIED NORMALIZATION (EXACT DB STATUS MATCH)
+  // 4. UNIFIED NORMALIZATION
   const normalizedTasks = [
     ...fmsTasks.map((t) => {
       const rawStatus = t.status || "Pending";
       const isCompleted = rawStatus === "Completed";
       const isUpcoming = rawStatus === "Upcoming";
-      const isTerminated =
-        rawStatus === "Terminated" || rawStatus === "Cancelled";
       const isOverdue = rawStatus === "Overdue";
       const isPending = rawStatus === "Pending";
 
-      const due = t.plannedDueDate ? new Date(t.plannedDueDate) : null;
+      const due = t.plannedDueDate
+        ? new Date(t.plannedDueDate)
+        : t.actualCompleteDate
+        ? new Date(t.actualCompleteDate)
+        : t.plannedStartDate
+        ? new Date(t.plannedStartDate)
+        : t.createdAt
+        ? new Date(t.createdAt)
+        : new Date();
+
       const completedAt = t.actualCompleteDate
         ? new Date(t.actualCompleteDate)
         : null;
 
       let executionStatus = rawStatus;
 
-      if (isTerminated) {
-        executionStatus = rawStatus;
-      } else if (isCompleted) {
-        if (completedAt && due && completedAt <= due) {
+      if (isCompleted) {
+        if (!t.plannedDueDate || (completedAt && completedAt <= due)) {
           executionStatus = "On Time";
         } else {
           executionStatus = "Late";
@@ -207,8 +218,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         executionStatus = "Overdue";
       } else if (isPending) {
         executionStatus = "Pending";
-      } else {
-        executionStatus = rawStatus;
       }
 
       return {
@@ -221,7 +230,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         startTimeSetting: t.startTimeSetting || "N/A",
         frequency: t.frequency || "One-time",
         startDate: t.plannedStartDate,
-        dueDate: t.plannedDueDate,
+        dueDate: due,
         completedAt: t.actualCompleteDate,
         assignedTo: t.assignedTo,
         department: t.departmentOfAssignToUser?.name || "—",
@@ -234,20 +243,23 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       const rawStatus = t.status || "Pending";
       const isCompleted = rawStatus === "Completed";
       const isUpcoming = rawStatus === "Upcoming";
-      const isTerminated =
-        rawStatus === "Terminated" || rawStatus === "Cancelled";
       const isOverdue = rawStatus === "Overdue";
       const isPending = rawStatus === "Pending";
 
-      const due = t.dueDate ? new Date(t.dueDate) : null;
+      const due = t.dueDate
+        ? new Date(t.dueDate)
+        : t.endDate
+        ? new Date(t.endDate)
+        : t.createdAt
+        ? new Date(t.createdAt)
+        : new Date();
+
       const completedAt = t.completedAt ? new Date(t.completedAt) : null;
 
       let executionStatus = rawStatus;
 
-      if (isTerminated) {
-        executionStatus = rawStatus;
-      } else if (isCompleted) {
-        if (completedAt && due && completedAt <= due) {
+      if (isCompleted) {
+        if (!t.dueDate || (completedAt && completedAt <= due)) {
           executionStatus = "On Time";
         } else {
           executionStatus = "Late";
@@ -258,8 +270,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         executionStatus = "Overdue";
       } else if (isPending) {
         executionStatus = "Pending";
-      } else {
-        executionStatus = rawStatus;
       }
 
       return {
@@ -272,7 +282,7 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         startTimeSetting: "N/A",
         frequency: t.frequency || "One-time",
         startDate: t.startDate,
-        dueDate: t.dueDate,
+        dueDate: due,
         completedAt: t.completedAt,
         assignedTo: t.assignedTo,
         department: t.departmentOfAssignToUser?.name || "—",
@@ -280,48 +290,43 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         createdAt: t.createdAt,
       };
     }),
-  ].filter((t) => t.dueDate != null);
+  ];
 
   // 5. STATS CALCULATION
   const totalTasks = normalizedTasks.length;
 
   const onTime = normalizedTasks.filter(
-    (t) => t.executionStatus === "On Time",
+    (t) => t.executionStatus === "On Time"
   ).length;
   const late = normalizedTasks.filter(
-    (t) => t.executionStatus === "Late",
+    (t) => t.executionStatus === "Late"
   ).length;
   const completed = onTime + late;
 
   const overdue = normalizedTasks.filter(
-    (t) => t.executionStatus === "Overdue",
+    (t) => t.executionStatus === "Overdue"
   ).length;
 
-  // 🎯 STRICT EXACT PENDING COUNT
   const pending = normalizedTasks.filter(
-    (t) => t.executionStatus === "Pending",
+    (t) => t.executionStatus === "Pending"
   ).length;
 
   const upcoming = normalizedTasks.filter(
-    (t) => t.executionStatus === "Upcoming",
-  ).length;
-  const terminated = normalizedTasks.filter(
-    (t) =>
-      t.executionStatus === "Terminated" || t.executionStatus === "Cancelled",
+    (t) => t.executionStatus === "Upcoming"
   ).length;
 
   const notCompleted = totalTasks - completed;
 
   const actualToPlannedCount = normalizedTasks.filter(
-    (t) => t.startTimeSetting === "actual-to-planned",
+    (t) => t.startTimeSetting === "actual-to-planned"
   ).length;
   const plannedToPlannedCount = normalizedTasks.filter(
-    (t) => t.startTimeSetting === "planned-to-planned",
+    (t) => t.startTimeSetting === "planned-to-planned"
   ).length;
 
-  // 🟢 INVERTED RATE HELPER
+  // INVERTED NEGATIVE RATES
   const calcInvertedRate = (count, total) => {
-    if (total === 0) return 0;
+    if (!total || total === 0) return 0;
     const actualPercentage = (count / total) * 100;
     const val = -(100 - actualPercentage);
     return Number(val.toFixed(2));
@@ -358,7 +363,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
         overdue: 0,
         pending: 0,
         upcoming: 0,
-        terminated: 0,
         notCompleted: 0,
       });
     }
@@ -377,12 +381,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       stat.notCompleted += 1;
     } else if (t.executionStatus === "Upcoming") {
       stat.upcoming += 1;
-      stat.notCompleted += 1;
-    } else if (
-      t.executionStatus === "Terminated" ||
-      t.executionStatus === "Cancelled"
-    ) {
-      stat.terminated += 1;
       stat.notCompleted += 1;
     } else if (t.executionStatus === "Pending") {
       stat.pending += 1;
@@ -417,7 +415,6 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
       overdue,
       pending,
       upcoming,
-      terminated,
       notCompleted,
       actualToPlannedCount,
       plannedToPlannedCount,
@@ -427,14 +424,14 @@ export const getCombinedReport = handleAsync(async (req, res, next) => {
     allTasksForExport: normalizedTasks,
     tasks: paginatedTasks,
     dateRange: {
-      start: start.toISOString().split("T")[0],
-      end: end.toISOString().split("T")[0],
+      start: start ? start.toISOString().split("T")[0] : "All",
+      end: end ? end.toISOString().split("T")[0] : "All",
     },
     pagination: {
-      current: Number(page),
-      pages: Math.ceil(totalTasks / Number(limit)) || 1,
+      current: pageNum,
+      pages: Math.ceil(totalTasks / limitNum) || 1,
       total: totalTasks,
-      limit: Number(limit),
+      limit: limitNum,
     },
   });
 });

@@ -803,129 +803,73 @@ export const exportTasks = handleAsync(async (req, res, next) => {
 // ---------------------------------------------------------
 // GET ALL TASKS FOR DASHBOARD
 // ---------------------------------------------------------
+
 export const getAllTasksWithStats = async (req, res) => {
   try {
     const { filterType, userId, role: rawRole } = req.body;
     const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
 
     const now = new Date();
-    const todayStart = startOfDay(now);
-    const todayEnd = endOfDay(now);
-
     let dateFilter = {};
 
-    // 👉 TODAY
+    // 👉 DATE FILTERS
     if (filterType === "today") {
-      dateFilter = {
-        createdAt: { $gte: todayStart, $lte: todayEnd },
-      };
+      dateFilter = { createdAt: { $gte: startOfDay(now), $lte: endOfDay(now) } };
+    } else if (filterType === "week") {
+      dateFilter = { createdAt: { $gte: startOfWeek(now, { weekStartsOn: 1 }), $lte: endOfWeek(now, { weekStartsOn: 1 }) } };
+    } else if (filterType === "month") {
+      dateFilter = { createdAt: { $gte: startOfMonth(now), $lte: endOfMonth(now) } };
     }
 
-    // 👉 THIS WEEK (Monday Start)
-    if (filterType === "week") {
-      const weekStart = startOfWeek(now, { weekStartsOn: 1 });
-      const weekEnd = endOfWeek(now, { weekStartsOn: 1 });
-
-      dateFilter = {
-        createdAt: { $gte: weekStart, $lte: weekEnd },
-      };
-    }
-
-    // 👉 THIS MONTH
-    if (filterType === "month") {
-      const monthStart = startOfMonth(now);
-      const monthEnd = endOfMonth(now);
-
-      dateFilter = {
-        createdAt: { $gte: monthStart, $lte: monthEnd },
-      };
-    }
-
-    // =========================
-    // 👥 ROLE BASED FILTER
-    // =========================
+    // ==========================================
+    // 1. OPTIMIZED HIERARCHY USER IDS FETCHING
+    // ==========================================
     const andConditions = [];
 
     if (role === "admin" || role === "owner" || role === "pc") {
-      // Full access → no restriction
+      // Full access → No restrictions
     } else if (role === "sr.manager" || role === "srmanager") {
       const srManagerId = userId;
-
-      const managers = await User.find({ reportingManager: srManagerId })
-        .select("_id")
-        .lean();
-      const managerIds = managers.map((m) => m._id);
-
-      const members = await User.find({ reportingManager: { $in: managerIds } })
-        .select("_id")
-        .lean();
-      const memberIds = members.map((m) => m._id);
+      const managerIds = await User.find({ reportingManager: srManagerId }).distinct("_id");
+      const memberIds = await User.find({ reportingManager: { $in: managerIds } }).distinct("_id");
 
       const allIds = [srManagerId, ...managerIds, ...memberIds];
-
       andConditions.push({
         $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
       });
     } else if (role === "manager") {
       const managerId = userId;
-
-      const memberUsers = await User.find({ reportingManager: managerId })
-        .populate("role", "name")
-        .select("_id role")
-        .lean();
-
-      const memberIds = memberUsers
-        .filter((u) => u.role?.name === "Member")
-        .map((u) => u._id);
+      const memberIds = await User.find({ reportingManager: managerId }).distinct("_id");
 
       const allIds = [managerId, ...memberIds];
-
       andConditions.push({
         $or: [{ assignedBy: { $in: allIds } }, { assignedTo: { $in: allIds } }],
       });
     } else {
-      // 👤 Member
+      // Member
       if (userId) {
         andConditions.push({ assignedTo: userId });
       }
     }
 
-    // =========================
-    // 🧠 DO_THIS TASK FILTER
-    // =========================
+    // ==========================================
+    // 2. QUERY FILTERS BUILDUP (WITH INVISIBLE / TERMINATED EXCLUSION)
+    // ==========================================
     const filter = {
       ...dateFilter,
       taskType: { $ne: "RecurringTask" },
       isDeleted: { $ne: true },
-      // isVisible: { $ne: false },
+      status: { $nin: ["Terminated", "Cancelled"] },
       ...(andConditions.length > 0 && { $and: andConditions }),
     };
 
-    // =========================
-    // ⚙️ MODULE ENABLE CHECK
-    // =========================
-    const moduleSettings = await ModuleSetting.find({
-      moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
-    }).lean();
-
-    const isModuleEnabled = (key) => {
-      const mod = moduleSettings.find((m) => m.moduleKey === key);
-      return mod ? mod.isEnabled : true;
-    };
-
-    const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
-    const isDoThisEnabled = isModuleEnabled("DO_THIS2");
-
-    // =========================
-    // 🧩 FMS FILTER BUILDING
-    // =========================
     const fmsFilter = {
       isTerminated: { $ne: true },
-      // isVisible: { $ne: false },
-      status: { $nin: ["Terminated"] },
+      isVisible: { $ne: false },
+      status: { $nin: ["Terminated", "Cancelled"] },
+      ...(dateFilter.createdAt && { plannedStartDate: dateFilter.createdAt }),
     };
 
-    // Apply role filter mapped for FMS (assignedBy -> updatedBy)
     if (andConditions.length > 0) {
       fmsFilter.$and = andConditions.map((cond) => {
         if (cond.$or) {
@@ -940,17 +884,28 @@ export const getAllTasksWithStats = async (req, res) => {
       });
     }
 
-    // Apply DATE FILTER (use plannedStartDate for FMS tasks)
-    if (dateFilter.createdAt) {
-      fmsFilter.plannedStartDate = dateFilter.createdAt;
-    }
+    // ==========================================
+    // 3. PARALLEL EXECUTION (MODULES + TASKS WITH PROJECTIONS)
+    // ==========================================
+    const moduleSettingsPromise = ModuleSetting.find({
+      moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
+    }).select("moduleKey isEnabled").lean();
 
-    // =========================
-    // 🚀 PARALLEL DB EXECUTION
-    // =========================
+    const [moduleSettings] = await Promise.all([moduleSettingsPromise]);
+
+    const isModuleEnabled = (key) => {
+      const mod = moduleSettings.find((m) => m.moduleKey === key);
+      return mod ? mod.isEnabled : true;
+    };
+
+    const isFmsEnabled = isModuleEnabled("FMS_ENGINE");
+    const isDoThisEnabled = isModuleEnabled("DO_THIS2");
+
+    // Fetch Tasks & FmsInstanceTasks in parallel
     const [tasks, fmsTasks] = await Promise.all([
       isDoThisEnabled
         ? Task.find(filter)
+            .select("title description startDate dueDate status assignedTo assignedBy departmentOfAssignToUser createdAt")
             .populate("assignedTo", "name email department")
             .populate("assignedBy", "name email")
             .populate("departmentOfAssignToUser", "name")
@@ -961,6 +916,7 @@ export const getAllTasksWithStats = async (req, res) => {
 
       isFmsEnabled
         ? FmsInstanceTask.find(fmsFilter)
+            .select("taskId description plannedStartDate plannedDueDate status assignedTo updatedBy departmentOfAssignToUser createdAt")
             .populate("assignedTo", "name email department")
             .populate("updatedBy", "name email")
             .populate("departmentOfAssignToUser", "name")
@@ -969,56 +925,71 @@ export const getAllTasksWithStats = async (req, res) => {
         : Promise.resolve([]),
     ]);
 
-    // Map FMS tasks to standard task format
-    const mappedFmsTasks = fmsTasks.map((task) => ({
-      ...task,
-      _id: task._id,
-      TaskId: task.taskId,
-      title: task.description,
-      description: task.description,
-      startDate: task.plannedStartDate,
-      dueDate: task.plannedDueDate,
-      status: task.status,
-      assignedTo: task.assignedTo,
-      assignedBy: task.updatedBy || null,
-      departmentOfAssignToUser: task.departmentOfAssignToUser,
-      taskType: "FmsInstanceTask",
-      createdAt: task.createdAt,
-    }));
-
-    const allTasks = [...tasks, ...mappedFmsTasks].sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
-    );
-
-    // =========================
-    // 📊 STATUS COUNTS
-    // =========================
-    const visibleTasks = allTasks;
-
+    // ==========================================
+    // 4. EFFICIENT SINGLE-PASS MAPPING & COUNTS
+    // ==========================================
+    const todayStart = startOfDay(now);
     const statusCounts = {
-      Pending: visibleTasks.filter((t) => t.status === "Pending").length,
-      Completed: visibleTasks.filter((t) => t.status === "Completed").length,
-      Delayed: visibleTasks.filter((t) => t.status === "Delayed").length,
-      Upcoming: visibleTasks.filter((t) => t.status === "Upcoming").length,
-      Overdue: visibleTasks.filter((t) => {
-        if (t.status === "Overdue") return true;
-        // Check dynamic overdue condition if status isn't explicitly set
-        if (
-          t.dueDate &&
-          new Date(t.dueDate) < todayStart &&
-          !["Completed", "Stopped", "Not Done"].includes(t.status)
-        ) {
-          return true;
-        }
-        return false;
-      }).length,
+      Pending: 0,
+      Completed: 0,
+      Delayed: 0,
+      Upcoming: 0,
+      Overdue: 0,
     };
+
+    const processTaskAndCount = (task, isFms = false) => {
+      const normalized = isFms
+        ? {
+            ...task,
+            _id: task._id,
+            TaskId: task.taskId,
+            title: task.description,
+            description: task.description,
+            startDate: task.plannedStartDate,
+            dueDate: task.plannedDueDate,
+            status: task.status,
+            assignedTo: task.assignedTo,
+            assignedBy: task.updatedBy || null,
+            departmentOfAssignToUser: task.departmentOfAssignToUser,
+            taskType: "FmsInstanceTask",
+            createdAt: task.createdAt,
+          }
+        : task;
+
+      const st = normalized.status;
+
+      // Single-Pass O(1) Counter
+      if (st === "Pending") statusCounts.Pending++;
+      else if (st === "Completed") statusCounts.Completed++;
+      else if (st === "Delayed") statusCounts.Delayed++;
+      else if (st === "Upcoming") statusCounts.Upcoming++;
+
+      // Dynamic Overdue Condition
+      if (
+        st === "Overdue" ||
+        (normalized.dueDate &&
+          new Date(normalized.dueDate) < todayStart &&
+          !["Completed", "Stopped", "Not Done", "Terminated", "Cancelled"].includes(st))
+      ) {
+        statusCounts.Overdue++;
+      }
+
+      return normalized;
+    };
+
+    const mappedFms = fmsTasks.map((t) => processTaskAndCount(t, true));
+    const mappedRegular = tasks.map((t) => processTaskAndCount(t, false));
+
+    // Fast Merge & Sort
+    const allTasks = [...mappedRegular, ...mappedFms].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
 
     return res.status(200).json({
       success: true,
-      total: visibleTasks.length,
+      total: allTasks.length,
       counts: statusCounts,
-      data: visibleTasks,
+      data: allTasks,
     });
   } catch (error) {
     console.error("Error in getAllTasksWithStats:", error);
