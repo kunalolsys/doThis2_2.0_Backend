@@ -19,6 +19,7 @@ import emailRoutes from "./emailRoutes.js";
 import taskBucketsReqRoutes from "./taskBucketReqRoutes.js";
 import decisionRoutes from "./decisionStepRoutes.js";
 import openFormImportRoutes from "./openFormImportRoutes.js";
+import taskExtensionRoutes from "./taskExtensionRoutes.js";
 
 import { moduleGate } from "../middleware/moduleGate.js";
 
@@ -62,5 +63,6 @@ router.use("/email", emailRoutes);
 router.use("/task-buckets-req", taskBucketsReqRoutes);
 router.use("/fms-decision", decisionRoutes);
 router.use("/open-forms", openFormImportRoutes);
+// router.use("/task-extension", taskExtensionRoutes);
 
 export default router;

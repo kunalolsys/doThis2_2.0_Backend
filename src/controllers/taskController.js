@@ -8,6 +8,7 @@ import {
   format,
   addDays,
   addWeeks,
+  differenceInCalendarDays,
 } from "date-fns";
 import mongoose from "mongoose";
 import AppError from "../utils/AppError.js";
@@ -814,11 +815,20 @@ export const getAllTasksWithStats = async (req, res) => {
 
     // 👉 DATE FILTERS
     if (filterType === "today") {
-      dateFilter = { createdAt: { $gte: startOfDay(now), $lte: endOfDay(now) } };
+      dateFilter = {
+        createdAt: { $gte: startOfDay(now), $lte: endOfDay(now) },
+      };
     } else if (filterType === "week") {
-      dateFilter = { createdAt: { $gte: startOfWeek(now, { weekStartsOn: 1 }), $lte: endOfWeek(now, { weekStartsOn: 1 }) } };
+      dateFilter = {
+        createdAt: {
+          $gte: startOfWeek(now, { weekStartsOn: 1 }),
+          $lte: endOfWeek(now, { weekStartsOn: 1 }),
+        },
+      };
     } else if (filterType === "month") {
-      dateFilter = { createdAt: { $gte: startOfMonth(now), $lte: endOfMonth(now) } };
+      dateFilter = {
+        createdAt: { $gte: startOfMonth(now), $lte: endOfMonth(now) },
+      };
     }
 
     // ==========================================
@@ -830,8 +840,12 @@ export const getAllTasksWithStats = async (req, res) => {
       // Full access → No restrictions
     } else if (role === "sr.manager" || role === "srmanager") {
       const srManagerId = userId;
-      const managerIds = await User.find({ reportingManager: srManagerId }).distinct("_id");
-      const memberIds = await User.find({ reportingManager: { $in: managerIds } }).distinct("_id");
+      const managerIds = await User.find({
+        reportingManager: srManagerId,
+      }).distinct("_id");
+      const memberIds = await User.find({
+        reportingManager: { $in: managerIds },
+      }).distinct("_id");
 
       const allIds = [srManagerId, ...managerIds, ...memberIds];
       andConditions.push({
@@ -839,7 +853,9 @@ export const getAllTasksWithStats = async (req, res) => {
       });
     } else if (role === "manager") {
       const managerId = userId;
-      const memberIds = await User.find({ reportingManager: managerId }).distinct("_id");
+      const memberIds = await User.find({
+        reportingManager: managerId,
+      }).distinct("_id");
 
       const allIds = [managerId, ...memberIds];
       andConditions.push({
@@ -889,7 +905,9 @@ export const getAllTasksWithStats = async (req, res) => {
     // ==========================================
     const moduleSettingsPromise = ModuleSetting.find({
       moduleKey: { $in: ["FMS_ENGINE", "DO_THIS2"] },
-    }).select("moduleKey isEnabled").lean();
+    })
+      .select("moduleKey isEnabled")
+      .lean();
 
     const [moduleSettings] = await Promise.all([moduleSettingsPromise]);
 
@@ -905,7 +923,9 @@ export const getAllTasksWithStats = async (req, res) => {
     const [tasks, fmsTasks] = await Promise.all([
       isDoThisEnabled
         ? Task.find(filter)
-            .select("title description startDate dueDate status assignedTo assignedBy departmentOfAssignToUser createdAt")
+            .select(
+              "title description startDate dueDate status assignedTo assignedBy departmentOfAssignToUser createdAt",
+            )
             .populate("assignedTo", "name email department")
             .populate("assignedBy", "name email")
             .populate("departmentOfAssignToUser", "name")
@@ -916,7 +936,9 @@ export const getAllTasksWithStats = async (req, res) => {
 
       isFmsEnabled
         ? FmsInstanceTask.find(fmsFilter)
-            .select("taskId description plannedStartDate plannedDueDate status assignedTo updatedBy departmentOfAssignToUser createdAt")
+            .select(
+              "taskId description plannedStartDate plannedDueDate status assignedTo updatedBy departmentOfAssignToUser createdAt",
+            )
             .populate("assignedTo", "name email department")
             .populate("updatedBy", "name email")
             .populate("departmentOfAssignToUser", "name")
@@ -969,7 +991,13 @@ export const getAllTasksWithStats = async (req, res) => {
         st === "Overdue" ||
         (normalized.dueDate &&
           new Date(normalized.dueDate) < todayStart &&
-          !["Completed", "Stopped", "Not Done", "Terminated", "Cancelled"].includes(st))
+          ![
+            "Completed",
+            "Stopped",
+            "Not Done",
+            "Terminated",
+            "Cancelled",
+          ].includes(st))
       ) {
         statusCounts.Overdue++;
       }
@@ -982,7 +1010,7 @@ export const getAllTasksWithStats = async (req, res) => {
 
     // Fast Merge & Sort
     const allTasks = [...mappedRegular, ...mappedFms].sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
     );
 
     return res.status(200).json({
@@ -1035,7 +1063,7 @@ export const filterTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const query = { isVisible: { $ne: false },isDeleted: { $ne: true } };
+  const query = { isVisible: { $ne: false }, isDeleted: { $ne: true } };
   const andConditions = [];
 
   const now = new Date(); // 🟢 Exact current timestamp
@@ -1783,7 +1811,7 @@ export const exportMYTasks = handleAsync(async (req, res) => {
 
   const { stat, taskCategory, status, taskType } = filters;
 
-  const query = {isVisible: { $ne: false }, isDeleted: { $ne: true } };
+  const query = { isVisible: { $ne: false }, isDeleted: { $ne: true } };
   const andConditions = [];
 
   const todayStart = startOfDay(new Date());
@@ -2586,7 +2614,7 @@ export const getTaskStats = handleAsync(async (req, res) => {
     }
   }
 
-  const baseQuery = {isVisible: { $ne: false }, isDeleted: { $ne: true } };
+  const baseQuery = { isVisible: { $ne: false }, isDeleted: { $ne: true } };
 
   if (baseConditions.length > 0) {
     baseQuery.$and = baseConditions;
@@ -3167,8 +3195,10 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     page = 1,
     limit = 10,
     taskCategory,
-    type,
+    type, // "DelegationTask" ya "RecurringTask"
+    frequency,
   } = req.query;
+
   const skip = (parseInt(page) - 1) * parseInt(limit);
   let tasks = [];
   let total = 0;
@@ -3183,17 +3213,36 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
   );
 
   const roleName = loggedInUser?.role?.name?.toLowerCase();
-
   const isSuperUser = roleName === "admin" || roleName === "owner";
 
   if (!isSuperUser) {
     filterQuery.createdBy = loggedInUserId;
   }
+  if (frequency) {
+    filterQuery.frequency = frequency;
+  }
+
+  // --- TAB KE HISAB SE ALAG PAGINATION AUR FILTER (FIX) ---
+  if (type) {
+    if (type === "DelegationTask") {
+      filterQuery.taskType = "DelegationTask";
+    } else if (type === "RecurringTask") {
+      filterQuery.taskType = "RecurringTask";
+    }
+  }
+
   if (creatorOrAssignorId) {
-    filterQuery.$or = [
+    const creatorFilter = [
       { createdBy: creatorOrAssignorId },
       { assignedBy: creatorOrAssignorId },
     ];
+    if (filterQuery.$or) {
+      filterQuery.$and = filterQuery.$and || [];
+      filterQuery.$and.push({ $or: filterQuery.$or }, { $or: creatorFilter });
+      delete filterQuery.$or;
+    } else {
+      filterQuery.$or = creatorFilter;
+    }
   } else {
     if (departmentId && mongoose.Types.ObjectId.isValid(departmentId)) {
       const usersInDept = await User.find({ department: departmentId }).select(
@@ -3202,12 +3251,13 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
       const userIds = usersInDept.map((u) => u._id);
 
       if (userId && mongoose.Types.ObjectId.isValid(userId)) {
-        if (userIds.some((id) => id.equals(userId)))
+        if (userIds.some((id) => id.equals(userId))) {
           filterQuery.assignedTo = userId;
-        else
+        } else {
           return res
             .status(200)
             .json({ success: true, data: [], totalTasks: 0 });
+        }
       } else {
         filterQuery.assignedTo = { $in: userIds };
       }
@@ -3217,6 +3267,7 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
 
     if (createdBy) filterQuery.createdBy = createdBy;
   }
+
   if (taskCategory) {
     let categoryFilter = {};
 
@@ -3247,23 +3298,10 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
       categoryFilter.status = "Completed";
     }
 
-    if (type) {
-      if (categoryFilter.$and) {
-        categoryFilter.$and.push({ taskType: type });
-      } else {
-        categoryFilter = {
-          $and: [categoryFilter, { taskType: type }],
-        };
-      }
-    }
-
-    if (Object.keys(filterQuery).length > 0) {
-      filterQuery.$and = filterQuery.$and || [];
-      filterQuery.$and.push(categoryFilter);
-    } else {
-      Object.assign(filterQuery, categoryFilter);
-    }
+    filterQuery.$and = filterQuery.$and || [];
+    filterQuery.$and.push(categoryFilter);
   }
+
   if (dateFilter) {
     if (dateFilter === "overdue") {
       filterQuery.dueDate = { $lt: today };
@@ -3276,48 +3314,33 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
   }
 
   if (status && status !== "all") {
-    filterQuery.status = status;
+    // Case-insensitive regex match (taaki 'pending' aur 'Pending' dono match ho sake)
+    filterQuery.status = { $regex: new RegExp(`^${status}$`, "i") };
   }
+
+  let finalQuery = filterQuery;
 
   if (search) {
     const searchQuery = {
       $or: [{ title: { $regex: search, $options: "i" } }, { TaskId: search }],
     };
 
-    let finalQuery;
-    if (filterQuery.$or) {
-      finalQuery = { $and: [filterQuery, searchQuery] };
-    } else {
-      finalQuery = { ...filterQuery, ...searchQuery };
-    }
-    if (query.status !== "Upcoming") {
-      finalQuery.isVisible = true;
-    }
-    total = await Task.countDocuments(finalQuery);
-
-    const rawTasks = await Task.find(finalQuery)
-      .populate("assignedTo", "name email department")
-      .populate("assignedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    tasks = rawTasks.map(normalizeTask);
-  } else {
-    const rawTasks = await Task.find(filterQuery)
-      .populate("assignedTo", "name email department")
-      .populate("assignedBy", "name email")
-      .populate("departmentOfAssignToUser", "name")
-      .populate("dependencyConfig.taskDependent", "title")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    tasks = rawTasks.map(normalizeTask);
-    total = await Task.countDocuments(filterQuery);
+    finalQuery = { $and: [filterQuery, searchQuery] };
   }
+
+  // Count aur query execution
+  total = await Task.countDocuments(finalQuery);
+
+  const rawTasks = await Task.find(finalQuery)
+    .populate("assignedTo", "name email department")
+    .populate("assignedBy", "name email")
+    .populate("departmentOfAssignToUser", "name")
+    .populate("dependencyConfig.taskDependent", "title")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+
+  tasks = rawTasks.map(normalizeTask);
 
   res.status(200).json({
     success: true,
