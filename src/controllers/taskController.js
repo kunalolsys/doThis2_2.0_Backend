@@ -1058,8 +1058,11 @@ export const filterTasks = handleAsync(async (req, res) => {
     startDate,
     endDate,
   } = req.body;
-
-  const skip = (page - 1) * limit;
+  const isAllLimit = String(limit).toLowerCase() === "all";
+  const numericPage = Number(page) || 1;
+  const numericLimit = isAllLimit ? 0 : Number(limit) || 10;
+  const skip = isAllLimit ? 0 : (numericPage - 1) * numericLimit;
+  // const skip = (page - 1) * limit;
 
   const { stat, taskCategory, status, taskType } = filters;
 
@@ -1590,7 +1593,9 @@ export const filterTasks = handleAsync(async (req, res) => {
   let allTasks = [...tasks];
 
   const totalTasks = allTasks.length;
-  const paginatedTasks = allTasks.slice(skip, skip + Number(limit));
+  const paginatedTasks = isAllLimit
+    ? allTasks
+    : allTasks.slice(skip, skip + numericLimit);
 
   let recurringResponse = [];
   const shouldShowFutureRecurring =
@@ -1605,8 +1610,12 @@ export const filterTasks = handleAsync(async (req, res) => {
     data: paginatedTasks,
     upcomingRecurringTasks: isDoThisEnabled ? recurringResponse : [],
     totalTasks: totalTasks,
-    currentPage: page,
-    totalPages: Math.ceil(totalTasks / limit),
+    currentPage: isAllLimit ? 1 : numericPage,
+    totalPages: isAllLimit
+      ? totalTasks > 0
+        ? 1
+        : 0
+      : Math.ceil(totalTasks / numericLimit),
   });
 });
 export const filterFMSTasks = handleAsync(async (req, res) => {
@@ -2385,16 +2394,18 @@ export const exportMYTasks = handleAsync(async (req, res) => {
         createdAt: task.createdAt,
       }))
     : [];
-  let allTasks = [...mappedFmsTasks];
+  const shouldShowFutureRecurring =
+    taskCategory === "upcoming" && (!taskType || taskType === "RecurringTask");
 
-  const totalTasks = allTasks.length;
+  const recurringResponse =
+    shouldShowFutureRecurring && isDoThisEnabled ? finalVirtualRecurring : [];
 
-  const finalData = [...allTasks];
+  let allTasks = [...tasks, ...recurringResponse, ...mappedFmsTasks];
 
   res.json({
     success: true,
-    total: finalData.length,
-    data: finalData,
+    total: allTasks.length,
+    data: allTasks,
   });
 });
 
@@ -2823,10 +2834,13 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   } = req.body;
 
   const role = rawRole ? rawRole.toLowerCase().replace(/\s+/g, "") : "";
-  const pageNum = Number(page);
-  const limitNum = Number(limit);
-  const skip = (pageNum - 1) * limitNum;
-
+  // const pageNum = Number(page);
+  // const limitNum = Number(limit);
+  // const skip = (pageNum - 1) * limitNum;
+  const isAllLimit = String(limit).toLowerCase() === "all";
+  const pageNum = Number(page) || 1;
+  const limitNum = isAllLimit ? 0 : Number(limit) || 10;
+  const skip = isAllLimit ? 0 : (pageNum - 1) * limitNum;
   const { stat, taskCategory, status, taskType } = filters;
 
   const now = new Date(); // 🟢 Exact current date & time
@@ -3167,14 +3181,20 @@ export const getRoleBasedTasks = handleAsync(async (req, res) => {
   );
 
   const totalTasks = tasksTotal + fmsTotal;
-  const paginatedTasks = merged.slice(skip, skip + limitNum);
+  const paginatedTasks = isAllLimit
+    ? merged
+    : merged.slice(skip, skip + limitNum);
 
   res.json({
     success: true,
     data: paginatedTasks,
     totalTasks,
-    currentPage: pageNum,
-    totalPages: Math.ceil(totalTasks / limitNum) || 1,
+    currentPage: isAllLimit ? 1 : pageNum,
+    totalPages: isAllLimit
+      ? totalTasks > 0
+        ? 1
+        : 0
+      : Math.ceil(totalTasks / limitNum) || 1,
   });
 });
 
@@ -3198,8 +3218,11 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     type, // "DelegationTask" ya "RecurringTask"
     frequency,
   } = req.query;
-
-  const skip = (parseInt(page) - 1) * parseInt(limit);
+  const isAllLimit = String(limit).toLowerCase() === "all";
+  const numericPage = parseInt(page, 10) || 1;
+  const numericLimit = isAllLimit ? 0 : parseInt(limit, 10) || 10;
+  const skip = isAllLimit ? 0 : (numericPage - 1) * numericLimit;
+  // const skip = (parseInt(page) - 1) * parseInt(limit);
   let tasks = [];
   let total = 0;
 
@@ -3329,16 +3352,21 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
   }
 
   // Count aur query execution
+  // Count and query execution
   total = await Task.countDocuments(finalQuery);
 
-  const rawTasks = await Task.find(finalQuery)
+  let taskQuery = Task.find(finalQuery)
     .populate("assignedTo", "name email department")
     .populate("assignedBy", "name email")
     .populate("departmentOfAssignToUser", "name")
     .populate("dependencyConfig.taskDependent", "title")
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
+    .sort({ createdAt: -1 });
+
+  if (!isAllLimit) {
+    taskQuery = taskQuery.skip(skip).limit(numericLimit);
+  }
+
+  const rawTasks = await taskQuery;
 
   tasks = rawTasks.map(normalizeTask);
 
@@ -3346,9 +3374,13 @@ export const getAllTasks = handleAsync(async (req, res, next) => {
     success: true,
     data: tasks,
     totalTasks: total,
-    currentPage: parseInt(page),
-    perPage: parseInt(limit),
-    totalPages: Math.ceil(total / parseInt(limit)),
+    currentPage: isAllLimit ? 1 : numericPage,
+    perPage: isAllLimit ? total : numericLimit,
+    totalPages: isAllLimit
+      ? total > 0
+        ? 1
+        : 0
+      : Math.ceil(total / numericLimit),
   });
 });
 
